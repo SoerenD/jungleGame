@@ -34,6 +34,8 @@ import type {
   HitResult,
   Inventory,
   JoinResult,
+  JourneyState,
+  JourneyStepId,
   KnockdownResult,
   NodeState,
   OfferResult,
@@ -83,6 +85,8 @@ interface DbPlayer {
   inventory: Inventory;
   tablets?: string[];
   introSeen?: boolean;
+  /** Journey onboarding progress + hint use counts (persisted like introSeen) */
+  journey?: JourneyState;
 }
 
 /** a live fight; the private fields never leave the server */
@@ -287,8 +291,79 @@ export class MockBackend implements Backend {
       p.inventory.summon_totem = 1; // ?fight — instant summon ready
       this.saveNow();
     }
+    this.normalizeJourney(name, p);
     this.startBots();
-    return { ok: true, name, avatar: p.avatar, x: p.x, y: p.y, inventory: { ...p.inventory }, isNew, introSeen: !!p.introSeen };
+    return {
+      ok: true,
+      name,
+      avatar: p.avatar,
+      x: p.x,
+      y: p.y,
+      inventory: { ...p.inventory },
+      isNew,
+      introSeen: !!p.introSeen,
+      journey: this.journeyState(p),
+    };
+  }
+
+  // ------------------------------------------------------------ the Journey
+
+  private journeyState(p: DbPlayer): JourneyState {
+    const j = p.journey ?? { steps: {}, hintUses: {} };
+    return { steps: { ...j.steps }, hintUses: { ...j.hintUses } };
+  }
+
+  /**
+   * Veteran auto-complete: a Player record from before the Journey shipped
+   * gets its steps initialized from evidence in existing state — nobody
+   * re-does completed content. Also runs on every join so the Seal steps
+   * never dead-end once the Seal is broken (contributing became impossible).
+   */
+  private normalizeJourney(name: string, p: DbPlayer): void {
+    const inv = p.inventory;
+    if (!p.journey) {
+      const steps: Partial<Record<JourneyStepId, boolean>> = {};
+      // crafting an axe consumed wood and stone — those steps are implied
+      if ((inv.axe ?? 0) > 0 || (inv.ancient_axe ?? 0) > 0) {
+        steps.craft_axe = true;
+        steps.gather_wood = true;
+        steps.harvest_stone = true;
+      }
+      if ((inv.wood ?? 0) > 0) steps.gather_wood = true;
+      if ((inv.stone ?? 0) > 0) steps.harvest_stone = true;
+      if (Object.values(this.db.structures).some((s) => s.type === 'campfire' && s.placedBy === name)) {
+        steps.place_campfire = true;
+      }
+      if ((p.tablets?.length ?? 0) > 0) steps.read_tablet = true;
+      p.journey = { steps, hintUses: {} };
+    }
+    if (this.db.world!.seal!.broken) {
+      // the Seal breaks once, forever — its steps can no longer be performed
+      p.journey.steps.visit_seal = true;
+      p.journey.steps.first_offering = true;
+    }
+    this.saveSoon();
+  }
+
+  async completeJourneyStep(step: JourneyStepId): Promise<JourneyState> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { steps: {}, hintUses: {} };
+    p.journey ??= { steps: {}, hintUses: {} };
+    if (!p.journey.steps[step]) {
+      p.journey.steps[step] = true;
+      this.saveNow();
+    }
+    return this.journeyState(p);
+  }
+
+  async bumpHint(hintId: string): Promise<JourneyState> {
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { steps: {}, hintUses: {} };
+    p.journey ??= { steps: {}, hintUses: {} };
+    p.journey.hintUses[hintId] = (p.journey.hintUses[hintId] ?? 0) + 1;
+    this.saveSoon();
+    return this.journeyState(p);
   }
 
   async loadWorld(): Promise<WorldSnapshot> {

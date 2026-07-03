@@ -7,12 +7,15 @@ import type {
   FightState,
   Inventory,
   JoinResult,
+  JourneyState,
+  JourneyStepId,
   NodeState,
   PlayerPos,
   QuestState,
   SealState,
   Structure,
 } from '../backend/types';
+import { hintRetired, journeyComplete, type HintId } from '../content/journey';
 import {
   DAY_CYCLE_MS,
   FORCE_NIGHT,
@@ -142,6 +145,9 @@ export class GameScene extends Phaser.Scene {
   private stunnedUntil = 0;
   private stunMarker: Phaser.GameObjects.Text | null = null;
   private fightMusic: Phaser.Sound.BaseSound | null = null;
+  // ---- v3: the Journey (onboarding tracker + contextual hints)
+  private journey: JourneyState = { steps: {}, hintUses: {} };
+  private hintText: Phaser.GameObjects.Text | null = null;
   // ---- v2: fishing, cooking, intro
   private fishing: FishingCast | null = null;
   private buffUntil = 0;
@@ -363,8 +369,17 @@ export class GameScene extends Phaser.Scene {
     };
 
     this.inventory = { ...this.me.inventory };
+    this.journey = { steps: { ...this.me.journey.steps }, hintUses: { ...this.me.journey.hintUses } };
+    this.hintText = this.add
+      .text(0, 0, '', { fontSize: '9px', color: '#ffd166', stroke: '#000', strokeThickness: 3 })
+      .setOrigin(0.5, 1)
+      .setResolution(4)
+      .setDepth(999_998)
+      .setVisible(false);
+    this.tweens.add({ targets: this.hintText, alpha: { from: 1, to: 0.55 }, duration: 700, yoyo: true, repeat: -1 });
     this.wireBackend();
     this.wireBus();
+    bus.emit('journey', this.journey);
 
     void this.backend.loadWorld().then((snap) => {
       for (const n of snap.nodes) this.addNode(n);
@@ -711,12 +726,88 @@ export class GameScene extends Phaser.Scene {
             this.floatText(this.monumentPos.x, this.monumentPos.y - 20, text, '#b478ff');
             bus.emit('toast', 'You lay your Offerings upon the Seal.', 'good');
             this.sfx('place', 0.6);
+            this.tickJourney('first_offering');
           } else if (res.reason === 'NOTHING_TO_GIVE') {
             bus.emit('toast', 'The Seal asks for wood, stone, fiber and fruit — you carry nothing it still needs.', 'bad');
           }
         });
       },
     };
+  }
+
+  // ------------------------------------------------------------ v3: the Journey
+
+  /** tick one Journey objective (idempotent; optimistic local + backend persist) */
+  private tickJourney(step: JourneyStepId): void {
+    if (this.journey.steps[step]) return;
+    this.journey.steps[step] = true;
+    bus.emit('journey', this.journey);
+    if (journeyComplete(this.journey)) {
+      bus.emit('toast', '🌱 Your Journey is complete — the jungle is yours!', 'good');
+    }
+    void this.backend.completeJourneyStep(step).then((j) => {
+      this.journey = j;
+      bus.emit('journey', j);
+    });
+  }
+
+  /** count a successful use of a contextual hint; it retires after a few */
+  private useHint(hint: HintId): void {
+    if (hintRetired(this.journey, hint)) return;
+    this.journey.hintUses[hint] = (this.journey.hintUses[hint] ?? 0) + 1;
+    bus.emit('journey', this.journey);
+    void this.backend.bumpHint(hint);
+  }
+
+  /**
+   * Contextual key hints float at the moment of relevance ("E — gather" by
+   * the first harvestable Resource Nodes, "E — read" at the Welcome Stone and
+   * tablets). Runs on the coarse checkZone cadence, not every frame.
+   */
+  private updateHints(): void {
+    if (!this.hintText) return;
+    const px = this.player.x;
+    const py = this.player.y - 4;
+    let text = '';
+    let x = 0;
+    let y = 0;
+    if (!hintRetired(this.journey, 'read')) {
+      if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
+        text = 'E — read';
+        x = this.welcomeStonePos.x;
+        y = this.welcomeStonePos.y - 26;
+      } else {
+        for (const t of this.tabletSpots) {
+          if (Phaser.Math.Distance.Between(px, py, t.x, t.y - 8) < INTERACT_RANGE) {
+            text = 'E — read';
+            x = t.x;
+            y = t.y - 22;
+            break;
+          }
+        }
+      }
+    }
+    if (!text && !hintRetired(this.journey, 'gather')) {
+      let best: NodeView | null = null;
+      let bestDist = INTERACT_RANGE;
+      for (const view of this.nodes.values()) {
+        if (view.depletedShown) continue;
+        const t = NODE_TYPES[view.state.type];
+        if (t.requiredTool && (this.inventory[t.requiredTool] ?? 0) <= 0) continue; // only nodes the Player can harvest teach
+        const d = Phaser.Math.Distance.Between(px, py, view.sprite.x, view.sprite.y - TILE / 2);
+        if (d < bestDist) {
+          bestDist = d;
+          best = view;
+        }
+      }
+      if (best) {
+        text = 'E — gather';
+        x = best.sprite.x;
+        y = best.sprite.y - best.sprite.displayHeight - 4;
+      }
+    }
+    if (text) this.hintText.setText(text).setPosition(x, y).setVisible(true);
+    else this.hintText.setVisible(false);
   }
 
   // ------------------------------------------------------------ v2: fishing & cooking
@@ -879,6 +970,7 @@ export class GameScene extends Phaser.Scene {
           bus.emit('inventory', this.inventory);
           bus.emit('toast', `Crafted ${ITEMS[result.crafted].name}!`, 'good');
           this.sfx('craft', 0.5);
+          if (result.crafted === 'axe' || result.crafted === 'ancient_axe') this.tickJourney('craft_axe');
         } else if (result.reason === 'INSUFFICIENT') {
           bus.emit('toast', 'Not enough resources.', 'bad');
         } else if (result.reason === 'TOOL_REQUIRED') {
@@ -1013,6 +1105,7 @@ export class GameScene extends Phaser.Scene {
         swing: false,
         run: () => {
           this.sfx('blip', 0.4);
+          this.useHint('read');
           this.input.keyboard!.enabled = false;
           void showIntro().then(() => {
             this.input.keyboard!.enabled = true;
@@ -1030,6 +1123,8 @@ export class GameScene extends Phaser.Scene {
             const tab = TABLETS[t.id];
             bus.emit('lore', tab?.title ?? 'Ancient Tablet', tab?.text ?? 'The runes have faded beyond reading.');
             this.sfx('blip', 0.4);
+            this.useHint('read');
+            this.tickJourney('read_tablet');
           },
         };
       }
@@ -1125,6 +1220,9 @@ export class GameScene extends Phaser.Scene {
           .join('  ');
         this.floatText(view.sprite.x, view.sprite.y - TILE, text, '#ffd166');
         this.sfx('harvest', 0.6);
+        this.useHint('gather');
+        if (result.gained.wood) this.tickJourney('gather_wood');
+        if (result.gained.stone) this.tickJourney('harvest_stone');
       }
       if (result.inventory) {
         this.inventory = result.inventory;
@@ -1221,6 +1319,8 @@ export class GameScene extends Phaser.Scene {
         bus.emit('inventory', this.inventory);
         bus.emit('toast', `${ITEMS[item].name} placed!`, 'good');
         this.sfx('place', 0.6);
+        this.useHint('place');
+        if (item === 'campfire') this.tickJourney('place_campfire');
         this.exitPlaceMode();
       } else if (result.reason === 'OCCUPIED') {
         bus.emit('toast', 'Someone already built here — first placement wins. Item kept.', 'bad');
@@ -1320,7 +1420,9 @@ export class GameScene extends Phaser.Scene {
     if (nearMon !== this.nearMonument) {
       this.nearMonument = nearMon;
       bus.emit('seal-near', nearMon);
+      if (nearMon) this.tickJourney('visit_seal');
     }
+    this.updateHints();
   }
 
   // ------------------------------------------------------------ update

@@ -366,6 +366,31 @@ button.ui-btn:disabled {
   color: var(--dim);
 }
 
+/* ---------------- v3: the Journey tracker ---------------- */
+#journey-panel {
+  position: absolute;
+  top: 150px;
+  right: 12px;
+  width: 250px;
+  display: none;
+}
+#journey-panel.open {
+  display: block;
+}
+.journey-step {
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--dim);
+}
+.journey-step.done {
+  color: var(--good);
+  opacity: 0.75;
+}
+.journey-step.current {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* ---------------- v2: buff indicator ---------------- */
 #buff-label {
   position: absolute;

@@ -1,6 +1,7 @@
 import { ITEMS, type ItemId, type StructureId } from '../content/items';
+import { hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
-import type { ChatMsg, Inventory, QuestState, SealResourceId, SealState } from '../backend/types';
+import type { ChatMsg, Inventory, JourneyState, QuestState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 
 let meName = '';
@@ -8,6 +9,8 @@ let inv: Inventory = {};
 let treasureLoc: { tx: number; ty: number } | null = null;
 let quest: QuestState | null = null;
 let seal: SealState | null = null;
+let journey: JourneyState | null = null;
+let placingNow = false;
 let fightTimer: number | undefined;
 let buffTimer: number | undefined;
 
@@ -41,8 +44,12 @@ export function initHud(name: string, muted: boolean): void {
     </div>
     <div id="zone-banner" data-testid="zone-banner"></div>
     <div id="online" class="panel" data-testid="online-list"></div>
+    <div id="journey-panel" class="panel" data-testid="journey-panel">
+      <h3>🌱 The Journey</h3>
+      <div id="journey-steps"></div>
+    </div>
     <div id="toasts"></div>
-    <div id="place-hint">Face a free tile &middot; Enter to place &middot; Esc to cancel</div>
+    <div id="place-hint">E place &middot; Esc cancel</div>
     <div id="craft-panel" class="panel" data-testid="craft-panel">
       <h3>Crafting</h3>
       <div id="recipe-list"></div>
@@ -120,7 +127,15 @@ export function initHud(name: string, muted: boolean): void {
     el('btn-mute').textContent = m ? '🔇 Muted' : '🔊 Sound';
   });
   bus.on('place-mode', (on: boolean) => {
-    el('place-hint').classList.toggle('open', on);
+    placingNow = on;
+    // the placement hint is a contextual Journey hint — it retires after a few placements
+    const retired = journey !== null && hintRetired(journey, 'place');
+    el('place-hint').classList.toggle('open', on && !retired);
+  });
+  bus.on('journey', (j: JourneyState) => {
+    journey = j;
+    renderJourney();
+    if (placingNow && hintRetired(j, 'place')) el('place-hint').classList.remove('open');
   });
   bus.on('quest', (q: QuestState) => {
     treasureLoc = q.treasureLocation;
@@ -256,6 +271,32 @@ async function initMinimap(): Promise<void> {
 
 function togglePanel(id: string): void {
   el(id).classList.toggle('open');
+}
+
+/**
+ * The Journey tracker: sequential objectives, ticked from play. It disappears
+ * for good once the last step (the first Seal Offering) is done.
+ */
+function renderJourney(): void {
+  const panel = el('journey-panel');
+  if (!journey || journeyComplete(journey)) {
+    panel.classList.remove('open');
+    return;
+  }
+  panel.classList.add('open');
+  const box = el('journey-steps');
+  box.innerHTML = '';
+  let currentMarked = false;
+  for (const step of JOURNEY_STEPS) {
+    const done = !!journey.steps[step.id];
+    const current = !done && !currentMarked;
+    if (current) currentMarked = true;
+    const row = document.createElement('div');
+    row.className = 'journey-step' + (done ? ' done' : current ? ' current' : '');
+    row.setAttribute('data-testid', `journey-${step.id}`);
+    row.textContent = `${done ? '✓' : current ? '▸' : '○'} ${step.label}`;
+    box.appendChild(row);
+  }
 }
 
 /** 📜 read/total (derived from world data) · 🗺 pieces · ⛩ Seal progress */

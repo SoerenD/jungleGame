@@ -39,6 +39,27 @@ export interface ChatMsg {
   ts: number;
 }
 
+/** the Journey's sequential objectives, in display order (see content/journey.ts) */
+export type JourneyStepId =
+  | 'gather_wood'
+  | 'craft_axe'
+  | 'harvest_stone'
+  | 'place_campfire'
+  | 'read_tablet'
+  | 'visit_seal'
+  | 'first_offering';
+
+/**
+ * Per-Player onboarding state, persisted like `introSeen` (a Supabase
+ * implementation stores both records as jsonb columns on the player row).
+ */
+export interface JourneyState {
+  /** displayed sequentially; completes from evidence, so order is not enforced */
+  steps: Partial<Record<JourneyStepId, boolean>>;
+  /** successful uses per contextual hint — a hint retires after a few uses */
+  hintUses: Record<string, number>;
+}
+
 export type JoinResult =
   | {
       ok: true;
@@ -50,6 +71,7 @@ export type JoinResult =
       isNew: boolean;
       /** false until the intro story has been shown to this Player once */
       introSeen: boolean;
+      journey: JourneyState;
     }
   | { ok: false; reason: 'WRONG_PIN' | 'BAD_NAME' | 'BAD_PIN' };
 
@@ -204,6 +226,10 @@ export interface Backend {
   eatCookedFish(): Promise<EatResult>;
   /** remember that this Player has seen the intro story */
   markIntroSeen(): Promise<void>;
+  /** tick one Journey objective for this Player (idempotent) */
+  completeJourneyStep(step: JourneyStepId): Promise<JourneyState>;
+  /** count one successful use of a contextual key hint (hints retire after a few) */
+  bumpHint(hintId: string): Promise<JourneyState>;
   on<K extends keyof BackendEvents>(event: K, cb: BackendEvents[K]): void;
   off<K extends keyof BackendEvents>(event: K, cb: BackendEvents[K]): void;
 }
