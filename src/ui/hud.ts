@@ -5,6 +5,7 @@ import { hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey'
 import { RECIPES } from '../content/recipes';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
+import { asset } from '../paths';
 
 let meName = '';
 let inv: Inventory = {};
@@ -484,9 +485,9 @@ function renderSawmill(): void {
 async function initMinimap(): Promise<void> {
   const canvas = el<HTMLCanvasElement>('minimap');
   const ctx = canvas.getContext('2d')!;
-  const mapJson = await (await fetch('/map/jungle-map.json')).json();
+  const mapJson = await (await fetch(asset('/map/jungle-map.json'))).json();
   // v2 landmarks (Seal monument, Guardian) are marked on the minimap
-  const worldData = (await (await fetch('/map/world-data.json')).json()) as {
+  const worldData = (await (await fetch(asset('/map/world-data.json'))).json()) as {
     sealMonument: { tx: number; ty: number };
     guardianHome: { tx: number; ty: number };
   };

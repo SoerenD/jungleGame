@@ -5,6 +5,7 @@
  * URL. Icons stay pixel-crisp via `image-rendering: pixelated` in CSS.
  */
 import { OBJECTS } from '../assetConfig';
+import { asset } from '../paths';
 import type { ItemId } from '../content/items';
 
 /** shared palette: char → CSS color ('.' and unknown chars are transparent) */
@@ -352,7 +353,10 @@ export function itemIcon(id: ItemId): string {
     });
     url = canvas.toDataURL();
   } else {
-    url = OBJECTS[`st_${id}`]?.url ?? '';
+    // structure sprites are runtime-loaded files: prefix with the base path so
+    // they resolve under GitHub Pages' /jungleGame/ (like BootScene does)
+    const raw = OBJECTS[`st_${id}`]?.url;
+    url = raw ? asset(raw) : '';
   }
   cache.set(id, url);
   return url;
