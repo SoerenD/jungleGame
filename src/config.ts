@@ -40,7 +40,14 @@ export const SEAL_QUOTAS: Record<'wood' | 'stone' | 'fiber' | 'fruit', number> =
 // ?fight = instant summon ready: the Seal starts broken, joining grants a
 // Summoning Totem, and the Guardian is weak/brief enough to win or lose solo.
 export const DEV_FIGHT = params.has('fight');
-export const GUARDIAN_MAX_HP = DEV_FIGHT ? 30 : 500;
+/**
+ * Sized for WINDOWED uptime (hits land only in Eye Windows, ~45% of the
+ * fight): a Player with a tier-1 tool deals 2 dmg per 300ms swing ≈ 3 dps
+ * schedule-capped, ~1.8 dps with decent-but-imperfect play. Over the 5-min
+ * window that is ~540 per Player — so 3–4 friends clear 1500 with room to
+ * spare, while solo (~540) remains near impossible. ?fight stays trivial.
+ */
+export const GUARDIAN_MAX_HP = DEV_FIGHT ? 30 : 1500;
 /** slumber timer: how long the Guardian stays awake after a summon */
 export const GUARDIAN_AWAKE_MS = DEV_FIGHT ? 90_000 : 300_000;
 export const KNOCKDOWN_STUN_MS = 5_000;

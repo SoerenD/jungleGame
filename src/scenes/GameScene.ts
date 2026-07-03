@@ -32,7 +32,19 @@ import {
   TILE,
   ZOOM,
 } from '../config';
-import { ARENA_H, ARENA_W, TELEGRAPH_MS, waveAt, waveTiles } from '../content/guardian';
+import {
+  ARENA_H,
+  ARENA_W,
+  eyeOpenAt,
+  furyPhaseAt,
+  guardianPoseAt,
+  LUNGE_ZONE,
+  lungeTarget,
+  waveInfoAt,
+  waveTiles,
+  type ArenaSpot,
+  type WaveInfo,
+} from '../content/guardian';
 import { ITEMS, type ItemId, type StructureId } from '../content/items';
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
@@ -100,6 +112,9 @@ interface RemoteView {
   look: string;
 }
 
+/** rune glow tint per fury phase: calm violet → restless amber → fury red */
+const FURY_TINTS = [0xb478ff, 0xff9a3d, 0xff4433];
+
 /** deterministic per-id variance so the forest looks grown, not stamped */
 function idHash(id: string): number {
   let h = 0;
@@ -141,10 +156,17 @@ export class GameScene extends Phaser.Scene {
   // ---- v2: the Guardian
   private fight: FightState | null = null;
   private guardianSprite!: Phaser.GameObjects.Sprite;
+  private guardianShadow!: Phaser.GameObjects.Image;
+  private guardianGlow!: Phaser.GameObjects.Image;
+  private guardianEyeGlow!: Phaser.GameObjects.Image;
+  private guardianHomeSpot: ArenaSpot = { ax: 0, ay: 0 };
   private guardianAltarPos = { x: 0, y: 0 };
   private dangerRects: Phaser.GameObjects.Rectangle[] = [];
   private renderedWave = -1;
   private slammedWave = -1;
+  private landedWave = -1;
+  private furyIndex = -1;
+  private eyeOpenShown = false;
   private stunnedUntil = 0;
   private stunMarker: Phaser.GameObjects.Text | null = null;
   private fightMusic: Phaser.Sound.BaseSound | null = null;
@@ -300,22 +322,35 @@ export class GameScene extends Phaser.Scene {
       const g = this.world.guardianHome;
       const x = (g.tx + 1.5) * TILE;
       const y = (g.ty + 3) * TILE;
+      // arena-local center tile of the resting place — the schedule's home spot
+      this.guardianHomeSpot = { ax: g.tx + 1 - this.world.arena.x, ay: g.ty + 1 - this.world.arena.y };
       this.guardianSprite = this.add.sprite(x, y, 'guardian', 0);
       this.guardianSprite.setOrigin(0.5, 1);
       this.guardianSprite.setDepth(y);
-      this.addShadow(x, y - 2, 44);
+      this.guardianShadow = this.addShadow(x, y - 2, 60);
+      // the resting place stays solid even while it lunges about (world data
+      // marks those tiles blocked=2 — it is always physically anchored there)
       for (let dy = 0; dy < 3; dy++) {
         for (let dx = 0; dx < 3; dx++) this.addBlockerBody(g.tx + dx, g.ty + dy);
       }
-      // its sigil smolders at night, even asleep (the night glowDef)
-      const glow = this.add
-        .image(x, y - 20, 'glow')
+      // its cracked runes smolder at night, even asleep; during a fight the
+      // tint tracks the fury phase (purple → orange → red)
+      this.guardianGlow = this.add
+        .image(x, y - 45, 'glow')
         .setBlendMode(Phaser.BlendModes.ADD)
         .setTint(0xb478ff)
-        .setScale(2.2)
+        .setScale(2.6)
         .setAlpha(0)
         .setDepth(890_001);
-      this.glows.push({ img: glow, base: 0.5, x, y });
+      this.glows.push({ img: this.guardianGlow, base: 0.5, x, y });
+      // the amber eye's blaze while an Eye Window is open
+      this.guardianEyeGlow = this.add
+        .image(x, y - 78, 'glow')
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setTint(0xffb437)
+        .setScale(1.5)
+        .setAlpha(0)
+        .setDepth(890_002);
     }
 
     // player — the Avatar texture is composed from this Player's palette picks
@@ -559,7 +594,13 @@ export class GameScene extends Phaser.Scene {
   private startFight(fight: FightState, fresh: boolean): void {
     this.fight = fight;
     this.renderedWave = -1;
-    this.slammedWave = waveAt(Date.now() - fight.summonedAt).index - 1;
+    this.landedWave = -1;
+    this.eyeOpenShown = false;
+    // joining mid-fight: derive the whole state from summonedAt, not events
+    const w = waveInfoAt(Date.now() - fight.summonedAt, GUARDIAN_AWAKE_MS);
+    this.slammedWave = w.msIntoWave >= w.phase.telegraphMs ? w.index : w.index - 1;
+    this.furyIndex = furyPhaseAt(Date.now() - fight.summonedAt, GUARDIAN_AWAKE_MS).index;
+    this.guardianGlow.setTint(FURY_TINTS[this.furyIndex]);
     this.guardianSprite.anims.play('guardian-idle');
     if (fresh) {
       this.sfx('roar', 0.7);
@@ -578,14 +619,19 @@ export class GameScene extends Phaser.Scene {
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
     this.renderedWave = -1;
+    this.furyIndex = -1;
     this.guardianSprite.anims.stop();
     this.guardianSprite.setFrame(0);
+    // it sinks back onto its resting place
+    this.placeGuardian(this.guardianHomeSpot, 0);
+    this.guardianGlow.setTint(0xb478ff);
+    this.guardianEyeGlow.setAlpha(0);
     this.fightMusic?.stop();
     bus.emit('fight-end');
     if (kind === 'victory') {
       this.sfx('seal_gong', 0.6);
       this.cameras.main.shake(500, 0.006);
-      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 52, 'The Guardian is bested!', '#ffd166');
+      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, 'The Guardian is bested!', '#ffd166');
       bus.emit('toast', '🏆 The Guardian sinks into slumber — every fighter earns its Scales!', 'good');
     } else {
       this.sfx('roar', 0.35);
@@ -593,35 +639,64 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** render the telegraphs of one wave onto the arena tiles */
-  private renderWave(index: number): void {
+  /** world position of an arena spot (the Guardian's feet on its bottom row) */
+  private placeGuardian(spot: ArenaSpot, lift: number): void {
+    const a = this.world.arena;
+    const x = (a.x + spot.ax + 0.5) * TILE;
+    const groundY = (a.y + spot.ay + 2) * TILE;
+    this.guardianSprite.setPosition(x, groundY - lift);
+    this.guardianSprite.setDepth(groundY);
+    this.guardianShadow.setPosition(x, groundY - 2);
+    this.guardianShadow.setAlpha(lift > 0 ? 0.5 : 1);
+    this.guardianGlow.setPosition(x, groundY - lift - 45);
+    this.guardianEyeGlow.setPosition(x, groundY - lift - 78);
+  }
+
+  /** render the telegraphs of one wave: slam tiles, or a lunge landing marker */
+  private renderWave(w: WaveInfo): void {
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
-    const tiles = waveTiles(index);
     const a = this.world.arena;
-    for (let ay = 0; ay < ARENA_H; ay++) {
-      for (let ax = 0; ax < ARENA_W; ax++) {
-        if (!tiles[ay * ARENA_W + ax]) continue;
-        const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 2, TILE - 2, 0xff3322, 0.22);
-        rect.setDepth(3);
-        this.dangerRects.push(rect);
+    const mark = (ax: number, ay: number, color: number, alpha: number) => {
+      const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 2, TILE - 2, color, alpha);
+      rect.setDepth(3);
+      this.dangerRects.push(rect);
+    };
+    if (w.kind === 'lunge') {
+      // the landing marker glows on the pre-determined spot before impact
+      const t = lungeTarget(w.lungeCount + 1);
+      for (let dy = -LUNGE_ZONE; dy <= LUNGE_ZONE; dy++) {
+        for (let dx = -LUNGE_ZONE; dx <= LUNGE_ZONE; dx++) mark(t.ax + dx, t.ay + dy, 0xffa02f, 0.3);
+      }
+    } else {
+      const tiles = waveTiles(w.index, w.phase.density);
+      for (let ay = 0; ay < ARENA_H; ay++) {
+        for (let ax = 0; ax < ARENA_W; ax++) {
+          if (tiles[ay * ARENA_W + ax]) mark(ax, ay, 0xff3322, 0.22);
+        }
       }
     }
   }
 
-  /** the slam moment: flash, shake, and adjudicate the local Player */
-  private slamWave(index: number): void {
-    this.slammedWave = index;
-    for (const r of this.dangerRects) r.setFillStyle(0xff2211, 0.55);
-    this.sfx('chop', 0.35);
-    this.cameras.main.shake(180, 0.004);
+  /** the slam/landing moment: flash, shake, and adjudicate the local Player */
+  private slamWave(w: WaveInfo): void {
+    this.slammedWave = w.index;
+    const lunge = w.kind === 'lunge';
+    for (const r of this.dangerRects) r.setFillStyle(lunge ? 0xffa02f : 0xff2211, 0.55);
+    this.sfx('chop', lunge ? 0.6 : 0.35);
+    this.cameras.main.shake(lunge ? 350 : 180, lunge ? 0.008 : 0.004);
     if (Date.now() < this.stunnedUntil) return; // already down — no double count
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
     const ax = ptx - this.world.arena.x;
     const ay = pty - this.world.arena.y;
     if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return;
-    if (!waveTiles(index)[ay * ARENA_W + ax]) return;
+    if (lunge) {
+      const t = lungeTarget(w.lungeCount + 1);
+      if (Math.abs(ax - t.ax) > LUNGE_ZONE || Math.abs(ay - t.ay) > LUNGE_ZONE) return;
+    } else if (!waveTiles(w.index, w.phase.density)[ay * ARENA_W + ax]) {
+      return;
+    }
     // caught! stun locally, let the server adjudicate against ITS clock
     this.stunnedUntil = Date.now() + KNOCKDOWN_STUN_MS;
     this.player.setVelocity(0, 0);
@@ -651,13 +726,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private guardianAction(): EAction | null {
+    // the colossus is 96px tall on a 3x3 footprint — aim at its lower body
     const d = Phaser.Math.Distance.Between(
       this.player.x,
       this.player.y - 4,
       this.guardianSprite.x,
-      this.guardianSprite.y - TILE,
+      this.guardianSprite.y - TILE * 1.5,
     );
-    if (d > INTERACT_RANGE + TILE * 1.5) return null;
+    if (d > INTERACT_RANGE + TILE * 2) return null;
     if (!this.fight) {
       if (this.seal?.broken) {
         return {
@@ -671,15 +747,27 @@ export class GameScene extends Phaser.Scene {
   }
 
   private swingAtGuardian(): void {
-    this.sfx('chop', 0.5);
-    this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
+    // predict locally from the same schedule the server adjudicates with —
+    // outside an Eye Window the swing bounces off so the rule teaches itself
+    const eyeOpen = this.fight ? eyeOpenAt(Date.now() - this.fight.summonedAt, GUARDIAN_AWAKE_MS) : false;
+    if (eyeOpen) {
+      this.sfx('chop', 0.5);
+      this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
+    } else {
+      this.sfx('blip', 0.35);
+      this.floatText(
+        this.guardianSprite.x + Phaser.Math.Between(-10, 10),
+        this.guardianSprite.y - 60,
+        'clang',
+        '#9aa0a8',
+      );
+    }
     void this.backend.hitGuardian().then((res) => {
       if (!res.ok) return;
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
-      if (!res.victory) {
-        this.floatText(this.guardianSprite.x, this.guardianSprite.y - 46, `${res.hp}`, '#ff8866');
-      }
+      if (res.deflected || res.victory) return;
+      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, `${res.hp}`, '#ff8866');
     });
   }
 
@@ -1471,24 +1559,86 @@ export class GameScene extends Phaser.Scene {
       this.applyAnim(r.sprite, r.dir, visuallyMoving);
     }
 
-    // ---- v2: the Guardian fight — everything derives from summonedAt
+    // ---- v2/v3: the Guardian fight — everything derives from summonedAt
     if (this.fight) {
       const elapsed = Date.now() - this.fight.summonedAt;
       if (elapsed >= GUARDIAN_AWAKE_MS) {
         // every client derives the timer's end locally; the backend event follows
         this.endFight('slumber');
       } else {
-        const wave = waveAt(elapsed);
+        // fury phases at fixed elapsed-time thresholds — every client hits
+        // the same transition at the same schedule position
+        const phase = furyPhaseAt(elapsed, GUARDIAN_AWAKE_MS);
+        if (phase.index !== this.furyIndex) {
+          this.furyIndex = phase.index;
+          this.guardianGlow.setTint(FURY_TINTS[phase.index]);
+          this.sfx('roar', 0.8);
+          this.cameras.main.shake(600, 0.008);
+          bus.emit(
+            'toast',
+            phase.index === 1 ? 'The Guardian grows restless — the runes burn hotter!' : 'FURY — the runes blaze red!',
+            'bad',
+          );
+        }
+        const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS);
         if (wave.index !== this.renderedWave) {
           this.renderedWave = wave.index;
-          this.renderWave(wave.index);
+          this.renderWave(wave);
         }
-        if (wave.phaseMs < TELEGRAPH_MS) {
-          // telegraph pulse rises toward the slam
-          const pulse = 0.14 + (wave.phaseMs / TELEGRAPH_MS) * 0.22 + 0.06 * Math.sin(time / 60);
-          for (const r of this.dangerRects) r.setFillStyle(0xff3322, pulse);
+        if (wave.msIntoWave < wave.phase.telegraphMs) {
+          // telegraph pulse rises toward the slam / crash
+          const pulse = 0.14 + (wave.msIntoWave / wave.phase.telegraphMs) * 0.22 + 0.06 * Math.sin(time / 60);
+          const color = wave.kind === 'lunge' ? 0xffa02f : 0xff3322;
+          for (const r of this.dangerRects) r.setFillStyle(color, pulse);
         } else if (this.slammedWave !== wave.index) {
-          this.slamWave(wave.index);
+          this.slamWave(wave);
+        }
+
+        // scripted position: telegraphed lunges to pre-determined spots
+        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, this.guardianHomeSpot);
+        this.guardianEyeGlow.setAlpha(0);
+        if (pose.airborne && pose.target) {
+          const a = this.world.arena;
+          const fx = (a.x + pose.spot.ax + 0.5) * TILE;
+          const fy = (a.y + pose.spot.ay + 2) * TILE;
+          const tx2 = (a.x + pose.target.ax + 0.5) * TILE;
+          const ty2 = (a.y + pose.target.ay + 2) * TILE;
+          const t = pose.leapT;
+          const arc = Math.sin(t * Math.PI) * 56;
+          this.guardianSprite.anims.stop();
+          this.guardianSprite.setFrame(6);
+          const gx = fx + (tx2 - fx) * t;
+          const gy = fy + (ty2 - fy) * t;
+          this.guardianSprite.setPosition(gx, gy - arc);
+          this.guardianSprite.setDepth(gy);
+          this.guardianShadow.setPosition(gx, gy - 2).setAlpha(0.45);
+          this.guardianGlow.setPosition(gx, gy - arc - 45);
+          this.guardianEyeGlow.setPosition(gx, gy - arc - 78);
+        } else {
+          this.placeGuardian(pose.spot, 0);
+          if (pose.windup) {
+            this.guardianSprite.anims.stop();
+            this.guardianSprite.setFrame(5);
+          } else if (wave.kind === 'lunge' && wave.msIntoWave >= wave.phase.telegraphMs && this.landedWave !== wave.index) {
+            // the crash-down moment
+            this.landedWave = wave.index;
+            this.guardianSprite.anims.stop();
+            this.guardianSprite.setFrame(7);
+          } else if (this.landedWave === wave.index && wave.msIntoWave < wave.phase.telegraphMs + 500) {
+            // hold the landing pose for a beat
+          } else {
+            // Eye Window: the amber eye opens right after each slam
+            const eyeOpen = eyeOpenAt(elapsed, GUARDIAN_AWAKE_MS);
+            if (eyeOpen !== this.eyeOpenShown) {
+              this.eyeOpenShown = eyeOpen;
+              if (eyeOpen) this.sfx('blip', 0.5);
+            }
+            const want = eyeOpen ? 'guardian-eye' : 'guardian-idle';
+            if (this.guardianSprite.anims.currentAnim?.key !== want || !this.guardianSprite.anims.isPlaying) {
+              this.guardianSprite.anims.play(want, true);
+            }
+            this.guardianEyeGlow.setAlpha(eyeOpen ? 0.5 + 0.18 * Math.sin(time / 70) : 0);
+          }
         }
       }
     }

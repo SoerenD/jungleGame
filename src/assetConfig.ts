@@ -67,8 +67,12 @@ export const OBJECTS: Record<string, ObjectDef> = {
   seal_monument: { url: '/assets/objects/seal-monument.png' },
   guardian_altar: { url: '/assets/objects/guardian-altar.png' },
   welcome_stone: { url: '/assets/objects/welcome-stone.png' },
-  /** the Guardian: 3 frames of 48x48 — 0 slumber, 1..2 awake idle */
-  guardian: { url: '/assets/objects/guardian.png', frameWidth: 48, frameHeight: 48, frame: 0 },
+  /**
+   * the Guardian: 8 frames of 96x96 — 0 slumber, 1..2 awake idle (eye
+   * closed), 3..4 eye open (the Eye Window signal), 5 lunge windup,
+   * 6 airborne, 7 landing
+   */
+  guardian: { url: '/assets/objects/guardian.png', frameWidth: 96, frameHeight: 96, frame: 0 },
 };
 
 export const AUDIO: Record<string, string> = {

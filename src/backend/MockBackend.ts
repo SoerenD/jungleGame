@@ -14,7 +14,13 @@ import {
   STORAGE_KEY,
   TILE,
 } from '../config';
-import { ADJUDICATION_SLACK_MS, guardianDamage, isDangerousAt, waveAt } from '../content/guardian';
+import {
+  ADJUDICATION_SLACK_MS,
+  eyeOpenWithin,
+  guardianDamage,
+  isDangerousAt,
+  waveInfoAt,
+} from '../content/guardian';
 import { ITEMS, type StructureId } from '../content/items';
 import { NODE_TYPES, holdsBonusTool, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
@@ -716,6 +722,12 @@ export class MockBackend implements Backend {
     const f = this.db.world!.fight;
     const p = this.me ? this.db.players[this.me] : null;
     if (!f || !p) return { ok: false, reason: 'NO_FIGHT' };
+    // damage validity is adjudicated from summonedAt + SERVER elapsed time,
+    // exactly like knockdowns: hits land only inside an Eye Window
+    const elapsed = Date.now() - f.summonedAt;
+    if (!eyeOpenWithin(elapsed, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
+      return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true };
+    }
     const dmg = guardianDamage(p.inventory);
     f.hp = Math.max(0, f.hp - dmg);
     if (!f.participants.includes(this.me!)) f.participants.push(this.me!);
@@ -736,10 +748,10 @@ export class MockBackend implements Backend {
         ts: Date.now(),
       });
       this.emit('guardianVictory', participants);
-      return { ok: true, hp: 0, victory: true, inventory: { ...p.inventory } };
+      return { ok: true, hp: 0, victory: true, inventory: { ...p.inventory }, deflected: false };
     }
     this.saveSoon();
-    return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory } };
+    return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: false };
   }
 
   async reportKnockdown(tx: number, ty: number): Promise<KnockdownResult> {
@@ -752,11 +764,13 @@ export class MockBackend implements Backend {
     const elapsed = Date.now() - f.summonedAt;
     const ax = tx - this.world.arena.x;
     const ay = ty - this.world.arena.y;
-    if (!isDangerousAt(elapsed, ax, ay, ADJUDICATION_SLACK_MS)) return { ok: false, reason: 'NOT_IN_DANGER' };
+    if (!isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
+      return { ok: false, reason: 'NOT_IN_DANGER' };
+    }
     const spawn = { ...this.world.spawn };
     // the slam window (incl. slack) never crosses a wave boundary, so the
     // wave at the report's server time is the wave that hit
-    const wave = waveAt(elapsed).index;
+    const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS).index;
     const me = this.me!;
     if (f.lastKnockdownWave[me] === wave) {
       // duplicate report for the same slam — count it once

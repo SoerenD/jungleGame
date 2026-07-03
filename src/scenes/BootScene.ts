@@ -89,6 +89,13 @@ export class BootScene extends Phaser.Scene {
       frameRate: 2,
       repeat: -1,
     });
+    // the Eye Window: the amber eye blazes — the weak-point signal
+    this.anims.create({
+      key: 'guardian-eye',
+      frames: this.anims.generateFrameNumbers('guardian', { start: 3, end: 4 }),
+      frameRate: 4,
+      repeat: -1,
+    });
     this.game.events.emit('assets-ready');
   }
 }

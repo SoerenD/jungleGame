@@ -162,7 +162,14 @@ export type SummonResult =
 
 export type GuardianHitResult =
   | { ok: false; reason: 'NO_FIGHT' }
-  | { ok: true; hp: number; victory: boolean; inventory: Inventory };
+  | {
+      ok: true;
+      hp: number;
+      victory: boolean;
+      inventory: Inventory;
+      /** true when the eye was closed at server time — 0 damage, no participation */
+      deflected: boolean;
+    };
 
 export type KnockdownResult =
   | { ok: false; reason: 'NO_FIGHT' | 'NOT_IN_DANGER' }
