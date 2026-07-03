@@ -518,6 +518,9 @@ export class GameScene extends Phaser.Scene {
       this.addStructure(s);
       if (s.placedBy !== this.me.name) bus.emit('toast', `${s.placedBy} built a ${ITEMS[s.type].name}`, 'info');
     });
+    this.backend.on('crateChanged', (crateId: string, contents: Inventory) => {
+      bus.emit('crate-changed', crateId, contents);
+    });
     this.backend.on('position', (p: PlayerPos) => this.upsertRemote(p));
     this.backend.on('presence', () => this.emitPresence());
     this.backend.on('quest', (q: QuestState) => this.applyQuest(q));
@@ -712,10 +715,16 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       if (res.exhausted) {
-        bus.emit('toast', 'Exhaustion overtakes you — you wake at the spawn, pack intact.', 'bad');
+        bus.emit(
+          'toast',
+          res.atHammock
+            ? 'Exhaustion overtakes you — you wake in your Hammock, pack intact.'
+            : 'Exhaustion overtakes you — you wake at the spawn, pack intact.',
+          'bad',
+        );
         this.cameras.main.fadeOut(400, 0, 0, 0);
         this.time.delayedCall(450, () => {
-          this.player.setPosition((res.spawn.tx + 0.5) * TILE, (res.spawn.ty + 0.5) * TILE);
+          this.player.setPosition((res.wake.tx + 0.5) * TILE, (res.wake.ty + 0.5) * TILE);
           this.stunnedUntil = 0;
           this.cameras.main.fadeIn(500, 0, 0, 0);
         });
@@ -1071,6 +1080,52 @@ export class GameScene extends Phaser.Scene {
       });
     });
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
+    // crate storage / Sawmill ops requested by the HUD panels
+    bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
+      void this.backend.crateDeposit(crateId, item, count).then((res) => {
+        if (!res.ok) return;
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('crate-open', crateId, res.contents);
+      });
+    });
+    bus.on('crate-withdraw', (crateId: string, item: ItemId, count: number) => {
+      void this.backend.crateWithdraw(crateId, item, count).then((res) => {
+        if (!res.ok) {
+          if (res.reason === 'NOTHING') bus.emit('toast', 'Someone was quicker — the crate no longer holds that.', 'bad');
+          return;
+        }
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('crate-open', crateId, res.contents);
+      });
+    });
+    bus.on('sawmill-deposit', (sawmillId: string) => {
+      void this.backend.sawmillDeposit(sawmillId).then((res) => {
+        if (!res.ok) {
+          if (res.reason === 'NOTHING') bus.emit('toast', 'The mill is full or you carry no wood.', 'bad');
+          return;
+        }
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('sawmill-open', sawmillId, res.state);
+        this.sfx('place', 0.5);
+      });
+    });
+    bus.on('sawmill-refresh', (sawmillId: string) => this.openSawmill(sawmillId));
+    bus.on('sawmill-collect', (sawmillId: string) => {
+      void this.backend.sawmillCollect(sawmillId).then((res) => {
+        if (!res.ok) {
+          if (res.reason === 'NOTHING') bus.emit('toast', 'No plank is finished yet — the mill works slowly.', 'bad');
+          return;
+        }
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('sawmill-open', sawmillId, res.state);
+        bus.emit('toast', 'You collect the finished planks.', 'good');
+        this.sfx('harvest', 0.6);
+      });
+    });
     bus.on('eat', () => {
       void this.backend.eatCookedFish().then((res) => {
         if (!res.ok) return;
@@ -1274,6 +1329,20 @@ export class GameScene extends Phaser.Scene {
     const cook = this.cookAction();
     if (cook) return cook;
 
+    // functional Structures: crate storage, the Sawmill, signposts
+    const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
+    if (st) {
+      if (st.type === 'crate') return { swing: false, run: () => this.openCrate(st.id) };
+      if (st.type === 'sawmill') return { swing: false, run: () => this.openSawmill(st.id) };
+      return {
+        swing: false,
+        run: () => {
+          bus.emit('lore', `🪧 ${st.placedBy} wrote:`, st.text?.trim() ? st.text : '(nothing is written here)');
+          this.sfx('blip', 0.4);
+        },
+      };
+    }
+
     let best: NodeView | null = null;
     let bestDist = INTERACT_RANGE;
     for (const view of this.nodes.values()) {
@@ -1325,6 +1394,39 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ structures
 
+  /** the first structure of one of `types` on the 3x3 of tiles around the Player */
+  private nearbyStructure(types: StructureId[]): Structure | null {
+    const ptx = Math.floor(this.player.x / TILE);
+    const pty = Math.floor((this.player.y - 4) / TILE);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const s = this.structuresByTile.get(`${ptx + dx},${pty + dy}`);
+        if (s && types.includes(s.type)) return s;
+      }
+    }
+    return null;
+  }
+
+  private openCrate(crateId: string): void {
+    void this.backend.crateOpen(crateId).then((res) => {
+      if (!res.ok) return;
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      bus.emit('crate-open', crateId, res.contents);
+      this.sfx('blip', 0.4);
+    });
+  }
+
+  private openSawmill(sawmillId: string): void {
+    void this.backend.sawmillOpen(sawmillId).then((res) => {
+      if (!res.ok) return;
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      bus.emit('sawmill-open', sawmillId, res.state);
+      this.sfx('blip', 0.4);
+    });
+  }
+
   private addStructure(s: Structure): void {
     if (this.structureIds.has(s.id)) return;
     this.structureIds.add(s.id);
@@ -1335,10 +1437,22 @@ export class GameScene extends Phaser.Scene {
     const baseY = (s.ty + 1) * TILE;
     const img = this.objImage(x, baseY, key);
     if (!img) return;
-    if (s.type === 'bridge' || s.type === 'stone_path') {
+    if (s.type === 'bridge' || s.type === 'stone_path' || s.type === 'plank_floor' || s.type === 'obsidian_path') {
       img.setDepth(-2); // floor
     } else {
       img.setDepth(baseY);
+    }
+    // the signpost's line is rendered in-world, readable by everyone
+    if (s.type === 'signpost' && s.text?.trim()) {
+      const label = this.add.text(x, baseY - 20, s.text, {
+        fontSize: '7px',
+        color: '#ffe9c9',
+        stroke: '#3a2a18',
+        strokeThickness: 3,
+      });
+      label.setOrigin(0.5, 1);
+      label.setResolution(4);
+      label.setDepth(baseY + 1);
     }
     if (def.blocks) {
       this.addBlockerBody(s.tx, s.ty);
@@ -1405,7 +1519,23 @@ export class GameScene extends Phaser.Scene {
     if (!this.placing) return;
     const item = this.placing;
     const { tx, ty } = this.facingTile();
-    void this.backend.placeStructure(item, tx, ty).then((result) => {
+    if (item === 'signpost') {
+      // placing a signpost prompts for its line (the prompt input freezes
+      // movement through the same chat-focus wiring as the chat box)
+      bus.emit('sign-prompt');
+      const done = (text: string | null) => {
+        bus.off('sign-text', done);
+        if (text === null) return; // cancelled — stay in placement mode
+        this.doPlace(item, tx, ty, text);
+      };
+      bus.on('sign-text', done);
+      return;
+    }
+    this.doPlace(item, tx, ty);
+  }
+
+  private doPlace(item: StructureId, tx: number, ty: number, text?: string): void {
+    void this.backend.placeStructure(item, tx, ty, text).then((result) => {
       if (result.ok) {
         this.inventory = result.inventory;
         bus.emit('inventory', this.inventory);
@@ -1413,6 +1543,7 @@ export class GameScene extends Phaser.Scene {
         this.sfx('place', 0.6);
         this.useHint('place');
         if (item === 'campfire') this.tickJourney('place_campfire');
+        if (item === 'hammock') bus.emit('toast', 'Your Hammock is set — Exhaustion and login bring you here.', 'info');
         this.exitPlaceMode();
       } else if (result.reason === 'OCCUPIED') {
         bus.emit('toast', 'Someone already built here — first placement wins. Item kept.', 'bad');

@@ -1,7 +1,7 @@
 import { ITEMS, type ItemId, type StructureId } from '../content/items';
 import { hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
-import type { ChatMsg, Inventory, JourneyState, QuestState, SealResourceId, SealState } from '../backend/types';
+import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 
 let meName = '';
@@ -53,6 +53,31 @@ export function initHud(name: string, muted: boolean): void {
     <div id="craft-panel" class="panel" data-testid="craft-panel">
       <h3>Crafting</h3>
       <div id="recipe-list"></div>
+    </div>
+    <div id="crate-panel" class="panel" data-testid="crate-panel">
+      <h3>📦 Supply Crate <span class="sub-note">shared with everyone</span></h3>
+      <div class="crate-cols">
+        <div><div class="col-title">Inside</div><div id="crate-contents"></div></div>
+        <div><div class="col-title">Your pack</div><div id="crate-pack"></div></div>
+      </div>
+      <button class="ui-btn" id="crate-close">Close</button>
+    </div>
+    <div id="sawmill-panel" class="panel" data-testid="sawmill-panel">
+      <h3>🪚 Sawmill</h3>
+      <div id="sawmill-status"></div>
+      <div class="sawmill-btns">
+        <button class="ui-btn" id="sawmill-deposit" data-testid="sawmill-deposit">Deposit wood</button>
+        <button class="ui-btn" id="sawmill-collect" data-testid="sawmill-collect">Collect planks</button>
+        <button class="ui-btn" id="sawmill-close">Close</button>
+      </div>
+    </div>
+    <div id="sign-panel" class="panel" data-testid="sign-panel">
+      <h3>🪧 Signpost</h3>
+      <input id="sign-input" data-testid="sign-input" maxlength="40" placeholder="Write a short line..." autocomplete="off" />
+      <div class="sawmill-btns">
+        <button class="ui-btn" id="sign-ok" data-testid="sign-ok">Place</button>
+        <button class="ui-btn" id="sign-cancel">Cancel</button>
+      </div>
     </div>
     <div id="inventory-panel" class="panel" data-testid="inventory-panel">
       <h3>Inventory</h3>
@@ -110,6 +135,7 @@ export function initHud(name: string, muted: boolean): void {
     inv = next;
     renderInventory();
     renderRecipes();
+    if (openCrateId) renderCrate();
   });
   bus.on('chat', (msg: ChatMsg) => appendChat(msg));
   bus.on('chatlog', (msgs: ChatMsg[]) => {
@@ -205,9 +231,132 @@ export function initHud(name: string, muted: boolean): void {
     if (e.key === 'Escape') el('lore-panel').classList.remove('open');
   });
 
+  // ---- v3: crate storage panel
+  el('crate-close').onclick = () => {
+    openCrateId = null;
+    el('crate-panel').classList.remove('open');
+  };
+  bus.on('crate-open', (id: string, contents: Inventory) => {
+    openCrateId = id;
+    crateContents = contents;
+    el('crate-panel').classList.add('open');
+    renderCrate();
+  });
+  bus.on('crate-changed', (id: string, contents: Inventory) => {
+    if (openCrateId !== id) return;
+    crateContents = contents;
+    renderCrate();
+  });
+
+  // ---- v3: Sawmill panel
+  el('sawmill-close').onclick = () => {
+    openSawmillId = null;
+    window.clearInterval(sawmillTimer);
+    el('sawmill-panel').classList.remove('open');
+  };
+  el('sawmill-deposit').onclick = () => {
+    if (openSawmillId) bus.emit('sawmill-deposit', openSawmillId);
+  };
+  el('sawmill-collect').onclick = () => {
+    if (openSawmillId) bus.emit('sawmill-collect', openSawmillId);
+  };
+  bus.on('sawmill-open', (id: string, state: SawmillState) => {
+    openSawmillId = id;
+    sawmill = state;
+    sawmillOpenedAt = Date.now();
+    el('sawmill-panel').classList.add('open');
+    renderSawmill();
+    window.clearInterval(sawmillTimer);
+    sawmillTimer = window.setInterval(renderSawmill, 500);
+  });
+
+  // ---- v3: signpost line prompt (freezes movement via the chat-focus wiring)
+  const signInput = el<HTMLInputElement>('sign-input');
+  signInput.addEventListener('focus', () => bus.emit('chat-focus'));
+  signInput.addEventListener('blur', () => bus.emit('chat-blur'));
+  const closeSign = (text: string | null) => {
+    el('sign-panel').classList.remove('open');
+    signInput.blur();
+    bus.emit('sign-text', text);
+  };
+  bus.on('sign-prompt', () => {
+    signInput.value = '';
+    el('sign-panel').classList.add('open');
+    signInput.focus();
+  });
+  el('sign-ok').onclick = () => closeSign(signInput.value);
+  el('sign-cancel').onclick = () => closeSign(null);
+  signInput.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') closeSign(signInput.value);
+    else if (e.key === 'Escape') closeSign(null);
+  });
+
   renderInventory();
   renderRecipes();
   void initMinimap();
+}
+
+// ---------------------------------------------------------------- v3: crate + Sawmill
+
+let openCrateId: string | null = null;
+let crateContents: Inventory = {};
+let openSawmillId: string | null = null;
+let sawmill: SawmillState | null = null;
+let sawmillOpenedAt = 0;
+let sawmillTimer: number | undefined;
+let sawmillRefreshAt = 0;
+
+function crateRow(id: ItemId, count: number, action: string, onClick: () => void): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'inv-row';
+  const label = document.createElement('span');
+  label.textContent = `${ITEMS[id].name} × ${count}`;
+  row.appendChild(label);
+  const btn = document.createElement('button');
+  btn.className = 'ui-btn';
+  btn.textContent = action;
+  btn.setAttribute('data-testid', `crate-${action.toLowerCase()}-${id}`);
+  btn.onclick = onClick;
+  row.appendChild(btn);
+  return row;
+}
+
+function renderCrate(): void {
+  if (!openCrateId) return;
+  const id = openCrateId;
+  const inside = el('crate-contents');
+  inside.innerHTML = '';
+  const contents = Object.entries(crateContents).filter(([, n]) => (n ?? 0) > 0) as [ItemId, number][];
+  if (contents.length === 0) inside.innerHTML = '<div class="col-empty">empty</div>';
+  for (const [item, n] of contents) {
+    inside.appendChild(crateRow(item, n, 'Take', () => bus.emit('crate-withdraw', id, item, n)));
+  }
+  const pack = el('crate-pack');
+  pack.innerHTML = '';
+  const mine = Object.entries(inv).filter(([, n]) => (n ?? 0) > 0) as [ItemId, number][];
+  if (mine.length === 0) pack.innerHTML = '<div class="col-empty">nothing to store</div>';
+  for (const [item, n] of mine) {
+    pack.appendChild(crateRow(item, n, 'Put', () => bus.emit('crate-deposit', id, item, n)));
+  }
+}
+
+function renderSawmill(): void {
+  if (!openSawmillId || !sawmill) return;
+  const sinceOpen = Date.now() - sawmillOpenedAt;
+  const next = sawmill.nextPlankMs === null ? null : Math.max(0, sawmill.nextPlankMs - sinceOpen);
+  const parts = [
+    `milling: ${sawmill.wood} wood`,
+    `ready: ${sawmill.ready} plank${sawmill.ready === 1 ? '' : 's'}`,
+  ];
+  if (next !== null) parts.push(`next plank in ${Math.ceil(next / 1000)}s`);
+  el('sawmill-status').textContent = parts.join(' · ');
+  // when the countdown runs out, re-derive fresh state from the backend
+  // (lazy timestamps — nothing ticks server-side)
+  if (next === 0 && Date.now() >= sawmillRefreshAt) {
+    sawmillRefreshAt = Date.now() + 1500;
+    bus.emit('sawmill-refresh', openSawmillId);
+  }
 }
 
 async function initMinimap(): Promise<void> {

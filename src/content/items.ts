@@ -8,7 +8,9 @@ export type ResourceId =
   | 'guardian_scale'
   | 'hardwood'
   | 'obsidian'
-  | 'fish';
+  | 'fish'
+  // v3 — refined at the Sawmill; lives in the Inventory like any Resource
+  | 'plank';
 export type ToolId = 'axe' | 'pickaxe' | 'machete' | 'hammer' | 'ancient_axe' | 'ancient_pickaxe' | 'fishing_rod';
 export type StructureId =
   | 'campfire'
@@ -26,7 +28,13 @@ export type StructureId =
   | 'hardwood_arch'
   | 'guardian_trophy'
   | 'obsidian_path'
-  | 'brazier';
+  | 'brazier'
+  // v3 — functional Structures and plank decor
+  | 'hammock'
+  | 'signpost'
+  | 'sawmill'
+  | 'plank_floor'
+  | 'table';
 /** carried consumables that are neither Resources nor Tools */
 export type ConsumableId = 'summon_totem' | 'cooked_fish';
 export type ItemId = ResourceId | ToolId | StructureId | ConsumableId;
@@ -51,6 +59,7 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   hardwood: { name: 'Ancient Hardwood', kind: 'resource', desc: 'Timber from the oldest trees — only an Ancient Axe can cut it.' },
   obsidian: { name: 'Obsidian', kind: 'resource', desc: 'Black glass-rock — only an Ancient Pickaxe can break it.' },
   fish: { name: 'Fish', kind: 'resource', desc: 'Fresh from a fishing spot. Cook it at a campfire.' },
+  plank: { name: 'Plank', kind: 'resource', desc: 'Wood refined at a Sawmill. Tier 2 builds on refined wood.' },
 
   axe: { name: 'Axe', kind: 'tool', desc: 'Chops trees twice as fast.' },
   pickaxe: { name: 'Pickaxe', kind: 'tool', desc: 'Breaks rocks twice as fast.' },
@@ -68,7 +77,7 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   hut_wall: { name: 'Hut Wall', kind: 'structure', desc: 'A sturdy wall segment.', blocks: true },
   fence: { name: 'Fence', kind: 'structure', desc: 'Keeps nothing out, looks great.', blocks: true },
   bridge: { name: 'Bridge', kind: 'structure', desc: 'Walk over water.', blocks: false, onWater: true },
-  crate: { name: 'Supply Crate', kind: 'structure', desc: 'Decorative storage.', blocks: true },
+  crate: { name: 'Supply Crate', kind: 'structure', desc: 'Shared storage — E to deposit and withdraw. No locks between friends.', blocks: true },
   tiki_statue: { name: 'Tiki Statue', kind: 'structure', desc: 'Watches the jungle.', blocks: true },
   fruit_basket: { name: 'Fruit Basket', kind: 'structure', desc: 'A welcoming snack pile.', blocks: false },
   stone_path: { name: 'Stone Path', kind: 'structure', desc: 'A tidy paved tile.', blocks: false },
@@ -78,4 +87,9 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   guardian_trophy: { name: 'Guardian Trophy', kind: 'structure', desc: 'Proof the Guardian was faced — and bested.', blocks: true },
   obsidian_path: { name: 'Obsidian Path', kind: 'structure', desc: 'A polished black paving tile.', blocks: false },
   brazier: { name: 'Brazier', kind: 'structure', desc: 'An obsidian fire bowl — glows far into the night.', blocks: true },
+  hammock: { name: 'Hammock', kind: 'structure', desc: 'Your personal wake point: Exhaustion and login place you here. One active Hammock per Player.', blocks: false },
+  signpost: { name: 'Signpost', kind: 'structure', desc: 'Holds a short line of your writing, readable by everyone.', blocks: false },
+  sawmill: { name: 'Sawmill', kind: 'structure', desc: 'Deposit wood; collect planks after the mill has done its slow work.', blocks: true },
+  plank_floor: { name: 'Plank Floor', kind: 'structure', desc: 'A warm wooden floor tile.', blocks: false },
+  table: { name: 'Table', kind: 'structure', desc: 'A sturdy plank table for the camp.', blocks: true },
 };

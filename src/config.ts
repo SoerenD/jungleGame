@@ -19,6 +19,13 @@ const params = new URLSearchParams(window.location.search);
 export const FAST_REGROW = import.meta.env.DEV && !params.has('slowregrow');
 export const FAST_REGROW_MS = 20_000;
 
+// ---------------------------------------------------------------- v3: the Sawmill
+// One plank per deposited wood, milled sequentially in real time (lazy
+// timestamps, no tick loop — ADR-0001). Dev-shortened like node regrowth.
+export const SAWMILL_PLANK_MS = FAST_REGROW ? 5_000 : 120_000;
+/** a Sawmill holds at most this much unmilled wood */
+export const SAWMILL_WOOD_CAP = 10;
+
 export const STORAGE_KEY = 'jungle-world:v1';
 export const SESSION_KEY = 'jungle-world:session';
 export const MUTE_KEY = 'jungle-world:muted';

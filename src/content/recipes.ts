@@ -16,10 +16,11 @@ export const RECIPES: Recipe[] = [
   { id: 'machete', output: 'machete', count: 1, cost: { wood: 1, stone: 2 }, kind: 'tool' },
   { id: 'hammer', output: 'hammer', count: 1, cost: { wood: 2, stone: 2 }, kind: 'tool' },
 
-  // v2 tier-2 tools — every recipe demands Guardian Scales (fight at least once)
-  { id: 'ancient_axe', output: 'ancient_axe', count: 1, cost: { guardian_scale: 3, wood: 3, stone: 2 }, kind: 'tool' },
-  { id: 'ancient_pickaxe', output: 'ancient_pickaxe', count: 1, cost: { guardian_scale: 3, wood: 2, stone: 3 }, kind: 'tool' },
-  { id: 'fishing_rod', output: 'fishing_rod', count: 1, cost: { guardian_scale: 2, wood: 2, fiber: 2 }, kind: 'tool' },
+  // v2 tier-2 tools — every recipe demands Guardian Scales (fight at least
+  // once) AND planks: tier 2 builds on refined wood (Sawmill required)
+  { id: 'ancient_axe', output: 'ancient_axe', count: 1, cost: { guardian_scale: 3, plank: 3, stone: 2 }, kind: 'tool' },
+  { id: 'ancient_pickaxe', output: 'ancient_pickaxe', count: 1, cost: { guardian_scale: 3, plank: 2, stone: 3 }, kind: 'tool' },
+  { id: 'fishing_rod', output: 'fishing_rod', count: 1, cost: { guardian_scale: 2, plank: 2, fiber: 2 }, kind: 'tool' },
 
   // v2 — cheap, repeatable summon Offering (tier-1 resources only)
   { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },
@@ -34,10 +35,18 @@ export const RECIPES: Recipe[] = [
   { id: 'fruit_basket', output: 'fruit_basket', count: 1, cost: { fiber: 2, fruit: 3 }, kind: 'structure' },
   { id: 'stone_path', output: 'stone_path', count: 1, cost: { stone: 2 }, kind: 'structure' },
 
-  // v2 tier-2 structures
+  // v3 — the Sawmill is tier-1 (the gateway to refined wood)...
+  { id: 'sawmill', output: 'sawmill', count: 1, cost: { wood: 6, stone: 4 }, requiresTool: 'hammer', kind: 'structure' },
+  // ...and the new functional Structures + decor consume its planks
+  { id: 'hammock', output: 'hammock', count: 1, cost: { plank: 2, fiber: 3 }, kind: 'structure' },
+  { id: 'signpost', output: 'signpost', count: 1, cost: { plank: 1, fiber: 1 }, kind: 'structure' },
+  { id: 'plank_floor', output: 'plank_floor', count: 1, cost: { plank: 1 }, kind: 'structure' },
+  { id: 'table', output: 'table', count: 1, cost: { plank: 3 }, kind: 'structure' },
+
+  // v2 tier-2 structures ("tier 2 builds on refined wood": planks replace raw wood)
   { id: 'obsidian_statue', output: 'obsidian_statue', count: 1, cost: { obsidian: 4 }, kind: 'structure' },
-  { id: 'hardwood_arch', output: 'hardwood_arch', count: 1, cost: { hardwood: 4 }, requiresTool: 'hammer', kind: 'structure' },
+  { id: 'hardwood_arch', output: 'hardwood_arch', count: 1, cost: { hardwood: 4, plank: 2 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'guardian_trophy', output: 'guardian_trophy', count: 1, cost: { guardian_scale: 5, obsidian: 2 }, kind: 'structure' },
   { id: 'obsidian_path', output: 'obsidian_path', count: 1, cost: { obsidian: 2 }, kind: 'structure' },
-  { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, wood: 2 }, kind: 'structure' },
+  { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, plank: 2 }, kind: 'structure' },
 ];

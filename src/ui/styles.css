@@ -366,6 +366,76 @@ button.ui-btn:disabled {
   color: var(--dim);
 }
 
+/* ---------------- v3: crate, Sawmill, signpost ---------------- */
+#crate-panel,
+#sawmill-panel,
+#sign-panel {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 45;
+}
+#crate-panel.open,
+#sawmill-panel.open,
+#sign-panel.open {
+  display: block;
+}
+#crate-panel {
+  width: 460px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+#crate-panel .sub-note {
+  font-size: 11px;
+  color: var(--dim);
+  font-weight: 400;
+}
+.crate-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.col-title {
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.col-empty {
+  color: var(--dim);
+  font-size: 12px;
+  padding: 4px 0;
+}
+#sawmill-panel {
+  width: 340px;
+}
+#sawmill-status {
+  font-size: 13px;
+  color: var(--dim);
+  margin-bottom: 10px;
+}
+.sawmill-btns {
+  display: flex;
+  gap: 8px;
+}
+#sign-panel {
+  width: 320px;
+}
+#sign-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 8px;
+  font-family: inherit;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
 /* ---------------- v3: the Journey tracker ---------------- */
 #journey-panel {
   position: absolute;

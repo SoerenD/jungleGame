@@ -60,6 +60,12 @@ export const OBJECTS: Record<string, ObjectDef> = {
   st_guardian_trophy: { url: '/assets/objects/guardian-trophy.png' },
   st_obsidian_path: { url: '/assets/objects/obsidian-path.png' },
   st_brazier: { url: '/assets/objects/brazier.png' },
+  // v3 functional structures + plank decor
+  st_hammock: { url: '/assets/objects/hammock.png' },
+  st_signpost: { url: '/assets/objects/signpost.png' },
+  st_sawmill: { url: '/assets/objects/sawmill.png' },
+  st_plank_floor: { url: '/assets/objects/plank-floor.png' },
+  st_table: { url: '/assets/objects/table.png' },
 
   tablet: { url: '/assets/objects/tablet.png' },
   altar: { url: '/assets/objects/altar.png' },

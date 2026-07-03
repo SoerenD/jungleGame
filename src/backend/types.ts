@@ -44,6 +44,8 @@ export interface Structure {
   ty: number;
   placedBy: string;
   placedAt: number;
+  /** signposts only: the Player-written line, length-capped, visible to all */
+  text?: string;
 }
 
 export interface ChatMsg {
@@ -173,7 +175,33 @@ export type GuardianHitResult =
 
 export type KnockdownResult =
   | { ok: false; reason: 'NO_FIGHT' | 'NOT_IN_DANGER' }
-  | { ok: true; knockdowns: number; exhausted: boolean; spawn: { tx: number; ty: number } };
+  | {
+      ok: true;
+      knockdowns: number;
+      exhausted: boolean;
+      /** where Exhaustion wakes this Player: their Hammock, else World spawn */
+      wake: { tx: number; ty: number };
+      atHammock: boolean;
+    };
+
+/** shared crate storage: current contents + the caller's inventory after the op */
+export type CrateResult =
+  | { ok: false; reason: 'NO_CRATE' | 'NOTHING' }
+  | { ok: true; contents: Inventory; inventory: Inventory };
+
+/** a Sawmill's lazily-computed state — derived from timestamps, never ticked */
+export interface SawmillState {
+  /** wood still queued for milling */
+  wood: number;
+  /** planks finished and waiting to be collected */
+  ready: number;
+  /** ms until the next plank finishes; null when nothing is milling */
+  nextPlankMs: number | null;
+}
+
+export type SawmillResult =
+  | { ok: false; reason: 'NO_SAWMILL' | 'NOTHING' }
+  | { ok: true; state: SawmillState; inventory: Inventory };
 
 export type CookResult =
   | { ok: false; reason: 'NO_FISH' }
@@ -189,6 +217,8 @@ export interface BackendEvents {
   chat: (msg: ChatMsg) => void;
   nodeChanged: (node: NodeState) => void;
   structurePlaced: (s: Structure) => void;
+  /** a crate's shared contents changed (deposit/withdraw by any Player) */
+  crateChanged: (crateId: string, contents: Inventory) => void;
   quest: (q: QuestState) => void;
   gateOpened: () => void;
   sealChanged: (seal: SealState) => void;
@@ -219,7 +249,18 @@ export interface Backend {
   sendChat(text: string): Promise<void>;
   hitNode(nodeId: string): Promise<HitResult>;
   craft(recipeId: string): Promise<CraftResult>;
-  placeStructure(item: StructureId, tx: number, ty: number): Promise<PlaceResult>;
+  /** `text` is the signpost line (length-capped server-side) */
+  placeStructure(item: StructureId, tx: number, ty: number, text?: string): Promise<PlaceResult>;
+  /** shared crate storage — mutations are server-ordered like all World mutations */
+  crateOpen(crateId: string): Promise<CrateResult>;
+  crateDeposit(crateId: string, item: ItemId, count: number): Promise<CrateResult>;
+  crateWithdraw(crateId: string, item: ItemId, count: number): Promise<CrateResult>;
+  /** the Sawmill refinery — lazy-timestamp milling, no tick loop (ADR-0001) */
+  sawmillOpen(sawmillId: string): Promise<SawmillResult>;
+  /** deposit carried wood (up to the mill's cap) */
+  sawmillDeposit(sawmillId: string): Promise<SawmillResult>;
+  /** collect finished planks; collecting early yields only what is done */
+  sawmillCollect(sawmillId: string): Promise<SawmillResult>;
   /** mark a lore tablet as read */
   readTablet(id: string): Promise<QuestState>;
   /** offer 2 fruit + 2 fiber at the grove altar to open the vine gate */

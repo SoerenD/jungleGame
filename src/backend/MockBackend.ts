@@ -9,6 +9,8 @@ import {
   MAP_H,
   MAP_PIECE_DROP_CHANCE,
   MAP_W,
+  SAWMILL_PLANK_MS,
+  SAWMILL_WOOD_CAP,
   SEAL_QUOTAS,
   SPEED_BUFF_MS,
   STORAGE_KEY,
@@ -21,7 +23,7 @@ import {
   isDangerousAt,
   waveInfoAt,
 } from '../content/guardian';
-import { ITEMS, type StructureId } from '../content/items';
+import { ITEMS, type ItemId, type StructureId } from '../content/items';
 import { NODE_TYPES, holdsBonusTool, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
@@ -34,6 +36,7 @@ import type {
   ContributeSealResult,
   CookResult,
   CraftResult,
+  CrateResult,
   DigResult,
   Dir,
   EatResult,
@@ -50,6 +53,8 @@ import type {
   PlaceResult,
   PlayerPos,
   QuestState,
+  SawmillResult,
+  SawmillState,
   SealResourceId,
   SealState,
   Structure,
@@ -97,6 +102,8 @@ interface DbPlayer {
   introSeen?: boolean;
   /** Journey onboarding progress + hint use counts (persisted like introSeen) */
   journey?: JourneyState;
+  /** the Player's Hammock tile — Exhaustion and login wake here (one per Player) */
+  wakePoint?: { tx: number; ty: number };
 }
 
 /** a live fight; the private fields never leave the server */
@@ -115,6 +122,10 @@ interface Db {
   /** only touched nodes live here; pristine nodes are implicit */
   nodes: Record<string, { hp: number; harvestedAt: number | null }>;
   structures: Record<string, Structure>;
+  /** per-crate shared inventories, keyed by structure id */
+  crates?: Record<string, Inventory>;
+  /** per-sawmill queue: wood still milling since `since` (lazy timestamps) */
+  sawmills?: Record<string, { wood: number; since: number }>;
   chatLog: ChatMsg[];
   world?: {
     gateOpen: boolean;
@@ -200,6 +211,8 @@ export class MockBackend implements Backend {
     this.db.world ??= { gateOpen: false, treasureIndex: 0 };
     this.db.world.seal ??= { broken: false, contributed: { wood: 0, stone: 0, fiber: 0, fruit: 0 } };
     this.db.world.fight ??= null;
+    this.db.crates ??= {};
+    this.db.sawmills ??= {};
     if (DEV_FIGHT) this.db.world.seal.broken = true; // ?fight — jump straight to the Guardian
     this.scheduleSlumberCheck();
     window.addEventListener('beforeunload', () => this.saveNow());
@@ -307,6 +320,11 @@ export class MockBackend implements Backend {
     }
     this.normalizeJourney(name, p);
     this.startBots();
+    // login position: the owner's Hammock replaces the World spawn
+    if (p.wakePoint) {
+      p.x = (p.wakePoint.tx + 0.5) * TILE;
+      p.y = (p.wakePoint.ty + 0.5) * TILE;
+    }
     return {
       ok: true,
       name,
@@ -515,7 +533,7 @@ export class MockBackend implements Backend {
     return { ok: true, crafted: recipe.output, inventory: { ...p.inventory } };
   }
 
-  async placeStructure(item: StructureId, tx: number, ty: number): Promise<PlaceResult> {
+  async placeStructure(item: StructureId, tx: number, ty: number, text?: string): Promise<PlaceResult> {
     await this.lag();
     const p = this.me ? this.db.players[this.me] : null;
     if (!p || (p.inventory[item] ?? 0) <= 0) return { ok: false, reason: 'NOT_IN_INVENTORY' };
@@ -539,10 +557,123 @@ export class MockBackend implements Backend {
       placedBy: this.me!,
       placedAt: Date.now(),
     };
+    if (item === 'signpost') structure.text = (text ?? '').trim().slice(0, 40);
+    if (item === 'hammock') {
+      // one active Hammock per Player — placing a new one retires the old point
+      p.wakePoint = { tx, ty };
+    }
     this.db.structures[key] = structure;
     this.saveNow();
     this.emit('structurePlaced', structure);
     return { ok: true, structure, inventory: { ...p.inventory } };
+  }
+
+  // ------------------------------------------------------------ v3: crates (shared storage)
+
+  private crateOf(crateId: string): Inventory | null {
+    const s = Object.values(this.db.structures).find((st) => st.id === crateId && st.type === 'crate');
+    if (!s) return null;
+    return (this.db.crates![crateId] ??= {});
+  }
+
+  async crateOpen(crateId: string): Promise<CrateResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const contents = this.crateOf(crateId);
+    if (!contents || !p) return { ok: false, reason: 'NO_CRATE' };
+    return { ok: true, contents: { ...contents }, inventory: { ...p.inventory } };
+  }
+
+  async crateDeposit(crateId: string, item: ItemId, count: number): Promise<CrateResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const contents = this.crateOf(crateId);
+    if (!contents || !p) return { ok: false, reason: 'NO_CRATE' };
+    const give = Math.min(Math.max(0, Math.floor(count)), p.inventory[item] ?? 0);
+    if (give <= 0) return { ok: false, reason: 'NOTHING' };
+    p.inventory[item]! -= give;
+    contents[item] = (contents[item] ?? 0) + give;
+    this.saveNow();
+    this.emit('crateChanged', crateId, { ...contents });
+    return { ok: true, contents: { ...contents }, inventory: { ...p.inventory } };
+  }
+
+  async crateWithdraw(crateId: string, item: ItemId, count: number): Promise<CrateResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const contents = this.crateOf(crateId);
+    if (!contents || !p) return { ok: false, reason: 'NO_CRATE' };
+    // server-ordered: simultaneous withdrawals clamp to what is really there
+    const take = Math.min(Math.max(0, Math.floor(count)), contents[item] ?? 0);
+    if (take <= 0) return { ok: false, reason: 'NOTHING' };
+    contents[item]! -= take;
+    if (contents[item] === 0) delete contents[item];
+    p.inventory[item] = (p.inventory[item] ?? 0) + take;
+    this.saveNow();
+    this.emit('crateChanged', crateId, { ...contents });
+    return { ok: true, contents: { ...contents }, inventory: { ...p.inventory } };
+  }
+
+  // ------------------------------------------------------------ v3: the Sawmill
+
+  /**
+   * Lazy-timestamp milling (ADR-0001, same pattern as node regrowth): one
+   * plank finishes every SAWMILL_PLANK_MS; nothing ticks, everything is
+   * derived from `since` whenever the mill is next touched.
+   */
+  private sawmillOf(sawmillId: string): { wood: number; since: number } | null {
+    const s = Object.values(this.db.structures).find((st) => st.id === sawmillId && st.type === 'sawmill');
+    if (!s) return null;
+    return (this.db.sawmills![sawmillId] ??= { wood: 0, since: 0 });
+  }
+
+  private sawmillPublic(m: { wood: number; since: number }): SawmillState {
+    const now = Date.now();
+    const done = m.wood > 0 ? Math.min(m.wood, Math.floor((now - m.since) / SAWMILL_PLANK_MS)) : 0;
+    const milling = m.wood - done;
+    return {
+      wood: milling,
+      ready: done,
+      nextPlankMs: milling > 0 ? SAWMILL_PLANK_MS - ((now - m.since) % SAWMILL_PLANK_MS) : null,
+    };
+  }
+
+  async sawmillOpen(sawmillId: string): Promise<SawmillResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const m = this.sawmillOf(sawmillId);
+    if (!m || !p) return { ok: false, reason: 'NO_SAWMILL' };
+    return { ok: true, state: this.sawmillPublic(m), inventory: { ...p.inventory } };
+  }
+
+  async sawmillDeposit(sawmillId: string): Promise<SawmillResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const m = this.sawmillOf(sawmillId);
+    if (!m || !p) return { ok: false, reason: 'NO_SAWMILL' };
+    const room = SAWMILL_WOOD_CAP - m.wood;
+    const give = Math.min(p.inventory.wood ?? 0, room);
+    if (give <= 0) return { ok: false, reason: 'NOTHING' };
+    if (m.wood === 0) m.since = Date.now(); // the mill starts on the first log
+    p.inventory.wood! -= give;
+    m.wood += give;
+    this.saveNow();
+    return { ok: true, state: this.sawmillPublic(m), inventory: { ...p.inventory } };
+  }
+
+  async sawmillCollect(sawmillId: string): Promise<SawmillResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const m = this.sawmillOf(sawmillId);
+    if (!m || !p) return { ok: false, reason: 'NO_SAWMILL' };
+    const now = Date.now();
+    const done = m.wood > 0 ? Math.min(m.wood, Math.floor((now - m.since) / SAWMILL_PLANK_MS)) : 0;
+    if (done <= 0) return { ok: false, reason: 'NOTHING' }; // collecting early yields only what is finished
+    m.wood -= done;
+    m.since += done * SAWMILL_PLANK_MS; // keep the partial progress of the next plank
+    p.inventory.plank = (p.inventory.plank ?? 0) + done;
+    this.saveNow();
+    return { ok: true, state: this.sawmillPublic(m), inventory: { ...p.inventory } };
   }
 
   async readTablet(id: string): Promise<QuestState> {
@@ -767,28 +898,34 @@ export class MockBackend implements Backend {
     if (!isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
-    const spawn = { ...this.world.spawn };
+    // Exhaustion wakes a Player at their Hammock, else at the World spawn
+    const atHammock = !!p.wakePoint;
+    const wake = p.wakePoint ? { ...p.wakePoint } : { ...this.world.spawn };
     // the slam window (incl. slack) never crosses a wave boundary, so the
     // wave at the report's server time is the wave that hit
     const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS).index;
     const me = this.me!;
     if (f.lastKnockdownWave[me] === wave) {
       // duplicate report for the same slam — count it once
-      return { ok: true, knockdowns: f.knockdowns[me] ?? 0, exhausted: false, spawn };
+      return { ok: true, knockdowns: f.knockdowns[me] ?? 0, exhausted: false, wake, atHammock };
     }
     f.lastKnockdownWave[me] = wave;
     f.knockdowns[me] = (f.knockdowns[me] ?? 0) + 1;
     const knockdowns = f.knockdowns[me];
     const exhausted = knockdowns >= EXHAUSTION_KNOCKDOWNS;
     if (exhausted) {
-      // Exhaustion: wake at the World spawn, inventory intact, counter refreshed
+      // Exhaustion: wake at the wake point, inventory intact, counter refreshed
       f.knockdowns[me] = 0;
-      p.x = (spawn.tx + 0.5) * TILE;
-      p.y = (spawn.ty + 0.5) * TILE;
-      this.pushChat({ from: '🌿 Jungle', text: `${me} collapses from Exhaustion and wakes at the spawn — hits already landed still count!`, ts: Date.now() });
+      p.x = (wake.tx + 0.5) * TILE;
+      p.y = (wake.ty + 0.5) * TILE;
+      this.pushChat({
+        from: '🌿 Jungle',
+        text: `${me} collapses from Exhaustion and wakes ${atHammock ? 'in their Hammock' : 'at the spawn'} — hits already landed still count!`,
+        ts: Date.now(),
+      });
     }
     this.saveSoon();
-    return { ok: true, knockdowns, exhausted, spawn };
+    return { ok: true, knockdowns, exhausted, wake, atHammock };
   }
 
   // ------------------------------------------------------------ v2: fishing & cooking
