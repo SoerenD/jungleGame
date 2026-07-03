@@ -82,12 +82,28 @@ export const FORCE_NIGHT = params.has('night');
 export const MAP_PIECE_DROP_CHANCE = 0.12;
 
 // ---------------------------------------------------------------- v2: the Seal
-// In dev the Seal asks for tiny quotas so the whole arc is testable solo;
-// add ?slowseal to use the real two-weeks-of-evenings numbers.
+// In dev the Seal asks for tiny per-head quotas so the whole arc is testable
+// solo; add ?slowseal to use the real numbers.
 export const FAST_SEAL = import.meta.env.DEV && !params.has('slowseal');
-export const SEAL_QUOTAS: Record<'wood' | 'stone' | 'fiber' | 'fruit', number> = FAST_SEAL
+// The Seal is PER-PERSON and scales live: the communal target is per-head ×
+// the number of Players online right now (25/25/10/20 each). Each Backend
+// computes the live head count and passes the result to jw_contribute_seal,
+// which stays the sole source of truth for clamping + the one-time break — so
+// ADR-0001 holds (no server game logic; the quota is just a parameter).
+export const SEAL_QUOTA_PER_HEAD: Record<'wood' | 'stone' | 'fiber' | 'fruit', number> = FAST_SEAL
   ? { wood: 6, stone: 5, fiber: 3, fruit: 2 }
-  : { wood: 600, stone: 500, fiber: 300, fruit: 150 };
+  : { wood: 25, stone: 25, fiber: 10, fruit: 20 };
+
+/** the live communal target: per-head × current online heads (floored at 1) */
+export function sealQuotas(heads: number): Record<'wood' | 'stone' | 'fiber' | 'fruit', number> {
+  const n = Math.max(1, Math.floor(heads));
+  return {
+    wood: SEAL_QUOTA_PER_HEAD.wood * n,
+    stone: SEAL_QUOTA_PER_HEAD.stone * n,
+    fiber: SEAL_QUOTA_PER_HEAD.fiber * n,
+    fruit: SEAL_QUOTA_PER_HEAD.fruit * n,
+  };
+}
 
 // ---------------------------------------------------------------- v2: the Guardian
 // ?fight = instant summon ready: the Seal starts broken, joining grants a

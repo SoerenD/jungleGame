@@ -107,7 +107,7 @@ export interface QuestState {
   treasureLocation: { tx: number; ty: number } | null;
 }
 
-/** the four Resources the Seal demands, with fixed per-resource quotas */
+/** the four Resources the Seal demands */
 export type SealResourceId = 'wood' | 'stone' | 'fiber' | 'fruit';
 
 export interface SealState {
@@ -115,6 +115,7 @@ export interface SealState {
   broken: boolean;
   /** collective totals — no individual contribution tracking, ever */
   contributed: Record<SealResourceId, number>;
+  /** the live per-person target: per-head quota × Players online (see config.sealQuotas) */
   quotas: Record<SealResourceId, number>;
 }
 

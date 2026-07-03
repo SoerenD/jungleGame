@@ -12,7 +12,7 @@ import {
   MAP_H,
   SAWMILL_PLANK_MS,
   SAWMILL_WOOD_CAP,
-  SEAL_QUOTAS,
+  sealQuotas,
   SPEED_BUFF_MS,
   TILE,
 } from '../config';
@@ -99,6 +99,10 @@ export class SupabaseBackend implements Backend {
   private gateOpen = false;
   private treasureIndex = 0;
   private fightState: FightState | null = null;
+  // the Seal scales per-head: how many Players are online (from presence) and
+  // the last raw seal row, so a join/leave can re-emit the bar with the new target
+  private onlineCount = 1;
+  private lastSeal: { broken?: boolean; contributed?: Record<string, number> } | null = null;
 
   // position tracking for presence + arena roster
   private lastLocal: SelfPos | null = null;
@@ -262,6 +266,13 @@ export class SupabaseBackend implements Backend {
     const live = new Set(players.map((p) => p.name));
     for (const name of [...this.positions.keys()]) if (!live.has(name)) this.positions.delete(name);
     this.emit('presence', players);
+    // the Seal target scales with the head count — refresh the bar live on
+    // join/leave (local-only: every client recomputes from its own presence view)
+    const heads = players.length || 1;
+    if (heads !== this.onlineCount) {
+      this.onlineCount = heads;
+      if (this.lastSeal && !this.lastSeal.broken) this.emit('sealChanged', this.sealState(this.lastSeal));
+    }
   }
 
   private toPlayerPos(p: SelfPos): PlayerPos {
@@ -374,9 +385,15 @@ export class SupabaseBackend implements Backend {
     };
   }
 
+  /** the live Seal target: per-head quota × Players online right now (min 1) */
+  private sealTargets(): Record<'wood' | 'stone' | 'fiber' | 'fruit', number> {
+    return sealQuotas(this.onlineCount);
+  }
+
   private sealState(seal: any): SealState {
     const s = seal ?? { broken: false, contributed: { wood: 0, stone: 0, fiber: 0, fruit: 0 } };
-    return { broken: !!s.broken, contributed: { ...s.contributed }, quotas: { ...SEAL_QUOTAS } };
+    this.lastSeal = s; // cache so a presence change can re-emit the bar with the new head count
+    return { broken: !!s.broken, contributed: { ...s.contributed }, quotas: this.sealTargets() };
   }
 
   private fightPublic(f: any): FightState | null {
@@ -560,7 +577,7 @@ export class SupabaseBackend implements Backend {
   }
 
   async contributeSeal(): Promise<ContributeSealResult> {
-    const res = await this.rpc<any>('jw_contribute_seal', { p_who: this.me, p_quotas: SEAL_QUOTAS });
+    const res = await this.rpc<any>('jw_contribute_seal', { p_who: this.me, p_quotas: this.sealTargets() });
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING_TO_GIVE' };
     this.inv = res.inventory as Inventory;
     const seal = this.sealState(res.seal);

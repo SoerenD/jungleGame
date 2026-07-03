@@ -13,7 +13,7 @@ import {
   MAP_W,
   SAWMILL_PLANK_MS,
   SAWMILL_WOOD_CAP,
-  SEAL_QUOTAS,
+  sealQuotas,
   SPEED_BUFF_MS,
   STORAGE_KEY,
   TILE,
@@ -460,9 +460,14 @@ export class MockBackend implements Backend {
     };
   }
 
+  /** the live Seal target: the Mock world has one real Player, so heads = 1 */
+  private sealTargets(): Record<SealResourceId, number> {
+    return sealQuotas(1);
+  }
+
   private sealState(): SealState {
     const s = this.db.world!.seal!;
-    return { broken: s.broken, contributed: { ...s.contributed }, quotas: { ...SEAL_QUOTAS } };
+    return { broken: s.broken, contributed: { ...s.contributed }, quotas: this.sealTargets() };
   }
 
   private fightState(): FightState | null {
@@ -823,11 +828,12 @@ export class MockBackend implements Backend {
   /** overall progress 0..100 across the four quotas */
   private sealPercent(): number {
     const s = this.db.world!.seal!;
+    const q = this.sealTargets();
     let done = 0;
     let total = 0;
     for (const res of SEAL_RESOURCES) {
-      done += Math.min(s.contributed[res], SEAL_QUOTAS[res]);
-      total += SEAL_QUOTAS[res];
+      done += Math.min(s.contributed[res], q[res]);
+      total += q[res];
     }
     return (done / total) * 100;
   }
@@ -839,9 +845,10 @@ export class MockBackend implements Backend {
     if (seal.broken) return { ok: false, reason: 'ALREADY_BROKEN' };
     if (!p) return { ok: false, reason: 'NOTHING_TO_GIVE' };
     const before = this.sealPercent();
+    const q = this.sealTargets();
     const taken: Inventory = {};
     for (const res of SEAL_RESOURCES) {
-      const need = Math.max(0, SEAL_QUOTAS[res] - seal.contributed[res]);
+      const need = Math.max(0, q[res] - seal.contributed[res]);
       const give = Math.min(p.inventory[res] ?? 0, need); // an overshoot takes only what is needed
       if (give > 0) {
         p.inventory[res]! -= give;
@@ -856,7 +863,7 @@ export class MockBackend implements Backend {
         this.pushChat({ from: '🌿 Jungle', text: `the Seal weakens — ${milestone}% of the offerings are gathered!`, ts: Date.now() });
       }
     }
-    if (SEAL_RESOURCES.every((res) => seal.contributed[res] >= SEAL_QUOTAS[res])) {
+    if (SEAL_RESOURCES.every((res) => seal.contributed[res] >= q[res])) {
       seal.broken = true; // once, forever
       this.pushChat({
         from: '🌿 Jungle',
