@@ -74,7 +74,7 @@ interface WorldData {
 /** what a Player broadcasts about themselves (presence + position stream) */
 type SelfPos = { name: string; appearance: Appearance; x: number; y: number; dir: Dir; moving: boolean; held?: ItemId };
 
-const POS_BROADCAST_MS = 80; // cap the position stream (matches MockBackend's ~120ms feel)
+const POS_BROADCAST_MS = 150; // cap the position stream; ~7/player-s keeps an 8-player shared channel under the realtime msg/s cap (remote sprites interpolate, so it stays smooth)
 const PRESENCE_REFRESH_MS = 1500; // keep the presence snapshot fresh for late joiners
 
 /**
@@ -111,11 +111,29 @@ export class SupabaseBackend implements Backend {
   private lastPresence = 0;
 
   private slumberTimer: number | null = null;
+  private visibilityHooked = false;
 
   constructor(url: string, anonKey: string) {
     this.supa = createClient(url, anonKey, {
       auth: { persistSession: false },
-      realtime: { params: { eventsPerSecond: 20 } },
+      realtime: {
+        // Run heartbeats on a Web Worker so a busy Phaser frame or a
+        // backgrounded tab can't starve the main-thread timer. A missed
+        // heartbeat tears the socket down; once that happens canPush() is
+        // false and every broadcast silently falls back to the REST endpoint,
+        // so peers freeze until a full page reload — the bug this fixes.
+        worker: true,
+        heartbeatIntervalMs: 15000,
+        // belt-and-suspenders: if a heartbeat still fails, force the socket up
+        heartbeatCallback: (status) => {
+          if (status === 'disconnected' || status === 'timeout' || status === 'error') {
+            void this.supa.realtime.connect();
+          }
+        },
+        // server-side per-client event window: one shared channel fans in every
+        // Player's position stream, so give generous headroom over the 20 default
+        params: { eventsPerSecond: 100 },
+      },
     });
   }
 
@@ -235,13 +253,44 @@ export class SupabaseBackend implements Backend {
     ch.on('presence', { event: 'sync' }, () => this.onPresenceSync());
     ch.on('presence', { event: 'join' }, () => this.broadcastPos(true)); // re-announce so new joiners see me
     this.channel = ch;
+    this.hookVisibility();
+    // Re-announce on EVERY (re)subscribe, not just the first. Phoenix auto-
+    // rejoins the channel after a socket reconnect and re-fires this callback,
+    // but presence track() is a SEPARATE push that is not part of the rejoin —
+    // so without re-tracking here a reconnected client stays invisible and
+    // frozen to peers until a page reload. Use the freshest known position.
+    let resolved = false;
     await new Promise<void>((resolve) => {
       ch.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          void ch.track({ name: this.me, appearance: this.appearance, x, y, dir: 'down', moving: false });
-          resolve();
+          const pos: SelfPos =
+            this.lastLocal ?? { name: this.me!, appearance: this.appearance, x, y, dir: 'down', moving: false };
+          void ch.track(pos);
+          this.lastPresence = Date.now();
+          this.broadcastPos(true); // push our spot to peers now (lastPresence just set → no double-track)
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn('[jw] realtime channel status:', status);
         }
       });
+    });
+  }
+
+  /**
+   * Phoenix refuses to reconnect a dropped socket while the tab is hidden and
+   * only retries on return-to-visible (and only if the close was unclean). When
+   * the tab comes back, explicitly nudge the socket up; the ensuing rejoin
+   * re-fires subscribe()'s SUBSCRIBED branch, which re-tracks our presence — so
+   * a game left open behind other windows recovers without a reload. Wired once.
+   */
+  private hookVisibility(): void {
+    if (this.visibilityHooked || typeof document === 'undefined') return;
+    this.visibilityHooked = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') void this.supa.realtime.connect();
     });
   }
 
