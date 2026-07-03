@@ -4,6 +4,11 @@ export const MAP_H = 200;
 export const PLAYER_SPEED = 130;
 export const INTERACT_RANGE = 30;
 export const ZOOM = 2.5;
+/**
+ * Holding E swings at this fixed cadence (harvesting Resource Nodes, hitting
+ * the Guardian). The cadence also caps tapped E — mashing is never faster.
+ */
+export const SWING_CADENCE_MS = 300;
 
 // Mock backend tuning
 export const LATENCY_MIN = 50;

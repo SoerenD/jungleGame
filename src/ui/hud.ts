@@ -21,7 +21,7 @@ export function initHud(name: string, muted: boolean): void {
   hud.id = 'hud';
   hud.innerHTML = `
     <div id="zone-label" data-testid="zone-label">Jungle World</div>
-    <div id="controls-help">WASD/arrows move &middot; E interact &middot; C craft &middot; I inventory &middot; T chat &middot; M mute &middot; wheel zoom</div>
+    <div id="controls-help">WASD/arrows move &middot; E interact (hold to keep swinging) &middot; C craft &middot; I inventory &middot; T chat &middot; M mute &middot; wheel zoom</div>
     <div id="quest-label" data-testid="quest-label" title="Ancient tablets read · torn map pieces (3 reveal a treasure ✕ on the minimap) · the Seal's progress">📜 0/? · 🗺 0/3</div>
     <div id="seal-panel" class="panel" data-testid="seal-panel">
       <h3>⛩ The Seal</h3>

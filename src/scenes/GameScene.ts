@@ -24,6 +24,7 @@ import {
   MUTE_KEY,
   PLAYER_SPEED,
   SPEED_BUFF_FACTOR,
+  SWING_CADENCE_MS,
   TILE,
   ZOOM,
 } from '../config';
@@ -73,6 +74,16 @@ interface NodeView {
   depletedShown: boolean;
 }
 
+/**
+ * What pressing E would do right now. `swing: true` marks the only two
+ * auto-repeatable actions (harvesting a Resource Node, hitting the Guardian);
+ * everything else fires once per key press, held or not.
+ */
+interface EAction {
+  swing: boolean;
+  run: () => void;
+}
+
 interface RemoteView {
   sprite: Phaser.GameObjects.Sprite;
   label: Phaser.GameObjects.Text;
@@ -108,6 +119,7 @@ export class GameScene extends Phaser.Scene {
   private placing: StructureId | null = null;
   private ghost: Phaser.GameObjects.Image | null = null;
   private lastPosSent = 0;
+  private lastSwingAt = 0;
   private currentZone = '';
   private muted = false;
   private quest: QuestState | null = null;
@@ -619,21 +631,27 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private tryHitGuardian(): boolean {
+  private guardianAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(
       this.player.x,
       this.player.y - 4,
       this.guardianSprite.x,
       this.guardianSprite.y - TILE,
     );
-    if (d > INTERACT_RANGE + TILE * 1.5) return false;
+    if (d > INTERACT_RANGE + TILE * 1.5) return null;
     if (!this.fight) {
       if (this.seal?.broken) {
-        bus.emit('toast', 'The Guardian slumbers. Lay a Summoning Totem upon the altar to wake it.', 'info');
-        return true;
+        return {
+          swing: false,
+          run: () => bus.emit('toast', 'The Guardian slumbers. Lay a Summoning Totem upon the altar to wake it.', 'info'),
+        };
       }
-      return false; // sealed away — nothing to interact with yet
+      return null; // sealed away — nothing to interact with yet
     }
+    return { swing: true, run: () => this.swingAtGuardian() };
+  }
+
+  private swingAtGuardian(): void {
     this.sfx('chop', 0.5);
     this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
     void this.backend.hitGuardian().then((res) => {
@@ -644,57 +662,61 @@ export class GameScene extends Phaser.Scene {
         this.floatText(this.guardianSprite.x, this.guardianSprite.y - 46, `${res.hp}`, '#ff8866');
       }
     });
-    return true;
   }
 
-  private trySummon(): boolean {
+  private summonAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.guardianAltarPos.x, this.guardianAltarPos.y - 8);
-    if (d > INTERACT_RANGE + 8) return false;
+    if (d > INTERACT_RANGE + 8) return null;
     if (this.fight) {
-      bus.emit('toast', 'The Guardian is already awake!', 'info');
-      return true;
+      return { swing: false, run: () => bus.emit('toast', 'The Guardian is already awake!', 'info') };
     }
     if ((this.inventory.summon_totem ?? 0) <= 0) {
-      bus.emit('toast', 'The altar awaits a Summoning Totem (5 wood · 3 fiber · 2 fruit).', 'info');
-      return true;
+      return { swing: false, run: () => bus.emit('toast', 'The altar awaits a Summoning Totem (5 wood · 3 fiber · 2 fruit).', 'info') };
     }
-    void this.backend.summonGuardian().then((res) => {
-      if (res.ok) {
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
-      } else if (res.reason === 'FIGHT_IN_PROGRESS') {
-        bus.emit('toast', 'A fight is already raging — join it!', 'bad');
-      } else if (res.reason === 'NO_TOTEM') {
-        bus.emit('toast', 'You need a Summoning Totem.', 'bad');
-      } else if (res.reason === 'SEAL_INTACT') {
-        bus.emit('toast', 'The Seal still holds.', 'bad');
-      }
-    });
-    return true;
+    return {
+      swing: false,
+      run: () => {
+        void this.backend.summonGuardian().then((res) => {
+          if (res.ok) {
+            this.inventory = res.inventory;
+            bus.emit('inventory', this.inventory);
+          } else if (res.reason === 'FIGHT_IN_PROGRESS') {
+            bus.emit('toast', 'A fight is already raging — join it!', 'bad');
+          } else if (res.reason === 'NO_TOTEM') {
+            bus.emit('toast', 'You need a Summoning Totem.', 'bad');
+          } else if (res.reason === 'SEAL_INTACT') {
+            bus.emit('toast', 'The Seal still holds.', 'bad');
+          }
+        });
+      },
+    };
   }
 
-  private tryContributeSeal(): boolean {
+  private contributeSealAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.monumentPos.x, this.monumentPos.y - 8);
-    if (d > INTERACT_RANGE + 8) return false;
+    if (d > INTERACT_RANGE + 8) return null;
     if (this.seal?.broken) {
-      bus.emit('toast', 'The Seal lies broken — the arena stands open.', 'info');
-      return true;
+      return { swing: false, run: () => bus.emit('toast', 'The Seal lies broken — the arena stands open.', 'info') };
     }
-    void this.backend.contributeSeal().then((res) => {
-      if (res.ok) {
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
-        const text = Object.entries(res.taken)
-          .map(([item, n]) => `-${n} ${item}`)
-          .join('  ');
-        this.floatText(this.monumentPos.x, this.monumentPos.y - 20, text, '#b478ff');
-        bus.emit('toast', 'You lay your Offerings upon the Seal.', 'good');
-        this.sfx('place', 0.6);
-      } else if (res.reason === 'NOTHING_TO_GIVE') {
-        bus.emit('toast', 'The Seal asks for wood, stone, fiber and fruit — you carry nothing it still needs.', 'bad');
-      }
-    });
-    return true;
+    return {
+      swing: false,
+      run: () => {
+        void this.backend.contributeSeal().then((res) => {
+          if (res.ok) {
+            this.inventory = res.inventory;
+            bus.emit('inventory', this.inventory);
+            const text = Object.entries(res.taken)
+              .map(([item, n]) => `-${n} ${item}`)
+              .join('  ');
+            this.floatText(this.monumentPos.x, this.monumentPos.y - 20, text, '#b478ff');
+            bus.emit('toast', 'You lay your Offerings upon the Seal.', 'good');
+            this.sfx('place', 0.6);
+          } else if (res.reason === 'NOTHING_TO_GIVE') {
+            bus.emit('toast', 'The Seal asks for wood, stone, fiber and fruit — you carry nothing it still needs.', 'bad');
+          }
+        });
+      },
+    };
   }
 
   // ------------------------------------------------------------ v2: fishing & cooking
@@ -749,8 +771,8 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private tryCook(): boolean {
-    if ((this.inventory.fish ?? 0) <= 0) return false;
+  private cookAction(): EAction | null {
+    if ((this.inventory.fish ?? 0) <= 0) return null;
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
     let campfire: Structure | null = null;
@@ -760,16 +782,20 @@ export class GameScene extends Phaser.Scene {
         if (s?.type === 'campfire') campfire = s;
       }
     }
-    if (!campfire) return false;
-    void this.backend.cook().then((res) => {
-      if (res.ok) {
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
-        bus.emit('toast', 'You cook a fish over the fire. (Eat it from your inventory.)', 'good');
-        this.sfx('craft', 0.5);
-      }
-    });
-    return true;
+    if (!campfire) return null;
+    return {
+      swing: false,
+      run: () => {
+        void this.backend.cook().then((res) => {
+          if (res.ok) {
+            this.inventory = res.inventory;
+            bus.emit('inventory', this.inventory);
+            bus.emit('toast', 'You cook a fish over the fire. (Eat it from your inventory.)', 'good');
+            this.sfx('craft', 0.5);
+          }
+        });
+      },
+    };
   }
 
   // ------------------------------------------------------------ secrets
@@ -973,73 +999,93 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private tryHarvest(): void {
+  /**
+   * The E priority chain, resolved WITHOUT side effects so held-E can check
+   * the action type before firing (a held E near a tablet must not reopen it).
+   */
+  private resolveEAction(): EAction | null {
     const px = this.player.x;
     const py = this.player.y - 4;
 
     // special interactables take priority over nodes
     if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
-      this.sfx('blip', 0.4);
-      this.input.keyboard!.enabled = false;
-      void showIntro().then(() => {
-        this.input.keyboard!.enabled = true;
-        this.input.keyboard!.resetKeys();
-      });
-      return;
+      return {
+        swing: false,
+        run: () => {
+          this.sfx('blip', 0.4);
+          this.input.keyboard!.enabled = false;
+          void showIntro().then(() => {
+            this.input.keyboard!.enabled = true;
+            this.input.keyboard!.resetKeys();
+          });
+        },
+      };
     }
     for (const t of this.tabletSpots) {
       if (Phaser.Math.Distance.Between(px, py, t.x, t.y - 8) < INTERACT_RANGE) {
-        void this.backend.readTablet(t.id);
-        const tab = TABLETS[t.id];
-        bus.emit('lore', tab?.title ?? 'Ancient Tablet', tab?.text ?? 'The runes have faded beyond reading.');
-        this.sfx('blip', 0.4);
-        return;
+        return {
+          swing: false,
+          run: () => {
+            void this.backend.readTablet(t.id);
+            const tab = TABLETS[t.id];
+            bus.emit('lore', tab?.title ?? 'Ancient Tablet', tab?.text ?? 'The runes have faded beyond reading.');
+            this.sfx('blip', 0.4);
+          },
+        };
       }
     }
-    if (this.tryContributeSeal()) return;
-    if (this.trySummon()) return;
-    if (this.tryHitGuardian()) return;
+    const special = this.contributeSealAction() ?? this.summonAction() ?? this.guardianAction();
+    if (special) return special;
     if (Phaser.Math.Distance.Between(px, py, this.altarPos.x, this.altarPos.y - 8) < INTERACT_RANGE + 8) {
-      if (this.quest?.gateOpen) {
-        bus.emit('toast', 'The grove already stands open.', 'info');
-      } else {
-        void this.backend.offerAltar().then((res) => {
-          if (res.ok) {
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
-            bus.emit('toast', 'The offering is accepted — the vines part!', 'good');
-            this.sfx('craft', 0.6);
-          } else if (res.reason === 'INSUFFICIENT') {
-            bus.emit('toast', 'The altar asks for 2 fruit and 2 fiber.', 'bad');
+      return {
+        swing: false,
+        run: () => {
+          if (this.quest?.gateOpen) {
+            bus.emit('toast', 'The grove already stands open.', 'info');
+          } else {
+            void this.backend.offerAltar().then((res) => {
+              if (res.ok) {
+                this.inventory = res.inventory;
+                bus.emit('inventory', this.inventory);
+                bus.emit('toast', 'The offering is accepted — the vines part!', 'good');
+                this.sfx('craft', 0.6);
+              } else if (res.reason === 'INSUFFICIENT') {
+                bus.emit('toast', 'The altar asks for 2 fruit and 2 fiber.', 'bad');
+              }
+            });
           }
-        });
-      }
-      return;
+        },
+      };
     }
     if (this.quest?.treasureLocation) {
       const spot = this.quest.treasureLocation;
       const dx = (spot.tx + 0.5) * TILE;
       const dy = (spot.ty + 0.5) * TILE;
       if (Phaser.Math.Distance.Between(px, py, dx, dy) < INTERACT_RANGE) {
-        void this.backend.dig().then((res) => {
-          if (res.ok) {
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
-            const text = Object.entries(res.loot)
-              .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
-              .join('  ');
-            this.floatText(dx, dy - 8, text, '#ffd166');
-            bus.emit('toast', 'You unearthed a buried treasure!', 'good');
-            this.sfx('craft', 0.7);
-          } else if (res.reason === 'NOT_HERE') {
-            bus.emit('toast', 'Dig closer to the ✕.', 'bad');
-          }
-        });
-        return;
+        return {
+          swing: false,
+          run: () => {
+            void this.backend.dig().then((res) => {
+              if (res.ok) {
+                this.inventory = res.inventory;
+                bus.emit('inventory', this.inventory);
+                const text = Object.entries(res.loot)
+                  .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
+                  .join('  ');
+                this.floatText(dx, dy - 8, text, '#ffd166');
+                bus.emit('toast', 'You unearthed a buried treasure!', 'good');
+                this.sfx('craft', 0.7);
+              } else if (res.reason === 'NOT_HERE') {
+                bus.emit('toast', 'Dig closer to the ✕.', 'bad');
+              }
+            });
+          },
+        };
       }
     }
 
-    if (this.tryCook()) return;
+    const cook = this.cookAction();
+    if (cook) return cook;
 
     let best: NodeView | null = null;
     let bestDist = INTERACT_RANGE;
@@ -1051,14 +1097,17 @@ export class GameScene extends Phaser.Scene {
         best = view;
       }
     }
-    if (!best) return;
+    if (!best) return null;
     const view = best;
     // fishing spots use the cast-and-wait rhythm when a rod is carried;
     // without one the server refusal (TOOL_REQUIRED) falls through below
     if (view.state.type === 'fishing_spot' && (this.inventory.fishing_rod ?? 0) > 0) {
-      this.startFishing(view);
-      return;
+      return { swing: false, run: () => this.startFishing(view) };
     }
+    return { swing: true, run: () => this.swingAtNode(view) };
+  }
+
+  private swingAtNode(view: NodeView): void {
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
     this.sfx(view.state.type === 'tree' || view.state.type === 'hardwood_tree' ? 'chop' : 'harvest', 0.5);
     void this.backend.hitNode(view.state.id).then((result) => {
@@ -1416,10 +1465,26 @@ export class GameScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.keys.enter) && this.placing) {
       this.confirmPlace();
     }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.e)) {
-      if (this.placing) this.confirmPlace();
-      else if (this.fishing) this.reelIn();
-      else this.tryHarvest();
+    // E: one-shots fire once per press; harvesting and Guardian swings
+    // auto-repeat while held, and taps are capped at the same cadence
+    // (mashing is never faster than holding)
+    const ePressed = Phaser.Input.Keyboard.JustDown(this.keys.e);
+    if (this.placing) {
+      if (ePressed) this.confirmPlace();
+    } else if (this.fishing) {
+      if (ePressed) this.reelIn();
+    } else if (ePressed || this.keys.e.isDown) {
+      const now = Date.now();
+      const swingReady = now - this.lastSwingAt >= SWING_CADENCE_MS;
+      if (ePressed || swingReady) {
+        const action = this.resolveEAction();
+        if (action?.swing && swingReady) {
+          this.lastSwingAt = now;
+          action.run();
+        } else if (action && !action.swing && ePressed) {
+          action.run();
+        }
+      }
     }
   }
 }
