@@ -34,6 +34,17 @@ export function holdsBonusTool(inv: Inventory, tool: ToolId | undefined): boolea
   return upgrade !== undefined && (inv[upgrade] ?? 0) > 0;
 }
 
+/**
+ * v4 equip rule: does the currently in-hand Tool satisfy a Node's `requiredTool`
+ * or `bonusTool`? The in-hand Tool counts if it IS that Tool or its tier-2
+ * upgrade (an in-hand ancient axe still satisfies an `axe` bonus/requirement).
+ * Ownership is validated separately by the server before this is consulted.
+ */
+export function toolSatisfies(withTool: ToolId | undefined, tool: ToolId | undefined): boolean {
+  if (!tool || !withTool) return false;
+  return withTool === tool || TOOL_UPGRADES[tool] === withTool;
+}
+
 export const NODE_TYPES: Record<NodeTypeId, NodeType> = {
   tree: {
     id: 'tree',

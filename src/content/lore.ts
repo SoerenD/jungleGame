@@ -29,7 +29,7 @@ export const TABLETS: Record<string, Tablet> = {
   t4: {
     id: 't4',
     title: 'The Last Tablet',
-    text: 'A golden idol watches over every camp that earned it. Place it proudly. The swamp swallows the careless, the ruins reward the patient, and the jungle remembers every fence, fire and wall you leave behind.',
+    text: 'A golden idol watches over every camp that earned it. Place it proudly. The swamp swallows the careless, the ruins reward the patient, and the jungle remembers every fire and wall you leave behind.',
   },
   t5: {
     id: 't5',

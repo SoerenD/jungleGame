@@ -191,14 +191,6 @@ const sprites: Record<string, () => Img> = {
     i.rect(14, 4, 1, 19, WOOD_D);
     return i;
   },
-  'fence.png': () => {
-    const i = new Img(16, 16);
-    i.rect(2, 6, 2, 9, WOOD);
-    i.rect(12, 6, 2, 9, WOOD);
-    i.rect(0, 8, 16, 2, WOOD_D);
-    i.rect(0, 12, 16, 2, WOOD_D);
-    return i;
-  },
   'bridge.png': () => {
     const i = new Img(16, 16);
     i.rect(0, 0, 16, 16, WOOD);

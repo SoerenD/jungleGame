@@ -47,12 +47,10 @@ export const OBJECTS: Record<string, ObjectDef> = {
   st_campfire: { url: '/assets/objects/campfire.png' },
   st_torch: { url: '/assets/objects/torch.png' },
   st_hut_wall: { url: '/assets/objects/hut-wall.png' },
-  st_fence: { url: '/assets/objects/fence.png' },
   st_bridge: { url: '/assets/objects/bridge.png' },
   st_crate: { url: '/assets/objects/crate.png' },
   st_tiki_statue: { url: '/assets/objects/statue.png' },
   st_fruit_basket: { url: '/assets/objects/fruit-basket.png' },
-  st_stone_path: { url: '/assets/objects/stone-path.png' },
   st_golden_idol: { url: '/assets/objects/golden-idol.png' },
   // v2 tier-2 structures
   st_obsidian_statue: { url: '/assets/objects/obsidian-statue.png' },
@@ -64,11 +62,13 @@ export const OBJECTS: Record<string, ObjectDef> = {
   st_hammock: { url: '/assets/objects/hammock.png' },
   st_signpost: { url: '/assets/objects/signpost.png' },
   st_sawmill: { url: '/assets/objects/sawmill.png' },
-  st_plank_floor: { url: '/assets/objects/plank-floor.png' },
   st_table: { url: '/assets/objects/table.png' },
 
   tablet: { url: '/assets/objects/tablet.png' },
   altar: { url: '/assets/objects/altar.png' },
+  // v4: the arena Seal barrier — an authored rune-stone gate (16x32, tiles
+  // horizontally; tools/compose-seal-barrier.ts)
+  'seal-barrier': { url: '/assets/objects/seal-barrier.png' },
   // v2 landmarks
   seal_monument: { url: '/assets/objects/seal-monument.png' },
   guardian_altar: { url: '/assets/objects/guardian-altar.png' },
@@ -94,4 +94,6 @@ export const AUDIO: Record<string, string> = {
   splash: '/assets/audio/splash.wav',
   munch: '/assets/audio/munch.wav',
   guardian_drums: '/assets/audio/guardian-drums.wav',
+  // v4 — pickaxe-on-stone clink for rock / obsidian
+  pick: '/assets/audio/pick.wav',
 };

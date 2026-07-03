@@ -41,3 +41,17 @@ function of `summonedAt + elapsed time` — every client and the server derive i
 The prohibition that matters is unchanged: the Guardian never chases, aims, or reacts to Players.
 The same reasoning covers fury phases and Eye Windows, which key on elapsed time only (never HP,
 which would require server-side history to re-derive the schedule).
+
+## Amendment (2026-07-03, #2 — clock re-anchored to the first strike; see ADR-0004)
+
+The schedule's **origin moves from `summonedAt` to `engagedAt`** (the server timestamp of the first
+landed hit). The invariant is unchanged in substance: the schedule is still a pure function of a
+*single* server timestamp + elapsed, re-derived identically by every client and the server. What
+changes is only *which* timestamp. Summoning now wakes the Guardian into a harmless **dormant**
+state (arena open, no danger zones, no Eye Windows) until the first strike; the first strike sets
+`engagedAt`, and wave 0 is the leap-to-entrance that slams the **Ward** shut. This one-time
+dormant→engaged transition is the *only* thing the Guardian ever does in response to a Player — and
+it is a discrete, server-ordered world event (like the summon itself), not the reactive, aiming,
+chasing AI this ADR forbids *during* the fight. The prohibition on HP-keyed or per-Player-adaptive
+schedule behaviour is otherwise untouched. Full reasoning, plus the roster-scaled HP and hard
+Exhaustion that ship alongside it, live in ADR-0004.

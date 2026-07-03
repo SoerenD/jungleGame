@@ -99,25 +99,6 @@ const POST = 0x6b4a2bff;
   write('public/assets/objects/sawmill.png', i);
 }
 
-// ---------------------------------------------------------------- plank floor
-// a flat 16x16 floor tile of laid planks
-{
-  const i = new Img(16, 16);
-  i.rect(0, 0, 16, 16, PLANK);
-  for (const y of [0, 5, 10, 15]) i.rect(0, y, 16, 1, PLANK_DARK);
-  for (const [x, y0] of [
-    [5, 1],
-    [11, 6],
-    [3, 11],
-  ]) {
-    i.rect(x, y0, 1, 4, PLANK_EDGE); // board seams
-  }
-  i.px(8, 3, 0x8a6a42ff); // nail heads
-  i.px(13, 8, 0x8a6a42ff);
-  i.px(6, 13, 0x8a6a42ff);
-  write('public/assets/objects/plank-floor.png', i);
-}
-
 // ---------------------------------------------------------------- table
 // a solid plank table (16x16)
 {

@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
 import { AUDIO, OBJECTS, TILESET } from '../assetConfig';
+import { asset } from '../paths';
+import { GRIDS, PAL } from '../ui/icons';
+import { ITEMS, type ItemId } from '../content/items';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -7,21 +10,21 @@ export class BootScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.tilemapTiledJSON('jungle-map', '/map/jungle-map.json');
-    this.load.json('worldData', '/map/world-data.json');
+    this.load.tilemapTiledJSON('jungle-map', asset('/map/jungle-map.json'));
+    this.load.json('worldData', asset('/map/world-data.json'));
     // loaded under a -src key: create() copies it into a canvas texture so the
     // water tile can be animated by repainting its pixels
-    this.load.image(`${TILESET.key}-src`, TILESET.url);
-    this.load.image('water-frames', '/assets/tiles/water-frames.png');
+    this.load.image(`${TILESET.key}-src`, asset(TILESET.url));
+    this.load.image('water-frames', asset('/assets/tiles/water-frames.png'));
     for (const [key, def] of Object.entries(OBJECTS)) {
       if (def.frameWidth) {
-        this.load.spritesheet(key, def.url, { frameWidth: def.frameWidth, frameHeight: def.frameHeight! });
+        this.load.spritesheet(key, asset(def.url), { frameWidth: def.frameWidth, frameHeight: def.frameHeight! });
       } else {
-        this.load.image(key, def.url);
+        this.load.image(key, asset(def.url));
       }
     }
     for (const [key, url] of Object.entries(AUDIO)) {
-      this.load.audio(key, url);
+      this.load.audio(key, asset(url));
     }
 
     const progress = this.add.text(this.scale.width / 2, this.scale.height / 2, 'Loading jungle... 0%', {
@@ -47,6 +50,33 @@ export class BootScene extends Phaser.Scene {
     gctx.fillStyle = grad;
     gctx.fillRect(0, 0, 64, 64);
     glow.refresh();
+    // puffy parallax clouds: three shape variants, sunlit top, blue underside
+    const cloudTex = (key: string, w: number, h: number, blobs: [number, number, number][]) => {
+      const tex = this.textures.createCanvas(key, w, h)!;
+      const ctx = tex.context;
+      const pass = (color: string, dy: number, shrink: number) => {
+        ctx.fillStyle = color;
+        for (const [bx, by, r] of blobs) {
+          ctx.beginPath();
+          ctx.arc(bx, by + dy, Math.max(1, r - shrink), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      };
+      pass('#8fb4de', 3, 0);
+      pass('#dcebf9', 0, 1);
+      pass('#ffffff', -3, 4);
+      tex.refresh();
+    };
+    cloudTex('cloud0', 88, 44, [
+      [20, 28, 13], [38, 21, 16], [58, 25, 14], [71, 30, 9], [30, 31, 12], [50, 31, 12],
+    ]);
+    cloudTex('cloud1', 64, 36, [
+      [14, 22, 10], [30, 17, 13], [46, 22, 10], [24, 25, 9], [38, 25, 9],
+    ]);
+    cloudTex('cloud2', 112, 48, [
+      [18, 31, 12], [36, 23, 16], [58, 19, 18], [80, 25, 15], [95, 32, 10], [48, 33, 13], [70, 33, 13],
+    ]);
+
     const leaf = this.textures.createCanvas('leaf', 4, 3)!;
     leaf.context.fillStyle = '#4a9e52';
     leaf.context.fillRect(0, 0, 4, 3);
@@ -66,20 +96,56 @@ export class BootScene extends Phaser.Scene {
     sctx.fillRect(-24, -24, 48, 48);
     shadow.refresh();
 
-    // the Seal barrier: a shimmering violet wall segment (generated FX texture)
-    const barrier = this.textures.createCanvas('seal-barrier', 16, 32)!;
-    const bctx = barrier.context;
-    const bg = bctx.createLinearGradient(0, 0, 0, 32);
-    bg.addColorStop(0, 'rgba(150, 90, 235, 0.95)');
-    bg.addColorStop(0.5, 'rgba(110, 60, 200, 0.75)');
-    bg.addColorStop(1, 'rgba(60, 25, 130, 0.55)');
-    bctx.fillStyle = bg;
-    bctx.fillRect(0, 0, 16, 32);
-    bctx.fillStyle = 'rgba(30, 8, 70, 0.55)';
-    for (const x of [3, 8, 13]) bctx.fillRect(x, 0, 1, 32);
-    bctx.fillStyle = 'rgba(235, 210, 255, 0.9)';
-    for (const [x, y] of [[5, 6], [10, 12], [6, 20], [11, 26]]) bctx.fillRect(x, y, 2, 2);
-    barrier.refresh();
+    // fog-of-war eraser brush: solid core, feathered rim (1px = 1 tile)
+    const brush = this.textures.createCanvas('fog-brush', 24, 24)!;
+    const fctx = brush.context;
+    const fg = fctx.createRadialGradient(12, 12, 0, 12, 12, 12);
+    fg.addColorStop(0, 'rgba(255,255,255,1)');
+    fg.addColorStop(0.55, 'rgba(255,255,255,1)');
+    fg.addColorStop(1, 'rgba(255,255,255,0)');
+    fctx.fillStyle = fg;
+    fctx.fillRect(0, 0, 24, 24);
+    brush.refresh();
+
+    // the Seal barrier is now an authored rune-stone gate PNG loaded above
+    // (assetConfig 'seal-barrier', tools/compose-seal-barrier.ts).
+
+    // v4: the Bow's arrow — short shaft + bright head, pointing +x so a
+    // rotation toward the Guardian aims it correctly
+    const arrow = this.textures.createCanvas('arrow', 12, 5)!;
+    const actx = arrow.context;
+    actx.fillStyle = '#e8d8b0'; // fletching
+    actx.fillRect(0, 1, 2, 3);
+    actx.fillStyle = '#6b4a2a'; // shaft
+    actx.fillRect(1, 2, 8, 1);
+    actx.fillStyle = '#d7dbe0'; // arrowhead
+    actx.beginPath();
+    actx.moveTo(12, 2.5);
+    actx.lineTo(8, 0.5);
+    actx.lineTo(8, 4.5);
+    actx.closePath();
+    actx.fill();
+    arrow.refresh();
+
+    // v4: in-hand held-item sprites — small 12x12 pixel textures built from the
+    // same grids as the HUD icons, so a Player's equipped Tool shows in their
+    // hand (keyed 'held-<toolId>'). Only Tools are ever held.
+    for (const [id, grid] of Object.entries(GRIDS)) {
+      if (ITEMS[id as ItemId]?.kind !== 'tool' || !grid) continue;
+      const key = `held-${id}`;
+      if (this.textures.exists(key)) continue;
+      const held = this.textures.createCanvas(key, 12, 12)!;
+      const hctx = held.context;
+      grid.forEach((row, y) => {
+        for (let x = 0; x < row.length; x++) {
+          const color = PAL[row[x]];
+          if (!color) continue;
+          hctx.fillStyle = color;
+          hctx.fillRect(x, y, 1, 1);
+        }
+      });
+      held.refresh();
+    }
 
     // Player walk animations are created per Avatar texture (src/avatars.ts).
     // the Guardian's slow awake idle (frame 0 is its slumber)

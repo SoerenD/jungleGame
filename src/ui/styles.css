@@ -157,7 +157,6 @@
   font-size: 15px;
   color: var(--accent);
 }
-.recipe,
 .inv-row {
   display: flex;
   align-items: center;
@@ -166,20 +165,166 @@
   padding: 5px 4px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.recipe .cost {
-  font-size: 12px;
-  color: var(--dim);
+
+/* image-driven crafting: each recipe is a card — output sprite + ingredient
+   icons with count badges; the whole card crafts on click. Names/costs stay
+   available as the card's hover tooltip. */
+#recipe-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 8px;
 }
-.recipe .cost .lack {
-  color: var(--bad);
+.recipe-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  cursor: pointer;
 }
-.recipe.uncraftable .r-name {
-  color: var(--dim);
+.recipe-card:hover:not(.uncraftable) {
+  border-color: var(--accent);
+  background: rgba(255, 209, 102, 0.1);
 }
-.recipe .need-tool {
+.recipe-card.uncraftable {
+  opacity: 0.5;
+  cursor: default;
+}
+.recipe-out {
+  position: relative;
+  flex: 0 0 auto;
+}
+.recipe-out-icon {
+  display: block;
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.recipe-out-count {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
   font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+.recipe-cost {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.recipe-ing {
+  position: relative;
+  width: 22px;
+  height: 22px;
+}
+.recipe-ing-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.recipe-ing-count {
+  position: absolute;
+  right: -4px;
+  bottom: -5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text);
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+.recipe-ing.lack .recipe-ing-count {
   color: var(--bad);
 }
+.recipe-ing.lack .recipe-ing-icon {
+  filter: grayscale(0.7) brightness(0.75);
+}
+/* a required-but-not-consumed tool reads differently: dashed ring, wrench mark */
+.recipe-tool .recipe-ing-icon {
+  outline: 1px dashed var(--dim);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+.recipe-tool .recipe-ing-count {
+  right: -6px;
+}
+/* slot inventory */
+#inv-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.inv-slot {
+  position: relative;
+  aspect-ratio: 1;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.inv-slot.filled {
+  cursor: grab;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.inv-slot.filled:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.inv-slot.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 6px rgba(255, 209, 102, 0.45);
+}
+.inv-slot.drop {
+  border-color: var(--good);
+  background: rgba(140, 233, 154, 0.14);
+}
+.inv-slot.dragging {
+  opacity: 0.4;
+}
+.inv-icon {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.inv-count {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+#inv-detail {
+  margin-top: 8px;
+  min-height: 54px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 6px;
+}
+#inv-detail-name {
+  font-weight: 700;
+  font-size: 13px;
+  min-height: 16px;
+}
+#inv-detail-desc {
+  font-size: 11px;
+  color: var(--dim);
+  margin: 2px 0 6px;
+}
+
 button.ui-btn {
   background: #2e5638;
   color: var(--text);
@@ -223,6 +368,108 @@ button.ui-btn:disabled {
 #bottom-bar button {
   font-size: 14px;
   padding: 8px 12px;
+}
+#btn-settings {
+  padding: 8px 10px;
+}
+
+/* audio settings menu */
+#settings-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 300px;
+  display: none;
+}
+#settings-panel.open {
+  display: block;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+}
+.settings-row label {
+  flex: 0 0 118px;
+  font-size: 13px;
+}
+.settings-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.settings-val {
+  flex: 0 0 38px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.settings-mute {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-mute input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* v4: the Loadout bar (three in-hand quick-slots) */
+#loadout-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+.loadout-slot {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  background: var(--panel);
+  border: 2px solid var(--panel-border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.loadout-slot.filled {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.loadout-slot.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(255, 209, 102, 0.6);
+}
+.loadout-slot.drop {
+  border-color: var(--good);
+  background: rgba(140, 233, 154, 0.16);
+}
+.loadout-slot .inv-icon {
+  width: 32px;
+  height: 32px;
+}
+.loadout-key {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--dim);
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+.loadout-slot.selected .loadout-key {
+  color: var(--accent);
 }
 
 /* placement hint */
@@ -360,10 +607,26 @@ button.ui-btn:disabled {
   background: linear-gradient(90deg, #b0322b, #ff5544);
   transition: width 0.25s ease;
 }
+#fight-roster {
+  margin-top: 5px;
+  font-size: 11px;
+  color: #ffcf9c;
+}
+#fight-roster:empty {
+  display: none;
+}
 #fight-timer {
   margin-top: 5px;
   font-size: 12px;
   color: var(--dim);
+}
+/* dormant: the Guardian roams, unstruck — no HP bar or roster yet, just the prompt */
+#fight-panel.dormant #fight-hpbar,
+#fight-panel.dormant #fight-roster {
+  display: none;
+}
+#fight-panel.dormant #fight-title {
+  color: #ffd08a;
 }
 
 /* ---------------- v3: crate, Sawmill, signpost ---------------- */

@@ -11,17 +11,25 @@ export type ResourceId =
   | 'fish'
   // v3 — refined at the Sawmill; lives in the Inventory like any Resource
   | 'plank';
-export type ToolId = 'axe' | 'pickaxe' | 'machete' | 'hammer' | 'ancient_axe' | 'ancient_pickaxe' | 'fishing_rod';
+export type ToolId =
+  | 'axe'
+  | 'pickaxe'
+  | 'machete'
+  | 'hammer'
+  | 'ancient_axe'
+  | 'ancient_pickaxe'
+  | 'fishing_rod'
+  // v4 — tier-1 Tools, no Guardian drops
+  | 'bow'
+  | 'hand_torch';
 export type StructureId =
   | 'campfire'
   | 'torch'
   | 'hut_wall'
-  | 'fence'
   | 'bridge'
   | 'crate'
   | 'tiki_statue'
   | 'fruit_basket'
-  | 'stone_path'
   | 'golden_idol'
   // v2 — tier-2 Structures
   | 'obsidian_statue'
@@ -33,7 +41,6 @@ export type StructureId =
   | 'hammock'
   | 'signpost'
   | 'sawmill'
-  | 'plank_floor'
   | 'table';
 /** carried consumables that are neither Resources nor Tools */
 export type ConsumableId = 'summon_totem' | 'cooked_fish';
@@ -65,9 +72,11 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   pickaxe: { name: 'Pickaxe', kind: 'tool', desc: 'Breaks rocks twice as fast.' },
   machete: { name: 'Machete', kind: 'tool', desc: 'Required to cut fiber vines.' },
   hammer: { name: 'Hammer', kind: 'tool', desc: 'Required to build walls and bridges.' },
-  ancient_axe: { name: 'Ancient Axe', kind: 'tool', desc: 'Harvests ancient hardwood; chops trees and strikes the Guardian twice as hard.' },
-  ancient_pickaxe: { name: 'Ancient Pickaxe', kind: 'tool', desc: 'Harvests obsidian; breaks rocks and strikes the Guardian twice as hard.' },
-  fishing_rod: { name: 'Fishing Rod', kind: 'tool', desc: 'Cast at a fishing spot and wait for the bite.' },
+  ancient_axe: { name: 'Ancient Axe', kind: 'tool', desc: 'Harvests ancient hardwood; in hand it chops trees twice as fast and hits the Guardian for 3.' },
+  ancient_pickaxe: { name: 'Ancient Pickaxe', kind: 'tool', desc: 'Harvests obsidian; in hand it breaks rocks twice as fast and hits the Guardian for 3.' },
+  fishing_rod: { name: 'Fishing Rod', kind: 'tool', desc: 'Cast at a fishing spot and wait for the bite. Works only while in hand.' },
+  bow: { name: 'Bow', kind: 'tool', desc: 'Looses arrows at the Guardian from range — 2 damage in an Eye Window, no ammo. Craftable before the first fight.' },
+  hand_torch: { name: 'Hand Torch', kind: 'tool', desc: 'Hold it to light your way with a warm orange glow at night. Distinct from the placed Torch.' },
 
   summon_totem: { name: 'Summoning Totem', kind: 'consumable', desc: 'An Offering for the arena altar — wakes the Guardian. Consumed on summon.' },
   cooked_fish: { name: 'Cooked Fish', kind: 'food', desc: 'Warm and hearty. Eating it quickens your step for a while.' },
@@ -75,12 +84,10 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   campfire: { name: 'Campfire', kind: 'structure', desc: 'A cozy fire. Cooks fish, too.', blocks: true },
   torch: { name: 'Torch', kind: 'structure', desc: 'Lights the path.', blocks: false },
   hut_wall: { name: 'Hut Wall', kind: 'structure', desc: 'A sturdy wall segment.', blocks: true },
-  fence: { name: 'Fence', kind: 'structure', desc: 'Keeps nothing out, looks great.', blocks: true },
   bridge: { name: 'Bridge', kind: 'structure', desc: 'Walk over water.', blocks: false, onWater: true },
   crate: { name: 'Supply Crate', kind: 'structure', desc: 'Shared storage — E to deposit and withdraw. No locks between friends.', blocks: true },
   tiki_statue: { name: 'Tiki Statue', kind: 'structure', desc: 'Watches the jungle.', blocks: true },
   fruit_basket: { name: 'Fruit Basket', kind: 'structure', desc: 'A welcoming snack pile.', blocks: false },
-  stone_path: { name: 'Stone Path', kind: 'structure', desc: 'A tidy paved tile.', blocks: false },
   golden_idol: { name: 'Golden Idol', kind: 'structure', desc: 'A gleaming trophy dug from a buried treasure. Cannot be crafted.', blocks: true },
   obsidian_statue: { name: 'Obsidian Statue', kind: 'structure', desc: 'A gleaming black sentinel.', blocks: true },
   hardwood_arch: { name: 'Hardwood Arch', kind: 'structure', desc: 'A grand gateway of ancient timber.', blocks: false },
@@ -90,6 +97,5 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   hammock: { name: 'Hammock', kind: 'structure', desc: 'Your personal wake point: Exhaustion and login place you here. One active Hammock per Player.', blocks: false },
   signpost: { name: 'Signpost', kind: 'structure', desc: 'Holds a short line of your writing, readable by everyone.', blocks: false },
   sawmill: { name: 'Sawmill', kind: 'structure', desc: 'Deposit wood; collect planks after the mill has done its slow work.', blocks: true },
-  plank_floor: { name: 'Plank Floor', kind: 'structure', desc: 'A warm wooden floor tile.', blocks: false },
   table: { name: 'Table', kind: 'structure', desc: 'A sturdy plank table for the camp.', blocks: true },
 };

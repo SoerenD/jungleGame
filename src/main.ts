@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import './ui/styles.css';
-import { MockBackend } from './backend/MockBackend';
+import { createBackend } from './backend/createBackend';
 import { MUTE_KEY } from './config';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
@@ -67,9 +67,9 @@ const game = exposeGame(new Phaser.Game({
 }));
 
 async function start(): Promise<void> {
-  // The Backend interface is all the game knows; MockBackend is the only
-  // implementation for the Mock Milestone (see ADR-0001 for the real one).
-  const backend = new MockBackend();
+  // The Backend interface is all the game knows; the factory picks Supabase
+  // (shared world) when configured, else the local MockBackend (see ADR-0001).
+  const backend = createBackend();
   const assetsReady = new Promise<void>((res) => game.events.once('assets-ready', () => res()));
   await backend.init();
   const me = await showJoin(backend);

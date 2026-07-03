@@ -126,7 +126,6 @@ campfire.blit(tile(OBJ, 4, 3), 0, 2, 16, 14, 0, 0);
 write('public/assets/objects/campfire.png', campfire);
 
 write('public/assets/objects/crate.png', cropScaled(OW, 563, 127, 24, 17, 1));
-write('public/assets/objects/fence.png', cropScaled(OW, 5, 305, 24, 14, 1));
 write('public/assets/objects/bridge.png', tile(OW, 31, 18));
 write('public/assets/objects/hut-wall.png', tile(OW, 22, 18, 1, 2));
 write('public/assets/objects/statue.png', tile(OW, 10, 24, 1, 3));
@@ -134,11 +133,12 @@ write('public/assets/objects/fruit-basket.png', tile(OW, 24, 20));
 write('public/assets/objects/stone-path.png', tile(OW, 23, 1));
 write('public/assets/objects/ruin-pillar.png', tile(OW, 24, 0, 1, 2));
 
-// secrets: lore tablet (parchment), golden idol (statue recolored gold).
+// secrets: golden idol (statue recolored gold).
 // altar.png is NOT written here: the original crop tile(OW, 6, 24, 2, 2) hit an
 // empty region of Overworld.png (fully transparent output) — it is composed
 // from the checked-in crops by tools/compose-altar.ts instead.
-write('public/assets/objects/tablet.png', tile(OW, 10, 20, 2, 2));
+// tablet.png is NOT written here either: since v4 it is an authored upright
+// rune stele composed by tools/compose-tablet.ts.
 write(
   'public/assets/objects/golden-idol.png',
   recolor(tile(OW, 10, 24, 1, 3), (r, g, b, a) => [
@@ -164,7 +164,6 @@ const outFiles = [
   'public/assets/objects/bush-empty.png',
   'public/assets/objects/campfire.png',
   'public/assets/objects/crate.png',
-  'public/assets/objects/fence.png',
   'public/assets/objects/bridge.png',
   'public/assets/objects/hut-wall.png',
   'public/assets/objects/statue.png',

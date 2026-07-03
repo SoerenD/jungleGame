@@ -1,4 +1,4 @@
-import type { ItemId, StructureId } from '../content/items';
+import type { ItemId, StructureId, ToolId } from '../content/items';
 import type { NodeTypeId } from '../content/nodeTypes';
 
 /** legacy tint-preset id — only survives in pre-update Player rows for migration */
@@ -24,6 +24,8 @@ export interface PlayerPos {
   y: number;
   dir: Dir;
   moving: boolean;
+  /** the Player's in-hand Loadout item (Realtime-broadcast); null when empty */
+  held?: ItemId;
 }
 
 export type Inventory = Partial<Record<ItemId, number>>;
@@ -87,6 +89,11 @@ export type JoinResult =
       /** false until the intro story has been shown to this Player once */
       introSeen: boolean;
       journey: JourneyState;
+      /**
+       * fog-of-war: chunk indices this Player has explored, persisted like
+       * `journey` (a Supabase implementation stores an int[] on the player row)
+       */
+      explored: number[];
     }
   | { ok: false; reason: 'WRONG_PIN' | 'BAD_NAME' | 'BAD_PIN' };
 
@@ -112,12 +119,21 @@ export interface SealState {
 }
 
 /**
- * A live Guardian fight. Everything clients render (danger zones, timer)
- * derives from `summonedAt` (ADR-0002); null means the Guardian slumbers.
+ * A live Guardian fight. Until the first strike the Guardian is DORMANT
+ * (`engagedAt === null`): it roams harmlessly, the arena is open, and there are
+ * no danger zones or Eye Windows. The first landed hit sets `engagedAt`, locks
+ * the `roster` (Players inside the arena at that instant), and fixes HP; from
+ * then on everything clients render derives from `engagedAt` (ADR-0002 as
+ * amended by ADR-0004). `fight === null` means the Guardian slumbers.
  */
 export interface FightState {
-  /** server timestamp of the summon */
+  /** server timestamp of the summon (dormant start) */
   summonedAt: number;
+  /** server timestamp of the first strike; null while dormant */
+  engagedAt: number | null;
+  /** the party sealed inside the Ward at the first strike — only they may damage it */
+  roster: string[];
+  /** 0 while dormant; fixed to HP_PER_HEAD × roster.length at engage */
   hp: number;
   maxHp: number;
   /** Players who landed ≥1 hit — each receives the full drop set on victory */
@@ -225,6 +241,8 @@ export interface BackendEvents {
   /** the one-time, forever moment — arena opens for everyone */
   sealBroken: () => void;
   guardianSummoned: (fight: FightState) => void;
+  /** the first strike landed: the clock re-anchors to `engagedAt`, roster + HP lock, the Ward rises */
+  guardianEngaged: (fight: FightState) => void;
   guardianHit: (hp: number, by: string) => void;
   guardianVictory: (participants: string[]) => void;
   /** the slumber timer ran out — HP reset, no loot */
@@ -244,10 +262,11 @@ export interface Backend {
   /** the sent Appearance becomes the Player's look — editable at every join */
   join(name: string, pin: string, appearance: Appearance): Promise<JoinResult>;
   loadWorld(): Promise<WorldSnapshot>;
-  /** fire-and-forget, like a Realtime broadcast */
-  sendPosition(x: number, y: number, dir: Dir, moving: boolean): void;
+  /** fire-and-forget, like a Realtime broadcast; `held` is the in-hand Loadout item */
+  sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId): void;
   sendChat(text: string): Promise<void>;
-  hitNode(nodeId: string): Promise<HitResult>;
+  /** `withTool` is the in-hand Tool the client struck with; the server honours it only if owned */
+  hitNode(nodeId: string, withTool?: ToolId): Promise<HitResult>;
   craft(recipeId: string): Promise<CraftResult>;
   /** `text` is the signpost line (length-capped server-side) */
   placeStructure(item: StructureId, tx: number, ty: number, text?: string): Promise<PlaceResult>;
@@ -274,12 +293,16 @@ export interface Backend {
   contributeSeal(): Promise<ContributeSealResult>;
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
-  /** land one hit on the Guardian (server-ordered, participation recorded) */
-  hitGuardian(): Promise<GuardianHitResult>;
+  /**
+   * land one hit on the Guardian (server-ordered, participation recorded);
+   * `withTool` is the in-hand Tool (axe/pickaxe → 3, bow → 2), honoured only if owned
+   */
+  hitGuardian(withTool?: ToolId): Promise<GuardianHitResult>;
   /**
    * report being caught by a danger zone at world tile (tx, ty); the server
-   * re-derives the schedule from summonedAt and validates against SERVER time
-   * (ADR-0002) — the 3rd knockdown in one fight is Exhaustion
+   * re-derives the schedule from engagedAt and validates against SERVER time
+   * (ADR-0002 amended) — the 3rd knockdown ends this fight for the Player
+   * (hard Exhaustion), and the Ward bars re-entry
    */
   reportKnockdown(tx: number, ty: number): Promise<KnockdownResult>;
   /** turn one carried fish into a cooked fish (client checks campfire proximity) */
@@ -290,6 +313,8 @@ export interface Backend {
   markIntroSeen(): Promise<void>;
   /** tick one Journey objective for this Player (idempotent) */
   completeJourneyStep(step: JourneyStepId): Promise<JourneyState>;
+  /** fog-of-war: persist newly explored chunk indices for this Player (idempotent) */
+  markExplored(chunks: number[]): Promise<void>;
   /** count one successful use of a contextual key hint (hints retire after a few) */
   bumpHint(hintId: string): Promise<JourneyState>;
   on<K extends keyof BackendEvents>(event: K, cb: BackendEvents[K]): void;

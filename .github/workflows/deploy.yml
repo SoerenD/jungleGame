@@ -1,0 +1,47 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# only one Pages deploy at a time; let a newer push cancel an in-flight one
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The Supabase URL + ANON key are PUBLIC by design (the anon key ships in
+      # every browser bundle). They are NOT secrets — safe to keep in the repo.
+      # The service_role key is never used by the client and must never appear here.
+      VITE_SUPABASE_URL: https://irjxvtgrzkmvjomozyiv.supabase.co
+      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlyanh2dGdyemttdmpvbW96eWl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxMDI3NzYsImV4cCI6MjA5ODY3ODc3Nn0.x1A54g3-AANjnbuydXeMLWgSZ3UeZbObAchEVmbfytY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

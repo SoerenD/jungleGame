@@ -2,3 +2,8 @@ node_modules/
 dist/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# local secrets — never commit (only .env.example is tracked)
+.env
+.env.local
+.env.*.local

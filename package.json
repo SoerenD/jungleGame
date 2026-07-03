@@ -10,6 +10,7 @@
     "genmap": "tsx tools/generate-map.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
     "phaser": "^3.90.0"
   },
   "devDependencies": {

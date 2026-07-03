@@ -1,9 +1,9 @@
 /**
- * Composes the v3 Guardian sheet: a 96x96 stone colossus with moss, cracked
- * glowing runes and ONE large amber eye — the eye-open frames are the weak-
- * point signal and must read at gameplay zoom. Derived, like
- * compose-v2-assets.ts, from the checked-in CC0 crops (see CREDITS.md), so
- * it is re-runnable anywhere.
+ * Composes the Guardian sheet: a 96x96 hunched stone colossus — gorilla
+ * stance on knuckled forearms, heavy brow, broken horns, mossy back,
+ * cracked rune seams and ONE large amber eye. The eye-open frames are the
+ * weak-point signal and must read at gameplay zoom. Drawn from primitives
+ * at 48x48 and doubled, so it is re-runnable anywhere with no inputs.
  *
  * Frames (96x96 each, laid out horizontally):
  *   0 slumber · 1-2 awake idle (eye closed) · 3-4 eye open (Eye Window)
@@ -14,19 +14,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Img } from './png';
-import { decodePng, cropScaled } from './png-decode';
 
 const root = path.resolve(import.meta.dirname, '..');
-const obj = (name: string) => decodePng(path.join(root, 'public/assets/objects', name));
 const write = (rel: string, img: Img) => {
   const p = path.join(root, rel);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, img.toPng());
   console.log('wrote', rel, `${img.w}x${img.h}`);
 };
-
-const rock = obj('rock.png');
-const pillar = obj('ruin-pillar.png');
 
 /** nearest-neighbour free resize (for squash/stretch poses) */
 function scaleNN(src: Img, w: number, h: number): Img {
@@ -43,72 +38,157 @@ function scaleNN(src: Img, w: number, h: number): Img {
   return out;
 }
 
+// stone palette, lit from the upper left
+const OUT = 0x23262cff; // silhouette outline
+const DK = 0x4d5259ff;
+const MDK = 0x5b616aff;
+const MID = 0x6e747dff;
+const LT = 0x9aa1a8ff;
+const HI = 0xc2c8cfff;
+const MOSS = 0x3f8f4aff;
+const MOSSD = 0x2f7a3dff;
+const RUNE = 0xcdb6f2ff;
+const RUNED = 0x8a6cc9ff;
+const CRACK = 0x33363cff;
+
 type EyeState = 'slumber' | 'closed' | 'closed2' | 'open' | 'open2';
 
-/** the standing colossus, feet at y=95, composed from rock + pillar pieces */
+/** 1px inner outline wherever an opaque pixel meets transparency */
+function outline(f: Img): void {
+  const solid = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < f.w && y < f.h && f.data[(y * f.w + x) * 4 + 3] !== 0;
+  const edges: [number, number][] = [];
+  for (let y = 0; y < f.h; y++) {
+    for (let x = 0; x < f.w; x++) {
+      if (!solid(x, y)) continue;
+      if (!solid(x - 1, y) || !solid(x + 1, y) || !solid(x, y - 1) || !solid(x, y + 1)) edges.push([x, y]);
+    }
+  }
+  for (const [x, y] of edges) f.px(x, y, OUT);
+}
+
+/** the hunched colossus at 48x48 (feet on the bottom row), then doubled */
 function colossus(eye: EyeState): Img {
-  const f = new Img(96, 96);
-  // legs: pillar segments
-  const leg = cropScaled(pillar, 4, 6, 8, 10, 3); // 24x30
-  f.blit(leg, 0, 0, 24, 30, 20, 66);
-  f.blit(leg, 0, 0, 24, 30, 52, 66, true);
-  // arms: longer pillar shafts, hanging at the sides
-  const arm = cropScaled(pillar, 4, 6, 8, 15, 3); // 24x45
-  f.blit(arm, 0, 0, 24, 45, 0, 34);
-  f.blit(arm, 0, 0, 24, 45, 72, 34, true);
-  // torso: the twin boulders, tripled
-  const torso = cropScaled(rock, 0, 0, 26, 16, 3); // 78x48
-  f.blit(torso, 0, 0, 78, 48, 9, 30);
-  // head: the left boulder alone, tripled
-  const head = cropScaled(rock, 1, 2, 12, 12, 3); // 36x36
-  f.blit(head, 0, 0, 36, 36, 30, 2);
-  // mossy crown and shoulders (the jungle grows on it while it sleeps)
+  const f = new Img(48, 48);
+
+  // hind legs, mostly hidden under the dome of the back
+  f.rect(16, 36, 5, 10, DK);
+  f.rect(27, 36, 5, 10, DK);
+  f.rect(15, 44, 7, 3, MDK);
+  f.rect(26, 44, 7, 3, MDK);
+
+  // the great stone back — a shaded boulder dome
+  f.disc(24, 27, 15.5, DK);
+  f.disc(23, 26, 14, MID);
+  f.disc(20, 22, 10, LT);
+  f.disc(26, 31, 11, MID);
+  f.disc(17, 18, 4, HI);
+
+  // slabbed chest under the dome
+  f.rect(15, 30, 18, 11, DK);
+  f.rect(16, 31, 16, 9, MDK);
+  f.rect(16, 34, 16, 1, DK);
+  f.rect(16, 37, 16, 1, DK);
+
+  // forearms planted like a gorilla's, fists as knuckled boulders
+  // left
+  f.disc(9, 23, 6, MID);
+  f.disc(8, 21, 4, LT);
+  f.rect(4, 26, 10, 16, MID);
+  f.rect(12, 26, 2, 14, MDK);
+  f.rect(5, 26, 2, 12, LT);
+  f.disc(8, 42, 5, MID);
+  f.rect(5, 38, 7, 2, LT);
+  f.rect(4, 43, 2, 3, LT);
+  f.rect(7, 43, 2, 3, LT);
+  f.rect(10, 43, 2, 3, LT);
+  // right
+  f.disc(38, 23, 6, MID);
+  f.disc(36, 21, 4, LT);
+  f.rect(34, 26, 10, 16, MID);
+  f.rect(41, 26, 2, 14, MDK);
+  f.rect(35, 26, 2, 12, LT);
+  f.disc(39, 42, 5, MID);
+  f.rect(36, 38, 7, 2, LT);
+  f.rect(36, 43, 2, 3, LT);
+  f.rect(39, 43, 2, 3, LT);
+  f.rect(42, 43, 2, 3, LT);
+
+  // head sunk between the shoulders — no neck, all brow
+  f.disc(24, 13, 8.5, MID);
+  f.disc(22, 11, 5, LT);
+  // broken horns curving in
+  f.rect(12, 6, 2, 3, LT);
+  f.rect(13, 8, 2, 3, MID);
+  f.rect(14, 10, 2, 3, MDK);
+  f.rect(34, 6, 2, 3, LT);
+  f.rect(33, 8, 2, 3, MID);
+  f.rect(32, 10, 2, 3, MDK);
+  // the heavy brow ledge over the socket
+  f.rect(17, 12, 14, 3, MDK);
+  f.rect(17, 14, 14, 1, DK);
+  // stone jaw
+  f.rect(18, 21, 12, 3, MDK);
+  f.rect(19, 23, 10, 1, DK);
+
+  // the jungle grows on it while it sleeps
   for (const [x, y] of [
-    [34, 3], [39, 1], [45, 2], [52, 1], [58, 3], [62, 5],
-    [12, 36], [17, 34], [24, 33], [72, 34], [79, 35], [84, 37],
+    [20, 4], [25, 5], [15, 15], [30, 13], [34, 18], [12, 20], [21, 8], [28, 8],
   ]) {
-    f.rect(x, y, 3, 2, 0x4a9e52ff);
-    f.rect(x + 1, y + 1, 2, 1, 0x2f7a3dff);
+    f.rect(x, y, 3, 2, MOSS);
+    f.rect(x + 1, y + 1, 2, 1, MOSSD);
   }
-  // cracked runes across torso and arms — lavender base; a runtime additive
-  // glow tinted per fury phase sits over them (purple → orange → red)
-  const rune = 0xcdb6f2ff;
-  const runeDim = 0x8a6cc9ff;
-  for (const [x, y, w, h] of [
-    [46, 40, 2, 10], [42, 46, 10, 2], [30, 52, 2, 8], [64, 50, 2, 8],
-    [24, 60, 8, 2], [64, 62, 8, 2], [8, 44, 2, 8], [86, 44, 2, 8],
+  f.rect(6, 19, 2, 2, MOSS);
+  f.rect(40, 19, 2, 2, MOSS);
+
+  // cracks in the old stone
+  for (const [x, y] of [
+    [33, 24], [34, 25], [34, 26], [33, 27], [34, 28],
+    [13, 32], [14, 33], [14, 34],
+    [24, 32], [25, 33], [25, 34],
+    [29, 17], [30, 18],
   ]) {
-    f.rect(x, y, w, h, rune);
+    f.px(x, y, CRACK);
   }
-  for (const [x, y] of [[47, 38], [47, 51], [31, 50], [65, 48], [9, 42], [87, 42]]) {
-    f.px(x, y, runeDim);
-  }
-  // ---- the ONE large amber eye, centered on the head
-  // socket: a dark recess so every state reads against the stone
-  f.rect(38, 12, 20, 12, 0x14141eff);
-  f.rect(39, 11, 18, 1, 0x0d0d14ff);
+
+  // rune seams — lavender base; the runtime additive glow tints them per
+  // fury phase (purple → orange → red)
+  f.rect(8, 29, 2, 6, RUNE);
+  f.px(8, 35, RUNED);
+  f.rect(38, 29, 2, 6, RUNE);
+  f.px(39, 35, RUNED);
+  f.rect(21, 32, 2, 6, RUNE);
+  f.rect(25, 36, 5, 2, RUNE);
+  f.px(21, 31, RUNED);
+  f.px(30, 36, RUNED);
+
+  // ---- the ONE large amber eye, recessed under the brow
+  f.rect(19, 15, 10, 6, 0x14141eff);
+  f.rect(19, 15, 10, 1, 0x0d0d14ff);
   if (eye === 'slumber') {
     // sealed shut: a faint warm seam
-    f.rect(41, 17, 14, 2, 0x54262aff);
+    f.rect(21, 18, 6, 1, 0x54262aff);
   } else if (eye === 'closed' || eye === 'closed2') {
     // awake but shut: a smoldering slit (pulse variation on frame 2)
-    const slit = eye === 'closed' ? 0xa8481eff : 0xc2551fff;
-    f.rect(40, 16, 16, 3, slit);
-    f.rect(43, 17, 10, 1, eye === 'closed' ? 0xd86a24ff : 0xf07c28ff);
+    f.rect(20, 17, 8, 2, eye === 'closed' ? 0xa8481eff : 0xc2551fff);
+    f.rect(22, 17, 4, 1, eye === 'closed' ? 0xd86a24ff : 0xf07c28ff);
   } else {
     // OPEN — the weak point: a blazing amber orb with iris and specular
     const bright = eye === 'open2';
-    f.rect(39, 12, 18, 11, bright ? 0xffb437ff : 0xffa02fff);
-    f.rect(41, 13, 14, 9, bright ? 0xffd35cff : 0xffc24aff);
-    f.rect(45, 15, 6, 5, 0xb0480cff); // iris
-    f.rect(46, 16, 2, 2, 0xffffffff); // specular
+    f.rect(19, 15, 10, 6, bright ? 0xffb437ff : 0xffa02fff);
+    f.rect(21, 16, 6, 4, bright ? 0xffd35cff : 0xffc24aff);
+    f.rect(23, 17, 2, 2, 0xb0480cff); // iris
+    f.px(22, 16, 0xffffffff); // specular
     // radiant rim so the state is unmistakable at ZOOM 2.5
-    f.rect(36, 15, 2, 5, bright ? 0xffd35cff : 0xffb437ff);
-    f.rect(58, 15, 2, 5, bright ? 0xffd35cff : 0xffb437ff);
-    f.rect(45, 9, 6, 2, bright ? 0xffd35cff : 0xffb437ff);
-    f.rect(45, 25, 6, 2, bright ? 0xffd35cff : 0xffb437ff);
+    const rim = bright ? 0xffd35cff : 0xffb437ff;
+    f.rect(17, 16, 2, 3, rim);
+    f.rect(29, 16, 2, 3, rim);
+    f.rect(22, 13, 4, 1, rim);
+    f.rect(22, 21, 4, 1, rim);
   }
-  return f;
+
+  outline(f);
+  return scaleNN(f, 96, 96);
 }
 
 /** draw `src` anchored bottom-center into a fresh 96x96 frame */
@@ -119,7 +199,8 @@ function anchored(src: Img, liftPx = 0): Img {
 }
 
 const frames: Img[] = [];
-frames.push(colossus('slumber')); // 0
+// 0 slumber: slumped a touch lower than the awake stance
+frames.push(anchored(scaleNN(colossus('slumber'), 96, 86)));
 frames.push(colossus('closed')); // 1
 frames.push(colossus('closed2')); // 2
 frames.push(colossus('open')); // 3
@@ -145,4 +226,4 @@ const sheet = new Img(96 * frames.length, 96);
 frames.forEach((f, i) => sheet.blit(f, 0, 0, 96, 96, i * 96, 0));
 write('public/assets/objects/guardian.png', sheet);
 
-console.log('v3 guardian composed.');
+console.log('guardian composed.');

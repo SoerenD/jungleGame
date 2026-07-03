@@ -213,6 +213,28 @@ carvePath([
   [32, 75],
 ]); // → hidden grove entrance
 
+// 6b. the two Quarries — ALL surface stone lives here (tier-2 obsidian aside):
+// stone is a place you travel to, not a pebble you trip over. Each is a
+// carved stone-floor pit with a dirt rim, ringed inside with rock nodes.
+const QUARRIES = [
+  { name: 'North Quarry', cx: 124, cy: 30 },
+  { name: 'South Quarry', cx: 48, cy: 126 },
+];
+for (const q of QUARRIES) {
+  fillCircle(q.cx, q.cy, 7, 'dirt', ['grass', 'swamp']);
+  fillCircle(q.cx, q.cy, 5.5, 'stone_floor', ['grass', 'dirt', 'swamp']);
+}
+carvePath([
+  [100, 100],
+  [112, 62],
+  [124, 36],
+]); // → north quarry
+carvePath([
+  [75, 120],
+  [60, 123],
+  [52, 126],
+]); // → south quarry (branches off the delta path, fords the river)
+
 // 7. beaches: grass adjacent to water becomes sand
 const sandify: [number, number][] = [];
 for (let y = 0; y < H; y++) {
@@ -257,6 +279,10 @@ const SPAWN = { tx: 100, ty: 100 };
 
 // ---------------------------------------------------------------- zones
 const zones = [
+  // quarry zones come first — zoneAt takes the first hit, and both overlap
+  // broader zones (the South Quarry sits inside the River Delta rectangle)
+  { name: 'North Quarry', x: 116, y: 22, w: 16, h: 16 },
+  { name: 'South Quarry', x: 40, y: 118, w: 16, h: 16 },
   { name: 'Spawn Clearing', x: 88, y: 88, w: 24, h: 24 },
   { name: 'Thundering Falls', x: 86, y: 6, w: 30, h: 34 },
   { name: 'Ancient Ruins', x: 140, y: 14, w: 48, h: 44 },
@@ -288,6 +314,8 @@ const foliage: { kind: string; tx: number; ty: number }[] = [];
 const occupied = new Set<string>();
 
 const treeDensity: Record<string, number> = {
+  'North Quarry': 0.02,
+  'South Quarry': 0.02,
   'Dense Grove': 0.4,
   'Deep Jungle': 0.16,
   'Spawn Clearing': 0.015,
@@ -297,17 +325,11 @@ const treeDensity: Record<string, number> = {
   'River Delta': 0.07,
   'Hidden Grove': 0.1,
 };
-const rockDensity: Record<string, number> = {
-  'Ancient Ruins': 0.09,
-  'Thundering Falls': 0.1,
-  'Deep Jungle': 0.012,
-  'Dense Grove': 0.015,
-  'Sunken Swamp': 0.02,
-  'River Delta': 0.015,
-  'Spawn Clearing': 0.004,
-  'Hidden Grove': 0.01,
-};
+// no scattered rocks: every surface rock node is authored into the two
+// Quarries below (tier-2 obsidian keeps its own scattered taunt spots)
 const bushDensity: Record<string, number> = {
+  'North Quarry': 0.005,
+  'South Quarry': 0.005,
   'Spawn Clearing': 0.05,
   'Hidden Grove': 0.22,
   'River Delta': 0.055,
@@ -318,6 +340,8 @@ const bushDensity: Record<string, number> = {
   'Sunken Swamp': 0.008,
 };
 const vineDensity: Record<string, number> = {
+  'North Quarry': 0,
+  'South Quarry': 0,
   'Sunken Swamp': 0.12,
   'Dense Grove': 0.07,
   'River Delta': 0.02,
@@ -358,15 +382,23 @@ for (let gy = 1; gy < H - 1; gy += 2) {
     if (!inBounds(x, y)) continue;
     const zone = zoneAt(x, y);
     const roll = rng();
-    if (roll < (treeDensity[zone] ?? 0.1)) tryPlaceNode('tree', x, y);
-    else if (roll < (treeDensity[zone] ?? 0.1) + (rockDensity[zone] ?? 0.01)) tryPlaceNode('rock', x, y);
-    else if (roll < (treeDensity[zone] ?? 0.1) + (rockDensity[zone] ?? 0.01) + (bushDensity[zone] ?? 0.01))
-      tryPlaceNode('fruit_bush', x, y);
-    else if (
-      roll <
-      (treeDensity[zone] ?? 0.1) + (rockDensity[zone] ?? 0.01) + (bushDensity[zone] ?? 0.01) + (vineDensity[zone] ?? 0.005)
-    )
-      tryPlaceNode('fiber_vine', x, y);
+    const tree = treeDensity[zone] ?? 0.1;
+    const bush = bushDensity[zone] ?? 0.01;
+    const vine = vineDensity[zone] ?? 0.005;
+    if (roll < tree) tryPlaceNode('tree', x, y);
+    else if (roll < tree + bush) tryPlaceNode('fruit_bush', x, y);
+    else if (roll < tree + bush + vine) tryPlaceNode('fiber_vine', x, y);
+  }
+}
+
+// the Quarries' rock clusters — a ring plus an inner scatter, with walkable
+// lanes between (placed without RNG, like the v2 nodes, so ids stay stable)
+for (const q of QUARRIES) {
+  for (const [dx, dy] of [
+    [-4, -1], [-3, -3], [-1, -4], [2, -4], [4, -2], [4, 1], [3, 3], [0, 4], [-3, 3],
+    [-1, 0], [1, -1], [2, 2], [-2, -2],
+  ] as [number, number][]) {
+    tryPlaceNode('rock', q.cx + dx, q.cy + dy);
   }
 }
 

@@ -1,4 +1,6 @@
 import { ITEMS, type ItemId, type StructureId } from '../content/items';
+import { loadVolumes, type AudioChannel } from '../config';
+import { itemIcon } from './icons';
 import { hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
@@ -13,13 +15,72 @@ let journey: JourneyState | null = null;
 let placingNow = false;
 let fightTimer: number | undefined;
 let buffTimer: number | undefined;
+/** fog-of-war layer for the minimap: 1px per chunk, rebuilt on fog events */
+let fogLayer: HTMLCanvasElement | null = null;
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+/** let a floating panel be dragged around by a handle element (e.g. its header) */
+function makeDraggable(panel: HTMLElement, handle: HTMLElement): void {
+  handle.style.cursor = 'move';
+  handle.style.touchAction = 'none';
+  let sx = 0;
+  let sy = 0;
+  let ox = 0;
+  let oy = 0;
+  let dragging = false;
+  handle.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    const rect = panel.getBoundingClientRect();
+    // pin to explicit left/top so it moves freely regardless of its CSS anchor
+    panel.style.left = `${rect.left}px`;
+    panel.style.top = `${rect.top}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    sx = e.clientX;
+    sy = e.clientY;
+    ox = rect.left;
+    oy = rect.top;
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture unsupported — dragging still works via move events */
+    }
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const nx = Math.max(0, Math.min(window.innerWidth - 40, ox + (e.clientX - sx)));
+    const ny = Math.max(0, Math.min(window.innerHeight - 40, oy + (e.clientY - sy)));
+    panel.style.left = `${nx}px`;
+    panel.style.top = `${ny}px`;
+  });
+  const end = (e: PointerEvent) => {
+    dragging = false;
+    try {
+      handle.releasePointerCapture(e.pointerId);
+    } catch {
+      /* nothing captured */
+    }
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  // keep a moved panel on-screen when the window shrinks
+  window.addEventListener('resize', () => {
+    if (!panel.style.left) return; // never dragged — still on its CSS anchor
+    const left = Math.max(0, Math.min(window.innerWidth - 40, parseFloat(panel.style.left) || 0));
+    const top = Math.max(0, Math.min(window.innerHeight - 40, parseFloat(panel.style.top) || 0));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+  });
+}
 
 const SEAL_BAR_ORDER: SealResourceId[] = ['wood', 'stone', 'fiber', 'fruit'];
 
 export function initHud(name: string, muted: boolean): void {
   meName = name;
+  loadInvOrder();
+  loadLoadout();
   const hud = document.createElement('div');
   hud.id = 'hud';
   hud.innerHTML = `
@@ -34,6 +95,7 @@ export function initHud(name: string, muted: boolean): void {
     <div id="fight-panel" data-testid="fight-panel">
       <div id="fight-title">⚔ The Guardian</div>
       <div id="fight-hpbar"><div id="fight-hpfill"></div></div>
+      <div id="fight-roster"></div>
       <div id="fight-timer"></div>
     </div>
     <div id="buff-label" data-testid="buff-label"></div>
@@ -81,24 +143,49 @@ export function initHud(name: string, muted: boolean): void {
     </div>
     <div id="inventory-panel" class="panel" data-testid="inventory-panel">
       <h3>Inventory</h3>
-      <div id="inv-list"></div>
+      <div id="inv-grid"></div>
+      <div id="inv-detail">
+        <div id="inv-detail-name"></div>
+        <div id="inv-detail-desc"></div>
+        <div id="inv-detail-actions"></div>
+      </div>
     </div>
     <div id="chat" data-testid="chat">
       <div id="chat-messages" class="panel" data-testid="chat-messages"></div>
       <input id="chat-input" data-testid="chat-input" placeholder="Press T to chat..." maxlength="200" autocomplete="off" />
     </div>
     <canvas id="minimap" width="150" height="150" data-testid="minimap" title="Minimap — white: you, yellow: others"></canvas>
+    <div id="loadout-bar" data-testid="loadout-bar" title="Your Loadout — drag Tools here; press 1–3 to pick the one in your hand"></div>
+    <div id="settings-panel" class="panel" data-testid="settings-panel">
+      <h3>⚙ Audio Settings</h3>
+      <div id="settings-sliders"></div>
+      <label class="settings-mute">
+        <input type="checkbox" id="settings-mute" data-testid="settings-mute" ${muted ? 'checked' : ''} />
+        Mute all sound
+      </label>
+      <button class="ui-btn" id="settings-close">Close</button>
+    </div>
     <div id="bottom-bar">
       <button class="ui-btn" id="btn-craft" data-testid="btn-craft">Craft [C]</button>
       <button class="ui-btn" id="btn-inv" data-testid="btn-inventory">Inventory [I]</button>
       <button class="ui-btn" id="btn-mute" data-testid="btn-mute">${muted ? '🔇 Muted' : '🔊 Sound'}</button>
+      <button class="ui-btn" id="btn-settings" data-testid="btn-settings" title="Audio settings">⚙</button>
     </div>
   `;
   document.body.appendChild(hud);
 
+  // the inventory window can be dragged around by its header
+  const invPanel = el('inventory-panel');
+  const invHeader = invPanel.querySelector('h3');
+  if (invHeader) makeDraggable(invPanel, invHeader as HTMLElement);
+
   el('btn-craft').onclick = () => togglePanel('craft-panel');
   el('btn-inv').onclick = () => togglePanel('inventory-panel');
   el('btn-mute').onclick = () => bus.emit('toggle-mute');
+  el('btn-settings').onclick = () => togglePanel('settings-panel');
+  el('settings-close').onclick = () => el('settings-panel').classList.remove('open');
+  el<HTMLInputElement>('settings-mute').onchange = () => bus.emit('toggle-mute');
+  renderSettings();
 
   const input = el<HTMLInputElement>('chat-input');
   input.addEventListener('focus', () => bus.emit('chat-focus'));
@@ -128,6 +215,8 @@ export function initHud(name: string, muted: boolean): void {
       togglePanel('inventory-panel');
     } else if (k === 'm') {
       bus.emit('toggle-mute');
+    } else if (k === '1' || k === '2' || k === '3') {
+      selectLoadout(Number(k) - 1);
     }
   });
 
@@ -135,6 +224,8 @@ export function initHud(name: string, muted: boolean): void {
     inv = next;
     renderInventory();
     renderRecipes();
+    renderLoadout();
+    emitHeld();
     if (openCrateId) renderCrate();
   });
   bus.on('chat', (msg: ChatMsg) => appendChat(msg));
@@ -151,6 +242,7 @@ export function initHud(name: string, muted: boolean): void {
   bus.on('toast', (text: string, kind: 'info' | 'good' | 'bad' = 'info') => toast(text, kind));
   bus.on('mute', (m: boolean) => {
     el('btn-mute').textContent = m ? '🔇 Muted' : '🔊 Sound';
+    el<HTMLInputElement>('settings-mute').checked = m;
   });
   bus.on('place-mode', (on: boolean) => {
     placingNow = on;
@@ -176,27 +268,55 @@ export function initHud(name: string, muted: boolean): void {
   bus.on('seal-near', (near: boolean) => {
     el('seal-panel').classList.toggle('open', near);
   });
-  bus.on('fight-start', (f: { hp: number; maxHp: number; summonedAt: number; awakeMs: number }) => {
-    el('fight-panel').classList.add('open');
-    setFightHp(f.hp, f.maxHp);
-    window.clearInterval(fightTimer);
-    // the countdown derives from summonedAt — identical on every client
-    const tick = () => {
-      const left = Math.max(0, f.summonedAt + f.awakeMs - Date.now());
-      const m = Math.floor(left / 60000);
-      const s = Math.floor((left % 60000) / 1000);
-      el('fight-timer').textContent = `slumbers again in ${m}:${String(s).padStart(2, '0')}`;
-    };
-    tick();
-    fightTimer = window.setInterval(tick, 250);
-    (el('fight-hpbar') as HTMLElement).dataset.max = String(f.maxHp);
+  bus.on('fog', (explored: Set<number>, chunksW: number, chunksH: number) => {
+    if (!fogLayer) fogLayer = document.createElement('canvas');
+    fogLayer.width = chunksW;
+    fogLayer.height = chunksH;
+    const fctx = fogLayer.getContext('2d')!;
+    fctx.fillStyle = 'rgba(4, 12, 6, 0.93)';
+    fctx.fillRect(0, 0, chunksW, chunksH);
+    for (const idx of explored) {
+      fctx.clearRect(idx % chunksW, Math.floor(idx / chunksW), 1, 1);
+    }
   });
+  bus.on(
+    'fight-start',
+    (f: { hp: number; maxHp: number; engagedAt: number | null; awakeMs: number; roster: string[] }) => {
+      el('fight-panel').classList.add('open');
+      window.clearInterval(fightTimer);
+      if (f.engagedAt === null) {
+        // DORMANT (ADR-0004): the Guardian roams, unstruck — no roster, no HP
+        // bar, no clock yet. Prompt the party to land the first strike.
+        el('fight-panel').classList.add('dormant');
+        el('fight-title').textContent = '⚔ The Guardian stirs';
+        el('fight-roster').textContent = '';
+        el('fight-timer').textContent = 'Gather your party, then STRIKE to begin the fight!';
+        return;
+      }
+      // ENGAGED: HP is fixed to the sealed roster; the countdown runs from
+      // engagedAt — identical on every client (ADR-0002 amended).
+      const engagedAt = f.engagedAt;
+      el('fight-panel').classList.remove('dormant');
+      setFightHp(f.hp, f.maxHp);
+      (el('fight-hpbar') as HTMLElement).dataset.max = String(f.maxHp);
+      el('fight-roster').textContent =
+        `Warded party (${f.roster.length}): ${f.roster.join(', ')}`;
+      const tick = () => {
+        const left = Math.max(0, engagedAt + f.awakeMs - Date.now());
+        const m = Math.floor(left / 60000);
+        const s = Math.floor((left % 60000) / 1000);
+        el('fight-timer').textContent = `slumbers again in ${m}:${String(s).padStart(2, '0')}`;
+      };
+      tick();
+      fightTimer = window.setInterval(tick, 250);
+    },
+  );
   bus.on('fight-hp', (hp: number) => {
     const max = Number((el('fight-hpbar') as HTMLElement).dataset.max ?? 1);
     setFightHp(hp, max);
   });
   bus.on('fight-end', () => {
-    el('fight-panel').classList.remove('open');
+    el('fight-panel').classList.remove('open', 'dormant');
     window.clearInterval(fightTimer);
   });
   bus.on('buff', (until: number) => {
@@ -294,6 +414,8 @@ export function initHud(name: string, muted: boolean): void {
 
   renderInventory();
   renderRecipes();
+  renderLoadout();
+  emitHeld();
   void initMinimap();
 }
 
@@ -327,14 +449,14 @@ function renderCrate(): void {
   const id = openCrateId;
   const inside = el('crate-contents');
   inside.innerHTML = '';
-  const contents = Object.entries(crateContents).filter(([, n]) => (n ?? 0) > 0) as [ItemId, number][];
+  const contents = (Object.entries(crateContents).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
   if (contents.length === 0) inside.innerHTML = '<div class="col-empty">empty</div>';
   for (const [item, n] of contents) {
     inside.appendChild(crateRow(item, n, 'Take', () => bus.emit('crate-withdraw', id, item, n)));
   }
   const pack = el('crate-pack');
   pack.innerHTML = '';
-  const mine = Object.entries(inv).filter(([, n]) => (n ?? 0) > 0) as [ItemId, number][];
+  const mine = (Object.entries(inv).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
   if (mine.length === 0) pack.innerHTML = '<div class="col-empty">nothing to store</div>';
   for (const [item, n] of mine) {
     pack.appendChild(crateRow(item, n, 'Put', () => bus.emit('crate-deposit', id, item, n)));
@@ -396,6 +518,9 @@ async function initMinimap(): Promise<void> {
     ctx.fillRect(worldData.sealMonument.tx * 16 * sx - 2, worldData.sealMonument.ty * 16 * sy - 2, 4, 4);
     ctx.fillStyle = '#c03a2b';
     ctx.fillRect((worldData.guardianHome.tx + 1.5) * 16 * sx - 2, (worldData.guardianHome.ty + 1.5) * 16 * sy - 2, 4, 4);
+    // unexplored chunks stay dark (landmarks hide until discovered; the
+    // Players themselves and the treasure ✕ draw over the fog)
+    if (fogLayer) ctx.drawImage(fogLayer, 0, 0, canvas.width, canvas.height);
     if (!pos) return;
     ctx.fillStyle = '#ffd166';
     for (const o of pos.others) ctx.fillRect(o.x * sx - 1, o.y * sy - 1, 3, 3);
@@ -420,6 +545,42 @@ async function initMinimap(): Promise<void> {
 
 function togglePanel(id: string): void {
   el(id).classList.toggle('open');
+}
+
+// ---------------------------------------------------------------- audio settings
+/** the four mixer channels, in display order (see config.ts AUDIO_CHANNELS) */
+const VOLUME_CHANNELS: { id: AudioChannel; label: string }[] = [
+  { id: 'master', label: '🔊 Master' },
+  { id: 'ambience', label: '🌴 Jungle ambience' },
+  { id: 'music', label: '🥁 Guardian drums' },
+  { id: 'sfx', label: '🪓 Sound effects' },
+];
+
+/**
+ * Build the volume sliders from the saved mix. Each slider streams its value to
+ * GameScene (which owns the Phaser mixer and persistence) as it is dragged.
+ */
+function renderSettings(): void {
+  const box = el('settings-sliders');
+  box.innerHTML = '';
+  const vols = loadVolumes();
+  for (const ch of VOLUME_CHANNELS) {
+    const pct = Math.round(vols[ch.id] * 100);
+    const row = document.createElement('div');
+    row.className = 'settings-row';
+    row.innerHTML = `
+      <label for="vol-${ch.id}">${ch.label}</label>
+      <input type="range" id="vol-${ch.id}" data-testid="vol-${ch.id}" min="0" max="100" step="1" value="${pct}" />
+      <span class="settings-val" id="vol-val-${ch.id}">${pct}%</span>
+    `;
+    box.appendChild(row);
+    const slider = row.querySelector('input') as HTMLInputElement;
+    slider.addEventListener('input', () => {
+      const v = Number(slider.value);
+      el(`vol-val-${ch.id}`).textContent = `${v}%`;
+      bus.emit('set-volume', ch.id, v / 100);
+    });
+  }
 }
 
 /**
@@ -529,86 +690,338 @@ function toast(text: string, kind: 'info' | 'good' | 'bad'): void {
   window.setTimeout(() => div.remove(), 3200);
 }
 
-function renderInventory(): void {
-  const box = el('inv-list');
-  box.innerHTML = '';
-  const entries = Object.entries(inv).filter(([, n]) => (n ?? 0) > 0) as [ItemId, number][];
-  if (entries.length === 0) {
-    box.innerHTML = '<div class="inv-row"><span style="color:var(--dim)">Empty — go harvest something! (E)</span></div>';
-    return;
+// ---------------------------------------------------------------- slot inventory
+
+/** 6 columns × 3 rows — a compact pack (extra item kinds spill into more rows) */
+const INV_COLS = 6;
+const INV_SLOTS = 18;
+/** slot → item; the Player's arrangement, a purely cosmetic UI preference */
+let invOrder: (ItemId | null)[] = [];
+let invSelected: ItemId | null = null;
+
+const invOrderKey = () => `jungle-world:invorder:${meName}`;
+
+function loadInvOrder(): void {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(invOrderKey()) ?? '[]') as unknown;
+    invOrder = Array.isArray(parsed) ? (parsed as (ItemId | null)[]).slice(0, INV_SLOTS) : [];
+  } catch {
+    invOrder = [];
   }
-  const order = { resource: 0, tool: 1, consumable: 2, food: 3, structure: 4 };
-  entries.sort((a, b) => order[ITEMS[a[0]].kind] - order[ITEMS[b[0]].kind] || a[0].localeCompare(b[0]));
-  for (const [id, count] of entries) {
-    const def = ITEMS[id];
-    const row = document.createElement('div');
-    row.className = 'inv-row';
-    row.setAttribute('data-testid', `inv-${id}`);
-    row.title = def.desc;
-    const label = document.createElement('span');
-    label.textContent = `${def.name} × ${count}`;
-    row.appendChild(label);
-    if (def.kind === 'structure') {
-      const btn = document.createElement('button');
-      btn.className = 'ui-btn';
-      btn.textContent = 'Place';
-      btn.setAttribute('data-testid', `place-${id}`);
-      btn.onclick = () => bus.emit('request-place', id as StructureId);
-      row.appendChild(btn);
-    } else if (def.kind === 'food') {
-      const btn = document.createElement('button');
-      btn.className = 'ui-btn';
-      btn.textContent = 'Eat';
-      btn.setAttribute('data-testid', `eat-${id}`);
-      btn.onclick = () => bus.emit('eat', id);
-      row.appendChild(btn);
-    } else {
-      const kind = document.createElement('span');
-      kind.style.color = 'var(--dim)';
-      kind.style.fontSize = '11px';
-      kind.textContent = def.kind;
-      row.appendChild(kind);
+  while (invOrder.length < INV_SLOTS) invOrder.push(null);
+}
+
+function saveInvOrder(): void {
+  localStorage.setItem(invOrderKey(), JSON.stringify(invOrder));
+}
+
+// ---------------------------------------------------------------- v4: the Loadout
+
+/** three quick-slots holding ready Tools; exactly one is in-hand (keys 1–3) */
+const LOADOUT_SLOTS = 3;
+let loadout: (ItemId | null)[] = [null, null, null];
+let loadoutSel = 0;
+
+const loadoutKey = () => `jungle-world:loadout:${meName}`;
+
+function loadLoadout(): void {
+  loadout = [null, null, null];
+  loadoutSel = 0;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(loadoutKey()) ?? 'null') as
+      | { slots?: (ItemId | null)[]; sel?: number }
+      | null;
+    if (parsed && Array.isArray(parsed.slots)) {
+      for (let i = 0; i < LOADOUT_SLOTS; i++) loadout[i] = parsed.slots[i] ?? null;
     }
-    box.appendChild(row);
+    if (parsed && Number.isInteger(parsed.sel)) {
+      loadoutSel = Math.max(0, Math.min(LOADOUT_SLOTS - 1, parsed.sel!));
+    }
+  } catch {
+    /* corrupt entry — start empty */
   }
 }
 
+function saveLoadout(): void {
+  localStorage.setItem(loadoutKey(), JSON.stringify({ slots: loadout, sel: loadoutSel }));
+}
+
+/** only Tools are equippable; drop unowned Tools and auto-seat newly-owned ones */
+function reconcileLoadout(): void {
+  const ownedTools = (Object.entries(inv) as [ItemId, number][])
+    .filter(([id, n]) => (n ?? 0) > 0 && ITEMS[id]?.kind === 'tool')
+    .map(([id]) => id);
+  for (let i = 0; i < LOADOUT_SLOTS; i++) {
+    if (loadout[i] && !ownedTools.includes(loadout[i]!)) loadout[i] = null;
+  }
+  for (const id of ownedTools) {
+    if (loadout.includes(id)) continue;
+    const free = loadout.indexOf(null);
+    if (free >= 0) loadout[free] = id;
+  }
+}
+
+/** the currently in-hand item, or null when the selected slot is empty/unowned */
+function heldItem(): ItemId | null {
+  const id = loadout[loadoutSel];
+  return id && (inv[id] ?? 0) > 0 ? id : null;
+}
+
+/** tell GameScene which single item is in-hand (broadcast + used on hit RPCs) */
+function emitHeld(): void {
+  bus.emit('held', heldItem());
+}
+
+function selectLoadout(i: number): void {
+  if (i < 0 || i >= LOADOUT_SLOTS) return;
+  loadoutSel = i;
+  saveLoadout();
+  renderLoadout();
+  emitHeld();
+}
+
+function renderLoadout(): void {
+  reconcileLoadout();
+  saveLoadout();
+  const bar = el('loadout-bar');
+  bar.innerHTML = '';
+  for (let i = 0; i < LOADOUT_SLOTS; i++) {
+    const id = loadout[i];
+    const slot = document.createElement('div');
+    slot.className = 'loadout-slot' + (i === loadoutSel ? ' selected' : '') + (id ? ' filled' : '');
+    slot.setAttribute('data-testid', `loadout-${i}`);
+    const key = document.createElement('span');
+    key.className = 'loadout-key';
+    key.textContent = String(i + 1);
+    slot.appendChild(key);
+    if (id) {
+      const icon = document.createElement('img');
+      icon.className = 'inv-icon';
+      icon.src = itemIcon(id);
+      icon.alt = ITEMS[id].name;
+      icon.draggable = false;
+      slot.appendChild(icon);
+      slot.title = `${ITEMS[id].name} — press ${i + 1} to hold it`;
+    } else {
+      slot.title = `Loadout slot ${i + 1} — drag a Tool here, press ${i + 1} to select`;
+    }
+    // accept a Tool dragged from the inventory grid
+    slot.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('application/x-jw-tool')) {
+        e.preventDefault();
+        slot.classList.add('drop');
+      }
+    });
+    slot.addEventListener('dragleave', () => slot.classList.remove('drop'));
+    slot.addEventListener('drop', (e) => {
+      e.preventDefault();
+      slot.classList.remove('drop');
+      const toolId = e.dataTransfer?.getData('application/x-jw-tool') as ItemId;
+      if (!toolId) return;
+      // no duplicates — clear the Tool from any other slot first
+      for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === toolId) loadout[k] = null;
+      loadout[i] = toolId;
+      saveLoadout();
+      renderLoadout();
+      emitHeld();
+    });
+    slot.onclick = () => selectLoadout(i);
+    bar.appendChild(slot);
+  }
+}
+
+/** what a slot's item does on double-click / via the detail-bar button */
+function invUse(id: ItemId): void {
+  const kind = ITEMS[id].kind;
+  if (kind === 'structure') bus.emit('request-place', id as StructureId);
+  else if (kind === 'food') bus.emit('eat', id);
+}
+
+function renderInventory(): void {
+  const grid = el('inv-grid');
+  grid.innerHTML = '';
+  const present = new Map(
+    // skip any item id no longer known (e.g. a retired Structure still in a save)
+    (Object.entries(inv) as [ItemId, number][]).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id]),
+  );
+  // vacate slots whose item is gone, then seat newcomers in the first free slot
+  for (let i = 0; i < invOrder.length; i++) {
+    const it = invOrder[i];
+    if (it && !present.has(it)) invOrder[i] = null;
+  }
+  const kindOrder = { resource: 0, tool: 1, consumable: 2, food: 3, structure: 4 };
+  const newcomers = [...present.keys()]
+    .filter((id) => !invOrder.includes(id))
+    .sort((a, b) => kindOrder[ITEMS[a].kind] - kindOrder[ITEMS[b].kind] || a.localeCompare(b));
+  for (const id of newcomers) {
+    const free = invOrder.indexOf(null);
+    if (free >= 0) invOrder[free] = id;
+    else invOrder.push(id);
+  }
+  saveInvOrder();
+  if (invSelected && !present.has(invSelected)) invSelected = null;
+
+  for (let i = 0; i < Math.max(INV_SLOTS, invOrder.length); i++) {
+    const id = invOrder[i] ?? null;
+    const slot = document.createElement('div');
+    slot.className = 'inv-slot';
+    if (id) {
+      const def = ITEMS[id];
+      slot.classList.add('filled');
+      if (id === invSelected) slot.classList.add('selected');
+      slot.setAttribute('data-testid', `inv-${id}`);
+      slot.title = `${def.name} — ${def.desc}`;
+      const icon = document.createElement('img');
+      icon.className = 'inv-icon';
+      icon.src = itemIcon(id);
+      icon.alt = def.name;
+      icon.draggable = false;
+      slot.appendChild(icon);
+      const count = present.get(id)!;
+      if (count > 1) {
+        const badge = document.createElement('span');
+        badge.className = 'inv-count';
+        badge.textContent = count > 999 ? '999+' : String(count);
+        slot.appendChild(badge);
+      }
+      slot.draggable = true;
+      slot.addEventListener('dragstart', (e) => {
+        e.dataTransfer!.setData('text/plain', String(i));
+        // extra payloads so the item can also be dropped onto the Loadout bar
+        // (Tools) or the game canvas to place it (Structures)
+        if (ITEMS[id].kind === 'tool') e.dataTransfer!.setData('application/x-jw-tool', id);
+        else if (ITEMS[id].kind === 'structure') e.dataTransfer!.setData('application/x-jw-structure', id);
+        e.dataTransfer!.effectAllowed = 'move';
+        slot.classList.add('dragging');
+      });
+      slot.addEventListener('dragend', () => slot.classList.remove('dragging'));
+      slot.onclick = () => {
+        invSelected = id;
+        renderInventory();
+      };
+      slot.ondblclick = () => invUse(id);
+    }
+    // every slot (also empty ones) is a drop target — dropping swaps
+    slot.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      slot.classList.add('drop');
+    });
+    slot.addEventListener('dragleave', () => slot.classList.remove('drop'));
+    slot.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const from = Number(e.dataTransfer!.getData('text/plain'));
+      if (!Number.isInteger(from) || from === i || invOrder[from] == null) return;
+      [invOrder[from], invOrder[i]] = [invOrder[i] ?? null, invOrder[from]];
+      saveInvOrder();
+      renderInventory();
+    });
+    grid.appendChild(slot);
+  }
+  renderInvDetail(present);
+}
+
+/** name, description and the Place/Eat action for the selected slot */
+function renderInvDetail(present: Map<ItemId, number>): void {
+  const name = el('inv-detail-name');
+  const desc = el('inv-detail-desc');
+  const actions = el('inv-detail-actions');
+  actions.innerHTML = '';
+  if (!invSelected) {
+    name.textContent = present.size === 0 ? 'Empty — go harvest something! (E)' : '';
+    desc.textContent = present.size === 0 ? '' : 'Click an item for details · drag to arrange your pack.';
+    return;
+  }
+  const def = ITEMS[invSelected];
+  name.textContent = `${def.name} × ${present.get(invSelected) ?? 0}`;
+  desc.textContent = def.desc;
+  if (def.kind === 'structure' || def.kind === 'food') {
+    const btn = document.createElement('button');
+    btn.className = 'ui-btn';
+    btn.textContent = def.kind === 'structure' ? 'Place' : 'Eat';
+    btn.setAttribute('data-testid', `${def.kind === 'structure' ? 'place' : 'eat'}-${invSelected}`);
+    const id = invSelected;
+    btn.onclick = () => invUse(id);
+    actions.appendChild(btn);
+  }
+}
+
+/** one ingredient chip: item icon + required count, greyed/red when short */
+function ingChip(id: ItemId, count: number, have: number, tool = false): HTMLElement {
+  const ok = have >= count;
+  const chip = document.createElement('span');
+  chip.className = 'recipe-ing' + (tool ? ' recipe-tool' : '') + (ok ? '' : ' lack');
+  const name = ITEMS[id]?.name ?? id;
+  chip.title = tool
+    ? `needs ${name} in your pack (not consumed) — you have ${have}`
+    : `${name} — need ${count}, you have ${have}`;
+  const img = document.createElement('img');
+  img.className = 'recipe-ing-icon';
+  img.src = itemIcon(id);
+  img.alt = name;
+  img.draggable = false;
+  chip.appendChild(img);
+  const badge = document.createElement('span');
+  badge.className = 'recipe-ing-count';
+  badge.textContent = tool ? '🔧' : String(count);
+  chip.appendChild(badge);
+  return chip;
+}
+
+/**
+ * The crafting menu is image-driven: every recipe is a card showing the output
+ * sprite and its ingredient icons (with count badges). The whole card crafts on
+ * click; names and full costs live in the hover tooltip.
+ */
 function renderRecipes(): void {
   const box = el('recipe-list');
   box.innerHTML = '';
   for (const r of RECIPES) {
     const def = ITEMS[r.output];
-    const costParts: string[] = [];
     let craftable = true;
+    const costText: string[] = [];
+
+    const cost = document.createElement('div');
+    cost.className = 'recipe-cost';
     for (const [res, count] of Object.entries(r.cost)) {
-      const have = inv[res as ItemId] ?? 0;
-      const ok = have >= (count as number);
-      if (!ok) craftable = false;
-      costParts.push(`<span class="${ok ? '' : 'lack'}">${count} ${res} (${have})</span>`);
+      const resId = res as ItemId;
+      const need = count as number;
+      const have = inv[resId] ?? 0;
+      if (have < need) craftable = false;
+      costText.push(`${need} ${ITEMS[resId]?.name ?? res}`);
+      cost.appendChild(ingChip(resId, need, have));
     }
-    let toolNote = '';
-    if (r.requiresTool && (inv[r.requiresTool] ?? 0) <= 0) {
-      craftable = false;
-      toolNote = `<div class="need-tool">needs ${ITEMS[r.requiresTool].name}</div>`;
+    if (r.requiresTool) {
+      const have = inv[r.requiresTool] ?? 0;
+      if (have <= 0) craftable = false;
+      costText.push(`needs ${ITEMS[r.requiresTool].name}`);
+      cost.appendChild(ingChip(r.requiresTool, 1, have, true));
     }
-    const row = document.createElement('div');
-    row.className = 'recipe' + (craftable ? '' : ' uncraftable');
-    row.setAttribute('data-testid', `recipe-${r.id}`);
-    row.title = def.desc;
-    row.innerHTML = `
-      <div>
-        <div class="r-name">${def.name} <span style="color:var(--dim);font-size:11px">(${r.kind})</span></div>
-        <div class="cost">${costParts.join(' · ')}</div>
-        ${toolNote}
-      </div>
-    `;
-    const btn = document.createElement('button');
-    btn.className = 'ui-btn';
-    btn.textContent = 'Craft';
-    btn.disabled = !craftable;
-    btn.setAttribute('data-testid', `craft-${r.id}`);
-    btn.onclick = () => bus.emit('craft', r.id);
-    row.appendChild(btn);
-    box.appendChild(row);
+
+    const card = document.createElement('div');
+    card.className = 'recipe-card' + (craftable ? '' : ' uncraftable');
+    card.setAttribute('data-testid', `recipe-${r.id}`);
+    const countText = r.count > 1 ? ` ×${r.count}` : '';
+    card.title = `${def.name}${countText} (${r.kind})\n${def.desc}\nCost: ${costText.join(', ')}`;
+
+    const out = document.createElement('div');
+    out.className = 'recipe-out';
+    out.setAttribute('data-testid', `craft-${r.id}`);
+    const outImg = document.createElement('img');
+    outImg.className = 'recipe-out-icon';
+    outImg.src = itemIcon(r.output);
+    outImg.alt = def.name;
+    outImg.draggable = false;
+    out.appendChild(outImg);
+    if (r.count > 1) {
+      const c = document.createElement('span');
+      c.className = 'recipe-out-count';
+      c.textContent = `×${r.count}`;
+      out.appendChild(c);
+    }
+    card.appendChild(out);
+    card.appendChild(cost);
+
+    if (craftable) card.onclick = () => bus.emit('craft', r.id);
+    box.appendChild(card);
   }
 }

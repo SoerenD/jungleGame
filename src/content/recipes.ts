@@ -16,6 +16,11 @@ export const RECIPES: Recipe[] = [
   { id: 'machete', output: 'machete', count: 1, cost: { wood: 1, stone: 2 }, kind: 'tool' },
   { id: 'hammer', output: 'hammer', count: 1, cost: { wood: 2, stone: 2 }, kind: 'tool' },
 
+  // v4 tier-1 Tools — basic Resources only, no Guardian drops, so a group can
+  // craft them before the first fight
+  { id: 'bow', output: 'bow', count: 1, cost: { wood: 2, fiber: 3, stone: 1 }, kind: 'tool' },
+  { id: 'hand_torch', output: 'hand_torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'tool' },
+
   // v2 tier-2 tools — every recipe demands Guardian Scales (fight at least
   // once) AND planks: tier 2 builds on refined wood (Sawmill required)
   { id: 'ancient_axe', output: 'ancient_axe', count: 1, cost: { guardian_scale: 3, plank: 3, stone: 2 }, kind: 'tool' },
@@ -28,19 +33,16 @@ export const RECIPES: Recipe[] = [
   { id: 'campfire', output: 'campfire', count: 1, cost: { wood: 3, stone: 2 }, kind: 'structure' },
   { id: 'torch', output: 'torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'structure' },
   { id: 'hut_wall', output: 'hut_wall', count: 1, cost: { wood: 4 }, requiresTool: 'hammer', kind: 'structure' },
-  { id: 'fence', output: 'fence', count: 1, cost: { wood: 2 }, kind: 'structure' },
   { id: 'bridge', output: 'bridge', count: 1, cost: { wood: 3, fiber: 2 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'crate', output: 'crate', count: 1, cost: { wood: 4, stone: 1 }, kind: 'structure' },
   { id: 'tiki_statue', output: 'tiki_statue', count: 1, cost: { stone: 4, fiber: 1 }, kind: 'structure' },
   { id: 'fruit_basket', output: 'fruit_basket', count: 1, cost: { fiber: 2, fruit: 3 }, kind: 'structure' },
-  { id: 'stone_path', output: 'stone_path', count: 1, cost: { stone: 2 }, kind: 'structure' },
 
   // v3 — the Sawmill is tier-1 (the gateway to refined wood)...
   { id: 'sawmill', output: 'sawmill', count: 1, cost: { wood: 6, stone: 4 }, requiresTool: 'hammer', kind: 'structure' },
   // ...and the new functional Structures + decor consume its planks
   { id: 'hammock', output: 'hammock', count: 1, cost: { plank: 2, fiber: 3 }, kind: 'structure' },
   { id: 'signpost', output: 'signpost', count: 1, cost: { plank: 1, fiber: 1 }, kind: 'structure' },
-  { id: 'plank_floor', output: 'plank_floor', count: 1, cost: { plank: 1 }, kind: 'structure' },
   { id: 'table', output: 'table', count: 1, cost: { plank: 3 }, kind: 'structure' },
 
   // v2 tier-2 structures ("tier 2 builds on refined wood": planks replace raw wood)

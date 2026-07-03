@@ -16,12 +16,12 @@ the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*
     variants). Adaptations: swamp tile is the grass tile hue-shifted to olive;
     the two grass variants composite transparent tuft/mound overlays onto the
     grass base.
-  - `public/assets/objects/` — `tree.png`, `stump.png`, `tablet.png` (parchment),
+  - `public/assets/objects/` — `tree.png`, `stump.png`,
     `golden-idol.png` (statue recolored gold), `rock.png`,
     `rock-depleted.png` (pot shards desaturated to rock gray),
     `bush-fruit.png` (bush with hand-drawn red berries added),
     `bush-empty.png`, `campfire.png` (pack flame over hand-drawn stone ring),
-    `crate.png`, `fence.png`, `bridge.png`, `hut-wall.png`, `statue.png`,
+    `crate.png`, `bridge.png`, `hut-wall.png`, `statue.png`,
     `fruit-basket.png`, `stone-path.png`, `ruin-pillar.png` — all cropped from
     `Overworld.png` / `objects.png`.
   - `public/assets/characters/character.png` — copy of `NPC_test.png`
@@ -63,9 +63,8 @@ the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*
     pixels:
     - `objects/sawmill.png` — timber frame cropped from `hut-wall.png`, saw
       blade / work table / plank stack drawn.
-    - `objects/hammock.png`, `objects/signpost.png`, `objects/plank-floor.png`,
-      `objects/table.png` — drawn plank-and-post pixel art (original, no
-      license concerns).
+    - `objects/hammock.png`, `objects/signpost.png`, `objects/table.png` —
+      drawn plank-and-post pixel art (original, no license concerns).
 
 ## CC0 Background Ambience (Forest Ambience) — FGResources
 
@@ -105,5 +104,19 @@ v2 additions (original, no license concerns; replace with sourced CC0 later):
   - `public/assets/audio/splash.wav` — fishing catch landed
   - `public/assets/audio/munch.wav` — eating cooked fish
   - `public/assets/audio/guardian-drums.wav` — looping fight drums
-- The `seal-barrier` wall shimmer and red danger-tile telegraphs are runtime
-  canvas textures / tinted rectangles generated in code (no asset files).
+- The red danger-tile telegraphs are runtime tinted rectangles generated in
+  code (no asset files).
+
+v4 additions (original pixel art, no license concerns; drawn from primitives):
+
+- `public/assets/objects/seal-barrier.png` — the arena Seal barrier, an authored
+  violet rune-stone gate composed by `tools/compose-seal-barrier.ts` (replaces
+  the old runtime canvas shimmer).
+- `public/assets/objects/tablet.png` — the Ancient Tablet, an upright carved
+  rune stele composed by `tools/compose-tablet.ts` (replaces the earlier
+  parchment crop).
+- The Bow's `arrow` projectile is a small runtime canvas texture drawn in
+  `BootScene` (no asset file).
+- `public/assets/audio/pick.wav` — pickaxe-on-stone clink (rock/obsidian
+  harvest), synthesized by `tools/make-v4-audio.ts` (16-bit WAV, same pipeline
+  as `tools/make-v2-audio.ts`). TODO: replace with sourced CC0 later.

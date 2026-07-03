@@ -1,7 +1,9 @@
 import {
   DEV_FIGHT,
+  DEV_FIGHT_HP,
+  DORMANT_TIMEOUT_MS,
   GUARDIAN_AWAKE_MS,
-  GUARDIAN_MAX_HP,
+  HP_PER_HEAD,
   GUARDIAN_SCALE_DROP,
   EXHAUSTION_KNOCKDOWNS,
   LATENCY_MAX,
@@ -23,10 +25,11 @@ import {
   isDangerousAt,
   waveInfoAt,
 } from '../content/guardian';
-import { ITEMS, type ItemId, type StructureId } from '../content/items';
-import { NODE_TYPES, holdsBonusTool, type NodeTypeId } from '../content/nodeTypes';
+import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
+import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
+import { asset } from '../paths';
 import type {
   Appearance,
   AvatarId,
@@ -104,11 +107,17 @@ interface DbPlayer {
   journey?: JourneyState;
   /** the Player's Hammock tile — Exhaustion and login wake here (one per Player) */
   wakePoint?: { tx: number; ty: number };
+  /** fog-of-war chunk indices this Player has explored (persisted like journey) */
+  explored?: number[];
 }
 
 /** a live fight; the private fields never leave the server */
 interface DbFight {
   summonedAt: number;
+  /** null while dormant; the server timestamp of the first landed hit (ADR-0004) */
+  engagedAt: number | null;
+  /** the party inside the arena at the first strike — HP scales to it, the Ward seals it in */
+  roster: string[];
   hp: number;
   maxHp: number;
   participants: string[];
@@ -156,7 +165,7 @@ const BOT_DEFS: { name: string; appearance: Appearance; lines: string[] }[] = [
     lines: [
       'the swamp smells... interesting',
       'stacking stones like a pro',
-      'gonna build a fence around camp later',
+      'gonna build a hut wall around camp later',
       'watch out, I take the last hit >:)',
       'this jungle heals fast',
       'who put a crate in the river delta?',
@@ -198,7 +207,7 @@ export class MockBackend implements Backend {
   private slumberTimer: number | null = null;
 
   async init(): Promise<void> {
-    const res = await fetch('/map/world-data.json');
+    const res = await fetch(asset('/map/world-data.json'));
     this.world = (await res.json()) as WorldData;
     for (const n of this.world.nodes) {
       this.nodesByTile.set(tileKey(n.tx, n.ty), n);
@@ -213,6 +222,23 @@ export class MockBackend implements Backend {
     this.db.world.fight ??= null;
     this.db.crates ??= {};
     this.db.sawmills ??= {};
+    // drop anything whose id is no longer a known item — retired Structures/Tools
+    // (e.g. the fence, the Stone Path) vanish for good instead of crashing later
+    // lookups in placed structures, player packs, and crate storage
+    for (const [key, s] of Object.entries(this.db.structures)) {
+      if (!ITEMS[s.type]) delete this.db.structures[key];
+    }
+    for (const p of Object.values(this.db.players)) {
+      for (const k of Object.keys(p.inventory)) {
+        if (!ITEMS[k as ItemId]) delete p.inventory[k as ItemId];
+      }
+    }
+    for (const contents of Object.values(this.db.crates ?? {})) {
+      for (const k of Object.keys(contents)) {
+        if (!ITEMS[k as ItemId]) delete contents[k as ItemId];
+      }
+    }
+    this.saveSoon();
     if (DEV_FIGHT) this.db.world.seal.broken = true; // ?fight — jump straight to the Guardian
     this.scheduleSlumberCheck();
     window.addEventListener('beforeunload', () => this.saveNow());
@@ -280,7 +306,7 @@ export class MockBackend implements Backend {
     const s = this.db.structures[tileKey(tx, ty)];
     if (b === 1) return s?.type === 'bridge';
     if (b !== 0) return false;
-    if (s && ITEMS[s.type].blocks) return false;
+    if (s && ITEMS[s.type]?.blocks) return false;
     const n = this.nodesByTile.get(tileKey(tx, ty));
     if (n && NODE_TYPES[n.type].blocks && this.nodeState(n).hp > 0) return false;
     return true;
@@ -335,7 +361,17 @@ export class MockBackend implements Backend {
       isNew,
       introSeen: !!p.introSeen,
       journey: this.journeyState(p),
+      explored: [...(p.explored ?? [])],
     };
+  }
+
+  async markExplored(chunks: number[]): Promise<void> {
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return;
+    const seen = new Set(p.explored ?? []);
+    for (const c of chunks) seen.add(c);
+    p.explored = [...seen];
+    this.saveSoon();
   }
 
   // ------------------------------------------------------------ the Journey
@@ -432,7 +468,48 @@ export class MockBackend implements Backend {
   private fightState(): FightState | null {
     const f = this.db.world!.fight;
     if (!f) return null;
-    return { summonedAt: f.summonedAt, hp: f.hp, maxHp: f.maxHp, participants: [...f.participants] };
+    return {
+      summonedAt: f.summonedAt,
+      engagedAt: f.engagedAt,
+      roster: [...f.roster],
+      hp: f.hp,
+      maxHp: f.maxHp,
+      participants: [...f.participants],
+    };
+  }
+
+  /**
+   * Arena-local center spot of the entrance (the sealGate the Ward re-seals).
+   * The gate sits just below the arena's bottom row, so the ay is clamped into
+   * the arena — the Guardian's wave-0 leap lands in front of the doorway.
+   */
+  private entranceSpot(): { ax: number; ay: number } {
+    const a = this.world.arena;
+    const g = this.world.sealGate;
+    const mid = g[Math.floor(g.length / 2)] ?? { tx: a.x + Math.floor(a.w / 2), ty: a.y + a.h - 1 };
+    return {
+      ax: Math.max(0, Math.min(a.w - 1, mid.tx - a.x)),
+      ay: Math.max(0, Math.min(a.h - 1, mid.ty - a.y)),
+    };
+  }
+
+  /**
+   * Names of the Players (the local Player + bots) whose tile falls inside the
+   * arena rect right now — the roster snapshot taken at the first strike. In a
+   * SupabaseBackend this reads live presence; the Mock has one real Player.
+   */
+  private playersInArena(): string[] {
+    const a = this.world.arena;
+    const inRect = (x: number, y: number) => {
+      const tx = Math.floor(x / TILE);
+      const ty = Math.floor(y / TILE);
+      return tx >= a.x && tx < a.x + a.w && ty >= a.y && ty < a.y + a.h;
+    };
+    const names: string[] = [];
+    const me = this.me ? this.db.players[this.me] : null;
+    if (this.me && me && inRect(me.x, me.y)) names.push(this.me);
+    for (const b of this.bots) if (inRect(b.x, b.y)) names.push(b.name);
+    return names;
   }
 
   private emitQuest(): void {
@@ -441,7 +518,10 @@ export class MockBackend implements Backend {
 
   // ---------------------------------------------------------------- realtime-ish
 
-  sendPosition(x: number, y: number, _dir: Dir, _moving: boolean): void {
+  sendPosition(x: number, y: number, _dir: Dir, _moving: boolean, _held?: ItemId): void {
+    // `_held` is a Realtime-broadcast field in a real backend (a SupabaseBackend
+    // relays it to other clients for the overhead icon); the single-client Mock
+    // has no peers to echo it to, so it is accepted and dropped.
     const p = this.me ? this.db.players[this.me] : null;
     if (p) {
       p.x = x;
@@ -465,23 +545,27 @@ export class MockBackend implements Backend {
 
   // ---------------------------------------------------------------- RPCs (atomic in Postgres later)
 
-  async hitNode(nodeId: string): Promise<HitResult> {
+  async hitNode(nodeId: string, withTool?: ToolId): Promise<HitResult> {
     await this.lag();
-    return this.doHit(nodeId, this.me);
+    return this.doHit(nodeId, this.me, withTool);
   }
 
   /** Shared mutation path for the local player and bots — server-ordered by JS single-threading. */
-  private doHit(nodeId: string, who: string | null): HitResult {
+  private doHit(nodeId: string, who: string | null, withTool?: ToolId): HitResult {
     const sn = this.nodesById.get(nodeId);
     if (!sn) return { ok: false, reason: 'UNKNOWN_NODE' };
     const t = NODE_TYPES[sn.type];
     const state = this.nodeState(sn);
     if (state.hp <= 0) return { ok: false, reason: 'DEPLETED' };
     const inv = who ? this.db.players[who]?.inventory ?? {} : {};
-    if (t.requiredTool && !(who && (inv[t.requiredTool] ?? 0) > 0)) {
+    // trust the claimed in-hand Tool only as far as the Player actually owns it
+    const owned = withTool && (inv[withTool] ?? 0) > 0 ? withTool : undefined;
+    // a `requiredTool` Node needs that Tool (or its tier-2 upgrade) IN HAND;
+    // the `bonusTool` ×2 likewise applies only when the matching Tool is in hand
+    if (t.requiredTool && !toolSatisfies(owned, t.requiredTool)) {
       return { ok: false, reason: 'TOOL_REQUIRED', requiredTool: t.requiredTool };
     }
-    const dmg = who && holdsBonusTool(inv, t.bonusTool) ? 2 : 1;
+    const dmg = toolSatisfies(owned, t.bonusTool) ? 2 : 1;
     const hp = Math.max(0, state.hp - dmg);
     const finishing = hp === 0;
     this.db.nodes[sn.id] = { hp, harvestedAt: finishing ? Date.now() : null };
@@ -789,19 +873,36 @@ export class MockBackend implements Backend {
   // ------------------------------------------------------------ v2: the Guardian
 
   /**
-   * Lazy end-of-fight reconciliation (ADR-0001: no tick loop). Everything
-   * derives from summonedAt; this just materializes "the timer ran out"
+   * Lazy end-of-fight reconciliation (ADR-0001: no tick loop). Two deadlines,
+   * whichever applies: a DORMANT Guardian re-slumbers if unstruck within
+   * DORMANT_TIMEOUT_MS of the summon; an ENGAGED one re-slumbers, unbeaten, at
+   * engagedAt + GUARDIAN_AWAKE_MS. Either way the totem is spent (never
+   * refunded) — the fight row is simply discarded, resetting HP. Materializes
    * whenever state is next touched (or via the one-shot check below).
    */
   private reconcileGuardian(): void {
     const f = this.db.world!.fight;
-    if (f && Date.now() >= f.summonedAt + GUARDIAN_AWAKE_MS && f.hp > 0) {
+    if (!f) return;
+    const now = Date.now();
+    if (f.engagedAt === null) {
+      if (now < f.summonedAt + DORMANT_TIMEOUT_MS) return;
+      this.db.world!.fight = null;
+      this.saveNow();
+      this.pushChat({
+        from: '🌿 Jungle',
+        text: 'no one struck in time — the Guardian loses interest and sinks back into slumber. The totem is spent.',
+        ts: now,
+      });
+      this.emit('guardianSlumber');
+      return;
+    }
+    if (now >= f.engagedAt + GUARDIAN_AWAKE_MS && f.hp > 0) {
       this.db.world!.fight = null; // HP resets by discarding the fight
       this.saveNow();
       this.pushChat({
         from: '🌿 Jungle',
         text: 'the Guardian returns to slumber, unbeaten. The arena falls silent — another Offering will wake it.',
-        ts: Date.now(),
+        ts: now,
       });
       this.emit('guardianSlumber');
     }
@@ -815,11 +916,12 @@ export class MockBackend implements Backend {
     }
     const f = this.db.world!.fight;
     if (!f) return;
-    const remaining = f.summonedAt + GUARDIAN_AWAKE_MS - Date.now();
+    // dormant → the 90s grace deadline; engaged → the awake-window deadline
+    const deadline = f.engagedAt === null ? f.summonedAt + DORMANT_TIMEOUT_MS : f.engagedAt + GUARDIAN_AWAKE_MS;
     this.slumberTimer = window.setTimeout(() => {
       this.slumberTimer = null;
       this.reconcileGuardian();
-    }, Math.max(0, remaining) + 80);
+    }, Math.max(0, deadline - Date.now()) + 80);
   }
 
   async summonGuardian(): Promise<SummonResult> {
@@ -829,40 +931,71 @@ export class MockBackend implements Backend {
     if (!this.db.world!.seal!.broken) return { ok: false, reason: 'SEAL_INTACT' };
     if (this.db.world!.fight) return { ok: false, reason: 'FIGHT_IN_PROGRESS' };
     if (!p || (p.inventory.summon_totem ?? 0) < 1) return { ok: false, reason: 'NO_TOTEM' };
-    p.inventory.summon_totem! -= 1;
+    p.inventory.summon_totem! -= 1; // spent now — never refunded, even on timeout/loss (ADR-0004)
+    // DORMANT: the Guardian wakes but roams harmlessly — no roster, HP unfixed,
+    // no danger schedule — until the FIRST STRIKE engages it (hitGuardian).
     const fight: DbFight = {
       summonedAt: Date.now(),
-      hp: GUARDIAN_MAX_HP,
-      maxHp: GUARDIAN_MAX_HP,
+      engagedAt: null,
+      roster: [],
+      hp: 0,
+      maxHp: 0,
       participants: [],
       knockdowns: {},
       lastKnockdownWave: {},
     };
     this.db.world!.fight = fight;
     this.saveNow();
+    // schedule the ~90s dormant re-slumber (setTimeout via DORMANT_TIMEOUT_MS);
+    // the first strike reschedules this to the awake-window deadline instead
     this.scheduleSlumberCheck();
-    this.pushChat({ from: '🌿 Jungle', text: `${this.me} laid an Offering on the altar — the Guardian WAKES! To the arena!`, ts: Date.now() });
+    this.pushChat({ from: '🌿 Jungle', text: `${this.me} laid an Offering on the altar — the Guardian STIRS! Gather at the arena and strike to begin.`, ts: Date.now() });
     const pub = this.fightState()!;
     this.emit('guardianSummoned', pub);
     return { ok: true, fight: pub, inventory: { ...p.inventory } };
   }
 
-  async hitGuardian(): Promise<GuardianHitResult> {
+  async hitGuardian(withTool?: ToolId): Promise<GuardianHitResult> {
     await this.lag();
     this.reconcileGuardian();
     const f = this.db.world!.fight;
     const p = this.me ? this.db.players[this.me] : null;
     if (!f || !p) return { ok: false, reason: 'NO_FIGHT' };
-    // damage validity is adjudicated from summonedAt + SERVER elapsed time,
-    // exactly like knockdowns: hits land only inside an Eye Window
-    const elapsed = Date.now() - f.summonedAt;
-    if (!eyeOpenWithin(elapsed, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
-      return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true };
+    const me = this.me!;
+    const now = Date.now();
+    if (f.engagedAt === null) {
+      // FIRST STRIKE — engage: anchor the clock, lock the roster (Players inside
+      // the arena rect right now), fix HP = HP_PER_HEAD × roster size (?fight
+      // stays a trivial fixed pool), then apply THIS hit WITHOUT an Eye gate —
+      // no schedule exists yet to gate against (ADR-0004).
+      f.engagedAt = now;
+      const roster = this.playersInArena();
+      if (!roster.includes(me)) roster.push(me); // the striker is always in the fight
+      f.roster = roster;
+      f.maxHp = DEV_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * roster.length;
+      f.hp = f.maxHp;
+      this.scheduleSlumberCheck(); // switch from the dormant grace to the awake window
+      this.emit('guardianEngaged', this.fightState()!); // clients re-anchor to engagedAt + raise the Ward
+    } else {
+      // roster is locked: only Players sealed inside the Ward at the first
+      // strike may damage the Guardian — outsiders deflect off it
+      if (!f.roster.includes(me)) {
+        return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true };
+      }
+      // later hits are adjudicated from engagedAt + SERVER elapsed time, exactly
+      // like knockdowns: they land only inside an Eye Window
+      const elapsed = now - f.engagedAt;
+      if (!eyeOpenWithin(elapsed, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
+        return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true };
+      }
     }
-    const dmg = guardianDamage(p.inventory);
+    // trust the claimed in-hand Tool only if owned: axe/pickaxe (or tier-2) → 3,
+    // bow or bare → 2 (a flat +1 for the matching Tool, NOT the Node ×2)
+    const owned = withTool && (p.inventory[withTool] ?? 0) > 0 ? withTool : undefined;
+    const dmg = guardianDamage(owned);
     f.hp = Math.max(0, f.hp - dmg);
-    if (!f.participants.includes(this.me!)) f.participants.push(this.me!);
-    this.emit('guardianHit', f.hp, this.me!);
+    if (!f.participants.includes(me)) f.participants.push(me);
+    this.emit('guardianHit', f.hp, me);
     if (f.hp === 0) {
       // victory: every participant with ≥1 hit receives the full drop set
       const participants = [...f.participants];
@@ -891,11 +1024,19 @@ export class MockBackend implements Backend {
     const f = this.db.world!.fight;
     const p = this.me ? this.db.players[this.me] : null;
     if (!f || !p) return { ok: false, reason: 'NO_FIGHT' };
-    // validate against SERVER time and the pure schedule (ADR-0002)
-    const elapsed = Date.now() - f.summonedAt;
+    const me = this.me!;
+    // A dormant Guardian has no danger schedule; and only roster members who are
+    // NOT already Exhausted (< 3 knockdowns, hard removal — ADR-0004) can be
+    // knocked down. Outsiders and the Exhausted are rejected outright.
+    if (f.engagedAt === null || !f.roster.includes(me) || (f.knockdowns[me] ?? 0) >= EXHAUSTION_KNOCKDOWNS) {
+      return { ok: false, reason: 'NOT_IN_DANGER' };
+    }
+    // validate against SERVER time and the pure schedule, re-anchored to
+    // engagedAt (ADR-0002 amended); wave 0's danger is the entrance (Ward slam)
+    const elapsed = Date.now() - f.engagedAt;
     const ax = tx - this.world.arena.x;
     const ay = ty - this.world.arena.y;
-    if (!isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
+    if (!isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot())) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
     // Exhaustion wakes a Player at their Hammock, else at the World spawn
@@ -904,7 +1045,6 @@ export class MockBackend implements Backend {
     // the slam window (incl. slack) never crosses a wave boundary, so the
     // wave at the report's server time is the wave that hit
     const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS).index;
-    const me = this.me!;
     if (f.lastKnockdownWave[me] === wave) {
       // duplicate report for the same slam — count it once
       return { ok: true, knockdowns: f.knockdowns[me] ?? 0, exhausted: false, wake, atHammock };
@@ -914,13 +1054,15 @@ export class MockBackend implements Backend {
     const knockdowns = f.knockdowns[me];
     const exhausted = knockdowns >= EXHAUSTION_KNOCKDOWNS;
     if (exhausted) {
-      // Exhaustion: wake at the wake point, inventory intact, counter refreshed
-      f.knockdowns[me] = 0;
+      // HARD Exhaustion (ADR-0004): OUT for the rest of this fight. The counter
+      // is NOT reset — it stays ≥ EXHAUSTION_KNOCKDOWNS so the guard above bars
+      // further knockdowns and the Ward bars re-entry. Wake at the wake point,
+      // inventory intact; hits already landed keep loot eligibility.
       p.x = (wake.tx + 0.5) * TILE;
       p.y = (wake.ty + 0.5) * TILE;
       this.pushChat({
         from: '🌿 Jungle',
-        text: `${me} collapses from Exhaustion and wakes ${atHammock ? 'in their Hammock' : 'at the spawn'} — hits already landed still count!`,
+        text: `${me} collapses from Exhaustion — out for this fight, waking ${atHammock ? 'in their Hammock' : 'at the spawn'}. Hits already landed still count toward the loot.`,
         ts: Date.now(),
       });
     }

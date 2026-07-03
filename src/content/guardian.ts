@@ -1,16 +1,19 @@
 /**
- * The Guardian's fight schedule (ADR-0002, as amended 2026-07-03): danger
+ * The Guardian's fight schedule (ADR-0002, as amended by ADR-0004): danger
  * waves, fury phases, Eye Windows and telegraphed lunges — every one of them
- * a PURE FUNCTION of time elapsed since `summonedAt`. Every client renders
- * the identical schedule locally; the server re-derives it to adjudicate
- * knockdowns AND damage validity against server time. Nothing here may key
- * on HP or on anything Players do — the Guardian never chases, aims, or
- * reacts. Difficulty is authored, like a bullet-pattern puzzle.
+ * a PURE FUNCTION of `elapsedMs`, the time since the first strike (`engagedAt`;
+ * callers pass `now − engagedAt`). Every client renders the identical schedule
+ * locally; the server re-derives it to adjudicate knockdowns AND damage
+ * validity against server time. Nothing here may key on HP or on anything
+ * Players do — the Guardian never chases, aims, or reacts. Difficulty is
+ * authored, like a bullet-pattern puzzle. (Wave 0 optionally forces its
+ * leap/danger to the arena entrance — the Ward slam — when an `entrance` spot
+ * is supplied; that is the sole, discrete engage event, not adaptive AI.)
  *
  * This module must stay importable from node tools (generate-map) — no
  * browser globals, no ../config import (the awake window length is passed in).
  */
-import type { Inventory } from '../backend/types';
+import type { ToolId } from './items';
 
 /** arena playfield in tiles (matches the arena rect in world-data.json) */
 export const ARENA_W = 17;
@@ -19,11 +22,17 @@ export const ARENA_H = 13;
 /** server-side tolerance for client→server latency when validating hits/knockdowns */
 export const ADJUDICATION_SLACK_MS = 700;
 
-/** every landing hit deals 1 damage; owning axe/pickaxe (or tier-2) doubles it */
-export function guardianDamage(inv: Inventory): number {
-  const bonus =
-    (inv.axe ?? 0) > 0 || (inv.pickaxe ?? 0) > 0 || (inv.ancient_axe ?? 0) > 0 || (inv.ancient_pickaxe ?? 0) > 0;
-  return bonus ? 2 : 1;
+/**
+ * Damage of one landing hit in an Eye Window. Bare hands and the Bow deal 2;
+ * an in-hand axe or pickaxe (or its tier-2 upgrade) adds a flat +1 → 3. NOTE:
+ * this is a +1 for the matching Tool, NOT the ×2 of Resource Nodes. The in-hand
+ * Tool arrives as an argument (already ownership-validated by the server) so
+ * this module stays node-importable — no config/inventory read.
+ */
+export function guardianDamage(withTool: ToolId | undefined): number {
+  const meleeBonus =
+    withTool === 'axe' || withTool === 'pickaxe' || withTool === 'ancient_axe' || withTool === 'ancient_pickaxe';
+  return meleeBonus ? 3 : 2;
 }
 
 // ------------------------------------------------------------- fury phases
@@ -80,9 +89,9 @@ export interface WaveInfo {
 }
 
 /**
- * Walk the wave sequence from the summon to `elapsedMs`. Each wave's length
- * and kind come from the fury phase at the wave's START, so the whole walk
- * is reproducible from `summonedAt` alone (~90 iterations for a full fight).
+ * Walk the wave sequence from the first strike to `elapsedMs`. Each wave's
+ * length and kind come from the fury phase at the wave's START, so the whole
+ * walk is reproducible from `engagedAt` alone (~90 iterations for a full fight).
  */
 export function waveInfoAt(elapsedMs: number, awakeMs: number): WaveInfo {
   let startMs = 0;
@@ -220,9 +229,24 @@ export interface GuardianPose {
   leapT: number;
 }
 
-/** the Guardian's scripted position — every client and the server derive the same */
-export function guardianPoseAt(elapsedMs: number, awakeMs: number, home: ArenaSpot): GuardianPose {
+/**
+ * The Guardian's scripted position — every client and the server derive the
+ * same. v5 (ADR-0004): wave 0 is the ENGAGE LEAP. When an `entrance` spot is
+ * supplied, wave 0 forces the Guardian to bound from `home` to the arena
+ * entrance and slam the Ward shut (reusing the ordinary lunge windup/airborne
+ * curve; only the target is overridden). Purely additive — wave ≥1 and every
+ * authored number are untouched; omit `entrance` and behaviour is unchanged.
+ */
+export function guardianPoseAt(elapsedMs: number, awakeMs: number, home: ArenaSpot, entrance?: ArenaSpot): GuardianPose {
   const w = waveInfoAt(elapsedMs, awakeMs);
+  if (w.index === 0 && entrance) {
+    if (w.msIntoWave >= w.phase.telegraphMs) {
+      return { spot: entrance, target: null, windup: false, airborne: false, leapT: 1 }; // Ward slammed
+    }
+    const t0 = w.msIntoWave / w.phase.telegraphMs;
+    if (t0 < 0.35) return { spot: home, target: entrance, windup: true, airborne: false, leapT: 0 };
+    return { spot: home, target: entrance, windup: false, airborne: true, leapT: (t0 - 0.35) / 0.65 };
+  }
   const from = guardianSpotAt(w.lungeCount, home);
   if (w.kind !== 'lunge') return { spot: from, target: null, windup: false, airborne: false, leapT: 0 };
   const target = lungeTarget(w.lungeCount + 1);
@@ -275,7 +299,14 @@ export function eyeOpenWithin(elapsedMs: number, awakeMs: number, slackMs: numbe
  * slamming danger zone — tile wave or lunge landing — within ±slackMs of
  * `elapsedMs` since the summon? Client clocks never decide (ADR-0002).
  */
-export function isDangerousAt(elapsedMs: number, ax: number, ay: number, awakeMs: number, slackMs = 0): boolean {
+export function isDangerousAt(
+  elapsedMs: number,
+  ax: number,
+  ay: number,
+  awakeMs: number,
+  slackMs = 0,
+  entrance?: ArenaSpot,
+): boolean {
   if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return false;
   const lo = Math.max(0, elapsedMs - slackMs);
   const hi = elapsedMs + slackMs;
@@ -287,6 +318,12 @@ export function isDangerousAt(elapsedMs: number, ax: number, ay: number, awakeMs
     const slamStart = w.startMs + w.phase.telegraphMs;
     const slamEnd = slamStart + w.phase.slamMs;
     if (hi < slamStart || lo > slamEnd) continue;
+    if (w.index === 0 && entrance) {
+      // wave 0 (ADR-0004): the engage-leap crashes on the arena entrance (the
+      // Ward slam), NOT its authored slam tiles — the doorway is the danger
+      if (Math.abs(ax - entrance.ax) <= LUNGE_ZONE && Math.abs(ay - entrance.ay) <= LUNGE_ZONE) return true;
+      continue;
+    }
     if (w.kind === 'lunge') {
       const target = lungeTarget(w.lungeCount + 1);
       if (Math.abs(ax - target.ax) <= LUNGE_ZONE && Math.abs(ay - target.ay) <= LUNGE_ZONE) return true;

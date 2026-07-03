@@ -18,7 +18,10 @@ import type {
 } from '../backend/types';
 import { hintRetired, journeyComplete, type HintId } from '../content/journey';
 import {
+  BOW_CADENCE_MS,
   DAY_CYCLE_MS,
+  FOG_CHUNK,
+  FOG_REVEAL_RADIUS,
   FORCE_NIGHT,
   GUARDIAN_AWAKE_MS,
   INTERACT_RANGE,
@@ -26,6 +29,11 @@ import {
   MAP_H,
   MAP_W,
   MUTE_KEY,
+  VOLUME_KEY,
+  AMBIENT_BASE_VOLUME,
+  FIGHT_MUSIC_BASE_VOLUME,
+  loadVolumes,
+  type AudioChannel,
   PLAYER_SPEED,
   SPEED_BUFF_FACTOR,
   SWING_CADENCE_MS,
@@ -45,7 +53,7 @@ import {
   type ArenaSpot,
   type WaveInfo,
 } from '../content/guardian';
-import { ITEMS, type ItemId, type StructureId } from '../content/items';
+import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
 import { bus } from '../ui/bus';
@@ -97,6 +105,8 @@ interface NodeView {
  */
 interface EAction {
   swing: boolean;
+  /** swing cadence override (the Bow fires slower than melee); defaults to SWING_CADENCE_MS */
+  cadenceMs?: number;
   run: () => void;
 }
 
@@ -104,12 +114,47 @@ interface RemoteView {
   sprite: Phaser.GameObjects.Sprite;
   label: Phaser.GameObjects.Text;
   shadow: Phaser.GameObjects.Image;
+  /** the item shown in this Player's hand; hidden when nothing is held */
+  heldSprite: Phaser.GameObjects.Image;
+  /** warm light this Player casts while holding a Hand Torch */
+  torchGlow: Phaser.GameObjects.Image;
+  held: ItemId | null;
   targetX: number;
   targetY: number;
   dir: Dir;
   moving: boolean;
   /** JSON of the composed Appearance — texture regenerates when it changes */
   look: string;
+}
+
+/**
+ * Where the in-hand item sits relative to the Player's feet origin, per facing.
+ * `flip` mirrors the sprite for the left profile; `behind` draws it behind the
+ * body when the Player faces away.
+ */
+const HELD_HAND: Record<Dir, { x: number; y: number; flip: boolean; behind: boolean }> = {
+  down: { x: 6, y: -9, flip: false, behind: false },
+  right: { x: 7, y: -10, flip: false, behind: false },
+  left: { x: -7, y: -10, flip: true, behind: false },
+  up: { x: -6, y: -11, flip: false, behind: true },
+};
+
+/** warm, deep flame-orange cast by a held Hand Torch (dim — a small flame, not a floodlight) */
+const TORCH_TINT = 0xff5a0a;
+
+/** point a held-item Image at the in-hand Tool's texture, or hide it when nothing is held */
+function setHeldTexture(scene: Phaser.Scene, img: Phaser.GameObjects.Image, id: ItemId | null): void {
+  const key = id ? `held-${id}` : null;
+  if (key && scene.textures.exists(key)) img.setTexture(key).setVisible(true);
+  else img.setVisible(false);
+}
+
+/** place a held-item Image at the character's hand for the given facing */
+function positionHeld(img: Phaser.GameObjects.Image, px: number, py: number, dir: Dir): void {
+  const h = HELD_HAND[dir];
+  img.setPosition(px + h.x, py + h.y);
+  img.setFlipX(h.flip);
+  img.setDepth(py + (h.behind ? -1 : 1));
 }
 
 /** rune glow tint per fury phase: calm violet → restless amber → fury red */
@@ -130,6 +175,8 @@ export class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private nodes = new Map<string, NodeView>();
   private nodesByTile = new Map<string, string>();
+  /** reusable tooltip showing the name of the Resource Node under the cursor */
+  private nodeHoverLabel: Phaser.GameObjects.Text | null = null;
   private structuresByTile = new Map<string, Structure>();
   private structureIds = new Set<string>();
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
@@ -143,6 +190,10 @@ export class GameScene extends Phaser.Scene {
   private lastSwingAt = 0;
   private currentZone = '';
   private muted = false;
+  /** per-channel 0..1 volume mix, editable from the settings menu */
+  private volumes: Record<AudioChannel, number> = { master: 1, ambience: 1, music: 1, sfx: 1 };
+  /** the looping jungle bed — kept so its volume can track the mix live */
+  private ambientSound: Phaser.Sound.BaseSound | null = null;
   private quest: QuestState | null = null;
   private tabletSpots: { id: string; x: number; y: number }[] = [];
   private altarPos = { x: 0, y: 0 };
@@ -160,6 +211,8 @@ export class GameScene extends Phaser.Scene {
   private guardianGlow!: Phaser.GameObjects.Image;
   private guardianEyeGlow!: Phaser.GameObjects.Image;
   private guardianHomeSpot: ArenaSpot = { ax: 0, ay: 0 };
+  /** the Guardian's 3x3 collision bodies — during a fight they follow it as it lunges */
+  private guardianBlockers: Phaser.GameObjects.Rectangle[] = [];
   private guardianAltarPos = { x: 0, y: 0 };
   private dangerRects: Phaser.GameObjects.Rectangle[] = [];
   private renderedWave = -1;
@@ -170,6 +223,12 @@ export class GameScene extends Phaser.Scene {
   private stunnedUntil = 0;
   private stunMarker: Phaser.GameObjects.Text | null = null;
   private fightMusic: Phaser.Sound.BaseSound | null = null;
+  /** v5: the Ward — a fresh barrier slammed across the entrance for the fight */
+  private wardParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
+  /** arena-local center of the entrance (the sealGate) — the wave-0 Ward-slam spot */
+  private entranceSpot: ArenaSpot = { ax: 0, ay: 0 };
+  /** set once this Player is knocked out (3 knockdowns) — the Ward then bars re-entry */
+  private exhaustedThisFight = false;
   // ---- v3: the Journey (onboarding tracker + contextual hints)
   private journey: JourneyState = { steps: {}, hintUses: {} };
   private hintText: Phaser.GameObjects.Text | null = null;
@@ -178,12 +237,23 @@ export class GameScene extends Phaser.Scene {
   private buffUntil = 0;
   private welcomeStonePos = { x: 0, y: 0 };
   private glows: { img: Phaser.GameObjects.Image; base: number; x: number; y: number }[] = [];
-  private playerGlow!: Phaser.GameObjects.Image;
+  // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
+  private heldItem: ItemId | null = null;
+  private heldSprite!: Phaser.GameObjects.Image;
+  private torchGlow!: Phaser.GameObjects.Image;
   private playerShadow!: Phaser.GameObjects.Image;
   private nightOverlay!: Phaser.GameObjects.Rectangle;
   private duskOverlay!: Phaser.GameObjects.Rectangle;
   private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private leavesActive = false;
+  private lastFireflyAt = 0;
+  private lastLeafAt = 0;
+  // ---- fog of war (per-Player, persisted through the Backend)
+  private fogRT!: Phaser.GameObjects.RenderTexture;
+  private explored = new Set<number>();
+  private readonly fogChunksW = Math.ceil(MAP_W / FOG_CHUNK);
+  private readonly fogChunksH = Math.ceil(MAP_H / FOG_CHUNK);
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
@@ -211,6 +281,7 @@ export class GameScene extends Phaser.Scene {
     this.world = this.cache.json.get('worldData') as WorldData;
     this.muted = localStorage.getItem(MUTE_KEY) === '1';
     this.sound.mute = this.muted;
+    this.volumes = loadVolumes();
 
     const map = this.make.tilemap({ key: 'jungle-map' });
     const tileset = map.addTilesetImage(TILESET.name, TILESET.key)!;
@@ -234,35 +305,25 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // parallax canopy: translucent leaf clusters drifting ABOVE the world,
-    // scrolling slightly faster than the ground — fake-3D depth between layers
-    const clusterTrees = new Map<string, number>();
-    for (const n of this.world.nodes) {
-      if (n.type !== 'tree') continue;
-      const key = `${Math.floor(n.tx / 12)},${Math.floor(n.ty / 12)}`;
-      clusterTrees.set(key, (clusterTrees.get(key) ?? 0) + 1);
-    }
-    let canopyCount = 0;
-    for (const [key, count] of clusterTrees) {
-      if (count < 6 || canopyCount >= 70) continue;
-      const [cx, cy] = key.split(',').map(Number);
-      const px = (cx * 12 + 3 + ((count * 7) % 7)) * TILE;
-      const py = (cy * 12 + 3 + ((count * 13) % 7)) * TILE;
-      const c = this.add.image(px, py, 'tree');
-      c.setScale(2.4 + (count % 3) * 0.6);
-      c.setAlpha(0.35);
-      c.setTint(0x1c4526);
+    // parallax clouds drifting ABOVE the world, scrolling slightly faster
+    // than the ground — fake-3D depth between layers. Deterministic spread
+    // so every client sees the same sky.
+    for (let i = 0; i < 18; i++) {
+      const px = (i * 733 + 217) % (MAP_W * TILE);
+      const py = (i * 1291 + 401) % (MAP_H * TILE);
+      const c = this.add.image(px, py, `cloud${i % 3}`);
+      c.setScale(1.5 + (i % 4) * 0.55);
+      c.setAlpha(0.4 + (i % 3) * 0.06);
       c.setScrollFactor(1.22);
       c.setDepth(700_000);
       this.tweens.add({
         targets: c,
-        x: px + 7,
-        duration: 3800 + (count % 5) * 650,
+        x: px + 90 + (i % 5) * 35,
+        duration: 26_000 + (i % 7) * 6_000,
         yoyo: true,
         repeat: -1,
         ease: 'sine.inout',
       });
-      canopyCount++;
     }
 
     // lore tablets (E to read)
@@ -324,14 +385,27 @@ export class GameScene extends Phaser.Scene {
       const y = (g.ty + 3) * TILE;
       // arena-local center tile of the resting place — the schedule's home spot
       this.guardianHomeSpot = { ax: g.tx + 1 - this.world.arena.x, ay: g.ty + 1 - this.world.arena.y };
+      // arena-local center of the entrance (the sealGate the Ward re-seals). The
+      // gate sits just below the arena, so ay is clamped in — wave 0's leap lands
+      // in front of the doorway. Derived identically to the server's entranceSpot.
+      {
+        const a = this.world.arena;
+        const gate = this.world.sealGate;
+        const mid = gate[Math.floor(gate.length / 2)] ?? { tx: a.x + Math.floor(a.w / 2), ty: a.y + a.h - 1 };
+        this.entranceSpot = {
+          ax: Math.max(0, Math.min(a.w - 1, mid.tx - a.x)),
+          ay: Math.max(0, Math.min(a.h - 1, mid.ty - a.y)),
+        };
+      }
       this.guardianSprite = this.add.sprite(x, y, 'guardian', 0);
       this.guardianSprite.setOrigin(0.5, 1);
       this.guardianSprite.setDepth(y);
       this.guardianShadow = this.addShadow(x, y - 2, 60);
-      // the resting place stays solid even while it lunges about (world data
-      // marks those tiles blocked=2 — it is always physically anchored there)
+      // the resting place blocks movement; during a fight the collision FOLLOWS
+      // the Guardian as it lunges (and lifts while it is airborne) so Players can
+      // walk into whatever tiles it has vacated — see positionGuardianBlockers()
       for (let dy = 0; dy < 3; dy++) {
-        for (let dx = 0; dx < 3; dx++) this.addBlockerBody(g.tx + dx, g.ty + dy);
+        for (let dx = 0; dx < 3; dx++) this.guardianBlockers.push(this.addBlockerBody(g.tx + dx, g.ty + dy));
       }
       // its cracked runes smolder at night, even asleep; during a fight the
       // tint tracks the fury phase (purple → orange → red)
@@ -345,7 +419,7 @@ export class GameScene extends Phaser.Scene {
       this.glows.push({ img: this.guardianGlow, base: 0.5, x, y });
       // the amber eye's blaze while an Eye Window is open
       this.guardianEyeGlow = this.add
-        .image(x, y - 78, 'glow')
+        .image(x, y - 61, 'glow')
         .setBlendMode(Phaser.BlendModes.ADD)
         .setTint(0xffb437)
         .setScale(1.5)
@@ -366,6 +440,24 @@ export class GameScene extends Phaser.Scene {
     this.player.setCollideWorldBounds(true);
     this.physics.add.collider(this.player, this.groundLayer);
     this.physics.add.collider(this.player, this.blockersGroup);
+
+    // v4: Loadout visuals — created before wireBus()/the first inventory emit so
+    // the initial 'held' event can update them. Light now comes only from a held
+    // Hand Torch (the automatic player glow is gone) — warm orange, bigger and
+    // more saturated than the old glow; the in-hand icon floats over the head.
+    this.torchGlow = this.add
+      .image(this.player.x, this.player.y - 8, 'glow')
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(TORCH_TINT)
+      .setScale(1.6)
+      .setAlpha(0)
+      .setDepth(890_000);
+    this.heldSprite = this.add
+      .image(this.player.x, this.player.y, 'held-axe')
+      .setOrigin(0.5, 0.5)
+      .setScale(0.8)
+      .setDepth(this.player.y + 1)
+      .setVisible(false);
 
     const cam = this.cameras.main;
     cam.setBounds(0, 0, MAP_W * TILE, MAP_H * TILE);
@@ -430,7 +522,8 @@ export class GameScene extends Phaser.Scene {
       if (!snap.quest.gateOpen) this.buildGate();
       this.applySeal(snap.seal);
       if (!snap.seal.broken) this.buildSealBarrier();
-      // joining mid-fight: the phase derives from summonedAt, not the summon event
+      // joining mid-fight: dormant or engaged, the state derives from the fight
+      // row (engagedAt), not from having witnessed the summon/engage events
       if (snap.fight) this.startFight(snap.fight, false);
     });
     bus.emit('inventory', this.inventory);
@@ -441,7 +534,11 @@ export class GameScene extends Phaser.Scene {
 
     const startAmbient = () => {
       if (this.cache.audio.exists('ambient')) {
-        this.sound.add('ambient', { loop: true, volume: 0.5 }).play();
+        this.ambientSound = this.sound.add('ambient', {
+          loop: true,
+          volume: AMBIENT_BASE_VOLUME * this.volumes.ambience * this.volumes.master,
+        });
+        this.ambientSound.play();
       }
     };
     if (this.sound.locked) this.sound.once('unlocked', startAmbient);
@@ -450,13 +547,9 @@ export class GameScene extends Phaser.Scene {
     // ---- atmosphere: day/night overlays, player glow, fireflies, leaves
     this.duskOverlay = this.add.rectangle(0, 0, 10, 10, 0xff7b39).setAlpha(0).setDepth(899_998);
     this.nightOverlay = this.add.rectangle(0, 0, 10, 10, 0x0a1433).setAlpha(0).setDepth(899_999);
-    this.playerGlow = this.add
-      .image(this.player.x, this.player.y - 8, 'glow')
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setTint(0xffc890)
-      .setScale(1.2)
-      .setAlpha(0)
-      .setDepth(890_000);
+    // both ambient emitters stay parked at (0,0) forever and are fed with
+    // emitParticleAt — moving a Phaser 3.60+ emitter drags every live
+    // particle with it, which used to fill the night screen with fast dots
     this.fireflies = this.add
       .particles(0, 0, 'glow', {
         scale: { start: 0.06, end: 0.015 },
@@ -465,22 +558,22 @@ export class GameScene extends Phaser.Scene {
         blendMode: 'ADD',
         lifespan: 4200,
         speed: { min: 4, max: 16 },
-        frequency: 220,
         emitting: false,
       })
       .setDepth(895_000);
     this.leaves = this.add
       .particles(0, 0, 'leaf', {
-        emitZone: { type: 'random', source: new Phaser.Geom.Rectangle(0, 0, 700, 8), quantity: 1 },
         angle: { min: 80, max: 100 },
         speed: { min: 18, max: 34 },
         rotate: { min: -180, max: 180 },
         alpha: { start: 0.9, end: 0.4 },
         lifespan: 6000,
-        frequency: 320,
         emitting: false,
       })
       .setDepth(894_000);
+
+    this.initFog();
+    this.wireDragPlace();
 
     if (import.meta.env.DEV) {
       (window as any).__jw = {
@@ -511,7 +604,7 @@ export class GameScene extends Phaser.Scene {
   private wireBackend(): void {
     this.backend.on('chat', (msg: ChatMsg) => {
       bus.emit('chat', msg);
-      if (msg.from !== this.me.name) this.sfx('blip', 0.25);
+      if (msg.from !== this.me.name) this.sfx('blip', 0.04);
     });
     this.backend.on('nodeChanged', (n: NodeState) => this.updateNode(n));
     this.backend.on('structurePlaced', (s: Structure) => {
@@ -522,12 +615,13 @@ export class GameScene extends Phaser.Scene {
       bus.emit('crate-changed', crateId, contents);
     });
     this.backend.on('position', (p: PlayerPos) => this.upsertRemote(p));
-    this.backend.on('presence', () => this.emitPresence());
+    this.backend.on('presence', (players: PlayerPos[]) => this.reconcilePresence(players));
     this.backend.on('quest', (q: QuestState) => this.applyQuest(q));
     this.backend.on('gateOpened', () => this.openGateVisual());
     this.backend.on('sealChanged', (s: SealState) => this.applySeal(s));
     this.backend.on('sealBroken', () => this.epicSealBreak());
     this.backend.on('guardianSummoned', (f: FightState) => this.startFight(f, true));
+    this.backend.on('guardianEngaged', (f: FightState) => this.engageFight(f));
     this.backend.on('guardianHit', (hp: number) => {
       if (this.fight) {
         this.fight = { ...this.fight, hp };
@@ -594,39 +688,136 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ v2: the Guardian fight
 
+  /**
+   * A summon (or a mid-fight join). A DORMANT Guardian (`engagedAt === null`)
+   * roams harmlessly — the arena open, no Ward, no danger schedule — until the
+   * first strike engages it. An already-engaged fight (mid-join) goes straight
+   * to the live schedule (Ward already up), derived from `engagedAt`.
+   */
   private startFight(fight: FightState, fresh: boolean): void {
+    this.exhaustedThisFight = false;
+    if (fight.engagedAt === null) {
+      this.fight = fight;
+      this.renderedWave = -1;
+      this.landedWave = -1;
+      this.slammedWave = -1;
+      this.eyeOpenShown = false;
+      this.furyIndex = -1;
+      this.guardianGlow.setTint(0xb478ff);
+      this.guardianSprite.anims.play('guardian-idle');
+      this.placeGuardian(this.guardianHomeSpot, 0);
+      this.positionGuardianBlockers(this.guardianHomeSpot);
+      this.setGuardianBlockersEnabled(true);
+      for (const r of this.dangerRects) r.destroy();
+      this.dangerRects = [];
+      if (fresh) this.sfx('roar', 0.4); // a low stir, not the full engage roar
+      bus.emit('fight-start', { hp: 0, maxHp: 0, engagedAt: null, awakeMs: GUARDIAN_AWAKE_MS, roster: [] });
+    } else {
+      this.beginEngaged(fight, false);
+    }
+  }
+
+  /** the first strike landed (broadcast): re-anchor to `engagedAt`, slam the Ward */
+  private engageFight(fight: FightState): void {
+    this.beginEngaged(fight, true);
+  }
+
+  /**
+   * Bring the fight into its engaged, dangerous state: reset the wave trackers
+   * against `engagedAt`, tint the fury glow, raise the Ward, and start the
+   * music. `dramatic` = the live first-strike (roar + Ward-slam FX); otherwise a
+   * quiet mid-fight join with the Ward already standing.
+   */
+  private beginEngaged(fight: FightState, dramatic: boolean): void {
     this.fight = fight;
+    const engagedAt = fight.engagedAt ?? Date.now();
     this.renderedWave = -1;
     this.landedWave = -1;
     this.eyeOpenShown = false;
-    // joining mid-fight: derive the whole state from summonedAt, not events
-    const w = waveInfoAt(Date.now() - fight.summonedAt, GUARDIAN_AWAKE_MS);
+    const w = waveInfoAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS);
     this.slammedWave = w.msIntoWave >= w.phase.telegraphMs ? w.index : w.index - 1;
-    this.furyIndex = furyPhaseAt(Date.now() - fight.summonedAt, GUARDIAN_AWAKE_MS).index;
+    this.furyIndex = furyPhaseAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS).index;
     this.guardianGlow.setTint(FURY_TINTS[this.furyIndex]);
     this.guardianSprite.anims.play('guardian-idle');
-    if (fresh) {
+    this.raiseWard(dramatic);
+    if (dramatic) {
       this.sfx('roar', 0.7);
       this.cameras.main.shake(700, 0.01);
     }
     if (!this.fightMusic && this.cache.audio.exists('guardian_drums')) {
-      this.fightMusic = this.sound.add('guardian_drums', { loop: true, volume: 0.45 });
+      this.fightMusic = this.sound.add('guardian_drums', {
+        loop: true,
+        volume: FIGHT_MUSIC_BASE_VOLUME * this.volumes.music * this.volumes.master,
+      });
     }
     this.fightMusic?.play();
-    bus.emit('fight-start', { hp: fight.hp, maxHp: fight.maxHp, summonedAt: fight.summonedAt, awakeMs: GUARDIAN_AWAKE_MS });
+    bus.emit('fight-start', { hp: fight.hp, maxHp: fight.maxHp, engagedAt, awakeMs: GUARDIAN_AWAKE_MS, roster: fight.roster });
+  }
+
+  /**
+   * Raise the Ward across the arena entrance (the sealGate tiles). It reuses the
+   * Seal's barrier art but is a distinct, per-fight barrier: it blocks outsiders
+   * and Exhausted fighters and drops at victory/slumber. Permeability is
+   * per-Player — the roster-and-not-Exhausted pass through (see below).
+   */
+  private raiseWard(dramatic: boolean): void {
+    this.dropWard();
+    for (const g of this.world.sealGate) {
+      const x = (g.tx + 0.5) * TILE;
+      const y = (g.ty + 1) * TILE;
+      const sprite = this.add.image(x, y, 'seal-barrier').setOrigin(0.5, 1).setDepth(y).setAlpha(0.9);
+      sprite.setTint(0xffb9a0); // amber cast — the Guardian's Ward, not the violet Seal
+      if (dramatic) {
+        sprite.setScale(1, 0);
+        this.tweens.add({ targets: sprite, scaleY: 1, duration: 220, ease: 'back.out' });
+      }
+      const body = this.addBlockerBody(g.tx, g.ty);
+      this.wardParts.push({ sprite, body });
+    }
+    this.updateWardPermeability();
+    if (dramatic) {
+      this.sfx('chop', 0.6);
+      this.cameras.main.shake(300, 0.006);
+    }
+  }
+
+  /** drop the Ward (victory or slumber) — the arena opens again */
+  private dropWard(): void {
+    for (const part of this.wardParts) {
+      part.sprite.destroy();
+      part.body.destroy();
+    }
+    this.wardParts = [];
+  }
+
+  /**
+   * Per-Player permeability: the local Player passes the Ward only while a
+   * roster member AND not Exhausted; outsiders and the Exhausted are blocked.
+   * The Mock has one real Player, so toggling this body's collision enforces the
+   * rule; a SupabaseBackend would resolve it per-Player.
+   */
+  private updateWardPermeability(): void {
+    const mayPass = !!this.fight && this.fight.roster.includes(this.me.name) && !this.exhaustedThisFight;
+    for (const part of this.wardParts) {
+      (part.body.body as Phaser.Physics.Arcade.StaticBody).enable = !mayPass;
+    }
   }
 
   private endFight(kind: 'victory' | 'slumber'): void {
     if (!this.fight) return;
     this.fight = null;
+    this.exhaustedThisFight = false;
+    this.dropWard(); // the Ward falls — the arena opens again
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
     this.renderedWave = -1;
     this.furyIndex = -1;
     this.guardianSprite.anims.stop();
     this.guardianSprite.setFrame(0);
-    // it sinks back onto its resting place
+    // it sinks back onto its resting place — collision returns home with it
     this.placeGuardian(this.guardianHomeSpot, 0);
+    this.positionGuardianBlockers(this.guardianHomeSpot);
+    this.setGuardianBlockersEnabled(true);
     this.guardianGlow.setTint(0xb478ff);
     this.guardianEyeGlow.setAlpha(0);
     this.fightMusic?.stop();
@@ -652,7 +843,27 @@ export class GameScene extends Phaser.Scene {
     this.guardianShadow.setPosition(x, groundY - 2);
     this.guardianShadow.setAlpha(lift > 0 ? 0.5 : 1);
     this.guardianGlow.setPosition(x, groundY - lift - 45);
-    this.guardianEyeGlow.setPosition(x, groundY - lift - 78);
+    this.guardianEyeGlow.setPosition(x, groundY - lift - 61);
+  }
+
+  /** center the Guardian's 3x3 collision on an arena spot (bodies stored row-major) */
+  private positionGuardianBlockers(spot: ArenaSpot): void {
+    const a = this.world.arena;
+    const cx = (a.x + spot.ax + 0.5) * TILE;
+    const cy = (a.y + spot.ay + 0.5) * TILE;
+    let i = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const b = this.guardianBlockers[i++];
+        if (!b) continue;
+        b.setPosition(cx + dx * TILE, cy + dy * TILE);
+        (b.body as Phaser.Physics.Arcade.StaticBody).updateFromGameObject();
+      }
+    }
+  }
+
+  private setGuardianBlockersEnabled(on: boolean): void {
+    for (const b of this.guardianBlockers) (b.body as Phaser.Physics.Arcade.StaticBody).enable = on;
   }
 
   /** render the telegraphs of one wave: slam tiles, or a lunge landing marker */
@@ -665,7 +876,14 @@ export class GameScene extends Phaser.Scene {
       rect.setDepth(3);
       this.dangerRects.push(rect);
     };
-    if (w.kind === 'lunge') {
+    if (w.index === 0) {
+      // wave 0 (ADR-0004): the engage-leap crashes on the entrance (the Ward
+      // slam), so the doorway — not the authored slam tiles — is the danger
+      const e = this.entranceSpot;
+      for (let dy = -LUNGE_ZONE; dy <= LUNGE_ZONE; dy++) {
+        for (let dx = -LUNGE_ZONE; dx <= LUNGE_ZONE; dx++) mark(e.ax + dx, e.ay + dy, 0xffa02f, 0.3);
+      }
+    } else if (w.kind === 'lunge') {
       // the landing marker glows on the pre-determined spot before impact
       const t = lungeTarget(w.lungeCount + 1);
       for (let dy = -LUNGE_ZONE; dy <= LUNGE_ZONE; dy++) {
@@ -694,7 +912,11 @@ export class GameScene extends Phaser.Scene {
     const ax = ptx - this.world.arena.x;
     const ay = pty - this.world.arena.y;
     if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return;
-    if (lunge) {
+    if (w.index === 0) {
+      // wave 0's danger is the entrance (the Ward slam), not the slam tiles
+      const e = this.entranceSpot;
+      if (Math.abs(ax - e.ax) > LUNGE_ZONE || Math.abs(ay - e.ay) > LUNGE_ZONE) return;
+    } else if (lunge) {
       const t = lungeTarget(w.lungeCount + 1);
       if (Math.abs(ax - t.ax) > LUNGE_ZONE || Math.abs(ay - t.ay) > LUNGE_ZONE) return;
     } else if (!waveTiles(w.index, w.phase.density)[ay * ARENA_W + ax]) {
@@ -715,11 +937,16 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       if (res.exhausted) {
+        // HARD Exhaustion (ADR-0004): out for this fight — the Ward now bars
+        // re-entry (permeability recomputes to "blocked"), though prior hits
+        // keep loot eligibility. Wake at Hammock/spawn, pack intact.
+        this.exhaustedThisFight = true;
+        this.updateWardPermeability();
         bus.emit(
           'toast',
           res.atHammock
-            ? 'Exhaustion overtakes you — you wake in your Hammock, pack intact.'
-            : 'Exhaustion overtakes you — you wake at the spawn, pack intact.',
+            ? 'Exhaustion overtakes you — out for this fight, waking in your Hammock. Prior hits still count.'
+            : 'Exhaustion overtakes you — out for this fight, waking at the spawn. Prior hits still count.',
           'bad',
         );
         this.cameras.main.fadeOut(400, 0, 0, 0);
@@ -742,7 +969,10 @@ export class GameScene extends Phaser.Scene {
       this.guardianSprite.x,
       this.guardianSprite.y - TILE * 1.5,
     );
-    if (d > INTERACT_RANGE + TILE * 2) return null;
+    // the Bow reaches ~8 tiles; melee needs to close to arm's length
+    const bow = this.heldItem === 'bow';
+    const range = bow ? TILE * 8 : INTERACT_RANGE + TILE * 2;
+    if (d > range) return null;
     if (!this.fight) {
       if (this.seal?.broken) {
         return {
@@ -752,26 +982,56 @@ export class GameScene extends Phaser.Scene {
       }
       return null; // sealed away — nothing to interact with yet
     }
+    // the Bow looses from range on a slower cadence; melee closes and swings fast
+    if (bow) return { swing: true, cadenceMs: BOW_CADENCE_MS, run: () => this.looseArrow() };
     return { swing: true, run: () => this.swingAtGuardian() };
   }
 
   private swingAtGuardian(): void {
-    // predict locally from the same schedule the server adjudicates with —
-    // outside an Eye Window the swing bounces off so the rule teaches itself
-    const eyeOpen = this.fight ? eyeOpenAt(Date.now() - this.fight.summonedAt, GUARDIAN_AWAKE_MS) : false;
+    this.fireGuardianHit(this.heldTool(), this.guardianSprite.x, this.guardianSprite.y - 60);
+  }
+
+  /** loose an arrow at the Guardian; the hit registers when the arrow lands */
+  private looseArrow(): void {
+    if (!this.fight) return;
+    const gx = this.guardianSprite.x;
+    const gy = this.guardianSprite.y - TILE * 3; // aim at the eye / upper body
+    const arrow = this.add.image(this.player.x, this.player.y - AVATAR_H / 2, 'arrow');
+    arrow.setDepth(999_990);
+    arrow.setRotation(Phaser.Math.Angle.Between(arrow.x, arrow.y, gx, gy));
+    this.sfx('blip', 0.4); // bowstring twang
+    this.tweens.add({
+      targets: arrow,
+      x: gx,
+      y: gy,
+      duration: 240,
+      onComplete: () => {
+        arrow.destroy();
+        // adjudicate on landing (server re-checks the Eye Window at its own time)
+        this.fireGuardianHit('bow', gx, gy);
+      },
+    });
+  }
+
+  /**
+   * Land one hit on the Guardian with the in-hand Tool. Predicts the Eye Window
+   * locally from the same schedule the server adjudicates with — outside a
+   * window the strike bounces off so the rule teaches itself. Shared by melee
+   * swings and the Bow's arrow.
+   */
+  private fireGuardianHit(tool: ToolId | undefined, x: number, y: number): void {
+    // dormant (engagedAt null): this strike IS the engage — always lands. Once
+    // engaged, predict the Eye Window from the same schedule the server uses.
+    const engagedAt = this.fight?.engagedAt ?? null;
+    const eyeOpen = engagedAt === null ? !!this.fight : eyeOpenAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS);
     if (eyeOpen) {
       this.sfx('chop', 0.5);
       this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
     } else {
       this.sfx('blip', 0.35);
-      this.floatText(
-        this.guardianSprite.x + Phaser.Math.Between(-10, 10),
-        this.guardianSprite.y - 60,
-        'clang',
-        '#9aa0a8',
-      );
+      this.floatText(x + Phaser.Math.Between(-10, 10), y, 'clang', '#9aa0a8');
     }
-    void this.backend.hitGuardian().then((res) => {
+    void this.backend.hitGuardian(tool).then((res) => {
       if (!res.ok) return;
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
@@ -945,7 +1205,7 @@ export class GameScene extends Phaser.Scene {
     const { x, y } = f;
     this.cancelFishing();
     this.sfx('splash', 0.6);
-    void this.backend.hitNode(nodeId).then((result) => {
+    void this.backend.hitNode(nodeId, this.heldTool()).then((result) => {
       if (!result.ok) {
         if (result.reason === 'DEPLETED') bus.emit('toast', 'Too late — someone else landed it. It will return.', 'bad');
         return;
@@ -1037,6 +1297,61 @@ export class GameScene extends Phaser.Scene {
     this.gateParts = [];
   }
 
+  // ------------------------------------------------------------ fog of war
+
+  /**
+   * The fog overlay: one RenderTexture pixel per tile, scaled up to cover
+   * the World, sitting above every world sprite. Explored chunks are erased
+   * with a feathered brush so the frontier fades instead of snapping.
+   */
+  private initFog(): void {
+    this.fogRT = this.add.renderTexture(0, 0, MAP_W, MAP_H);
+    this.fogRT.setOrigin(0, 0);
+    this.fogRT.setScale(TILE);
+    this.fogRT.setDepth(899_990);
+    this.fogRT.fill(0x06120a, 0.96);
+    this.fogRT.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    for (const c of this.me.explored) {
+      if (c >= 0 && c < this.fogChunksW * this.fogChunksH) this.explored.add(c);
+    }
+    for (const c of this.explored) this.eraseFogChunk(c);
+    bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
+    this.updateFog();
+  }
+
+  private eraseFogChunk(idx: number): void {
+    const cx = idx % this.fogChunksW;
+    const cy = Math.floor(idx / this.fogChunksW);
+    // the 24-tile brush centered on the chunk; overlapping erases keep the
+    // interior fully clear while the frontier stays feathered
+    this.fogRT.erase('fog-brush', (cx + 0.5) * FOG_CHUNK - 12, (cy + 0.5) * FOG_CHUNK - 12);
+  }
+
+  /** reveal chunks around the Player; new ones persist through the Backend */
+  private updateFog(): void {
+    const pcx = Math.floor(this.player.x / TILE / FOG_CHUNK);
+    const pcy = Math.floor(this.player.y / TILE / FOG_CHUNK);
+    const r = FOG_REVEAL_RADIUS;
+    const fresh: number[] = [];
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r + 1) continue;
+        const cx = pcx + dx;
+        const cy = pcy + dy;
+        if (cx < 0 || cy < 0 || cx >= this.fogChunksW || cy >= this.fogChunksH) continue;
+        const idx = cy * this.fogChunksW + cx;
+        if (this.explored.has(idx)) continue;
+        this.explored.add(idx);
+        this.eraseFogChunk(idx);
+        fresh.push(idx);
+      }
+    }
+    if (fresh.length) {
+      void this.backend.markExplored(fresh);
+      bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
+    }
+  }
+
   /** 0 = noon, 1 = midnight — derived from the real clock, no tick state */
   private nightness(): number {
     if (FORCE_NIGHT) return 1;
@@ -1045,6 +1360,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private wireBus(): void {
+    // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–3)
+    bus.on('held', (id: ItemId | null) => {
+      this.heldItem = id;
+      this.applyHeldSprite();
+      // broadcast promptly so every other Player's in-hand item updates now
+      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined);
+    });
     bus.on('send-chat', (text: string) => {
       void this.backend.sendChat(text);
     });
@@ -1063,6 +1385,11 @@ export class GameScene extends Phaser.Scene {
       this.sound.mute = this.muted;
       localStorage.setItem(MUTE_KEY, this.muted ? '1' : '0');
       bus.emit('mute', this.muted);
+    });
+    bus.on('set-volume', (channel: AudioChannel, value: number) => {
+      this.volumes[channel] = Math.max(0, Math.min(1, value));
+      localStorage.setItem(VOLUME_KEY, JSON.stringify(this.volumes));
+      this.applyMusicVolumes();
     });
     bus.on('craft', (recipeId: string) => {
       void this.backend.craft(recipeId).then((result) => {
@@ -1143,6 +1470,46 @@ export class GameScene extends Phaser.Scene {
     bus.emit('presence', [this.me.name, ...this.remotes.keys()]);
   }
 
+  /**
+   * Reconcile the live roster from a backend presence sync: upsert everyone
+   * present and drop the sprites of any Player who has left (the Mock's bots
+   * never leave, so this only ever fires for the real multiplayer backend).
+   */
+  private reconcilePresence(players: PlayerPos[]): void {
+    const live = new Set<string>();
+    for (const p of players) {
+      if (p.name === this.me.name) continue;
+      live.add(p.name);
+      this.upsertRemote(p);
+    }
+    for (const name of [...this.remotes.keys()]) if (!live.has(name)) this.removeRemote(name);
+    this.emitPresence();
+  }
+
+  private removeRemote(name: string): void {
+    const r = this.remotes.get(name);
+    if (!r) return;
+    r.sprite.destroy();
+    r.label.destroy();
+    r.shadow.destroy();
+    r.heldSprite.destroy();
+    r.torchGlow.destroy();
+    this.remotes.delete(name);
+    this.emitPresence();
+  }
+
+  /** point the local held sprite at the in-hand item's texture and place it in-hand */
+  private applyHeldSprite(): void {
+    setHeldTexture(this, this.heldSprite, this.heldItem);
+    positionHeld(this.heldSprite, this.player.x, this.player.y, this.lastDir);
+  }
+
+  /** the in-hand item as a Tool (for hit RPCs), or undefined for bare hands / a non-Tool */
+  private heldTool(): ToolId | undefined {
+    const h = this.heldItem;
+    return h && ITEMS[h].kind === 'tool' ? (h as ToolId) : undefined;
+  }
+
   // ------------------------------------------------------------ nodes
 
   private nodeAlive(n: NodeState): boolean {
@@ -1172,12 +1539,42 @@ export class GameScene extends Phaser.Scene {
     if (this.textures.exists(kind)) img.setTexture(kind, OBJECTS[kind]?.frame);
   }
 
+  /** show the Resource Node's name in a small tooltip while the cursor hovers it */
+  private makeNodeHoverable(sprite: Phaser.GameObjects.Image, type: NodeState['type']): void {
+    sprite.setInteractive();
+    sprite.on('pointerover', () => {
+      if (!this.nodeHoverLabel) {
+        // same visual size as the remote-player name tags (fontSize 7, res 6,
+        // scale 0.34) so hover text reads consistently across the World
+        this.nodeHoverLabel = this.add
+          .text(0, 0, '', {
+            fontSize: '7px',
+            color: '#e8f5e9',
+            stroke: '#000000',
+            strokeThickness: 2,
+            backgroundColor: 'rgba(10, 20, 8, 0.82)',
+            padding: { x: 4, y: 2 },
+          })
+          .setOrigin(0.5, 1)
+          .setResolution(6)
+          .setScale(0.34)
+          .setDepth(999_995);
+      }
+      this.nodeHoverLabel
+        .setText(NODE_TYPES[type].name)
+        .setPosition(sprite.x, sprite.y - sprite.displayHeight - 2)
+        .setVisible(true);
+    });
+    sprite.on('pointerout', () => this.nodeHoverLabel?.setVisible(false));
+  }
+
   private addNode(state: NodeState): void {
     const x = (state.tx + 0.5) * TILE;
     const y = (state.ty + 1) * TILE;
     const alive = state.hp > 0;
     const sprite = this.objImage(x, y, alive ? state.type : `${state.type}_depleted`);
     if (!sprite) return;
+    this.makeNodeHoverable(sprite, state.type);
     const h = idHash(state.id);
     if (state.type === 'tree') {
       sprite.setScale(0.9 + (h % 40) / 100);
@@ -1355,9 +1752,9 @@ export class GameScene extends Phaser.Scene {
     }
     if (!best) return null;
     const view = best;
-    // fishing spots use the cast-and-wait rhythm when a rod is carried;
-    // without one the server refusal (TOOL_REQUIRED) falls through below
-    if (view.state.type === 'fishing_spot' && (this.inventory.fishing_rod ?? 0) > 0) {
+    // fishing spots use the cast-and-wait rhythm when the rod is IN HAND;
+    // without it the server refusal (TOOL_REQUIRED) falls through below
+    if (view.state.type === 'fishing_spot' && this.heldItem === 'fishing_rod') {
       return { swing: false, run: () => this.startFishing(view) };
     }
     return { swing: true, run: () => this.swingAtNode(view) };
@@ -1365,8 +1762,10 @@ export class GameScene extends Phaser.Scene {
 
   private swingAtNode(view: NodeView): void {
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
-    this.sfx(view.state.type === 'tree' || view.state.type === 'hardwood_tree' ? 'chop' : 'harvest', 0.5);
-    void this.backend.hitNode(view.state.id).then((result) => {
+    const t = view.state.type;
+    const swingSfx = t === 'tree' || t === 'hardwood_tree' ? 'chop' : t === 'rock' || t === 'obsidian_rock' ? 'pick' : 'harvest';
+    this.sfx(swingSfx, 0.5);
+    void this.backend.hitNode(view.state.id, this.heldTool()).then((result) => {
       if (!result.ok) {
         if (result.reason === 'TOOL_REQUIRED') {
           bus.emit('toast', `You need a ${ITEMS[result.requiredTool as StructureId]?.name ?? result.requiredTool} for that.`, 'bad');
@@ -1429,29 +1828,34 @@ export class GameScene extends Phaser.Scene {
 
   private addStructure(s: Structure): void {
     if (this.structureIds.has(s.id)) return;
+    // defensive: a saved structure whose type is no longer known (e.g. the
+    // retired fence) is skipped instead of crashing — future-proofs removals
+    const def = ITEMS[s.type];
+    if (!def) return;
     this.structureIds.add(s.id);
     this.structuresByTile.set(`${s.tx},${s.ty}`, s);
-    const def = ITEMS[s.type];
     const key = `st_${s.type}`;
     const x = (s.tx + 0.5) * TILE;
     const baseY = (s.ty + 1) * TILE;
     const img = this.objImage(x, baseY, key);
     if (!img) return;
-    if (s.type === 'bridge' || s.type === 'stone_path' || s.type === 'plank_floor' || s.type === 'obsidian_path') {
+    if (s.type === 'bridge' || s.type === 'obsidian_path') {
       img.setDepth(-2); // floor
     } else {
       img.setDepth(baseY);
     }
     // the signpost's line is rendered in-world, readable by everyone
     if (s.type === 'signpost' && s.text?.trim()) {
-      const label = this.add.text(x, baseY - 20, s.text, {
+      const label = this.add.text(x, baseY - 16, s.text, {
         fontSize: '7px',
         color: '#ffe9c9',
         stroke: '#3a2a18',
-        strokeThickness: 3,
+        strokeThickness: 2,
       });
       label.setOrigin(0.5, 1);
-      label.setResolution(4);
+      label.setResolution(6);
+      // ~1/3 the previous on-screen size — a small readable line, not a banner
+      label.setScale(0.34);
       label.setDepth(baseY + 1);
     }
     if (def.blocks) {
@@ -1517,21 +1921,73 @@ export class GameScene extends Phaser.Scene {
 
   private confirmPlace(): void {
     if (!this.placing) return;
-    const item = this.placing;
     const { tx, ty } = this.facingTile();
+    this.placeAtTile(this.placing, tx, ty);
+  }
+
+  /** place `item` on a specific tile — signposts prompt for their line first */
+  private placeAtTile(item: StructureId, tx: number, ty: number): void {
     if (item === 'signpost') {
-      // placing a signpost prompts for its line (the prompt input freezes
-      // movement through the same chat-focus wiring as the chat box)
+      // the signpost line prompt freezes movement through the same chat-focus
+      // wiring as the chat box
       bus.emit('sign-prompt');
       const done = (text: string | null) => {
         bus.off('sign-text', done);
-        if (text === null) return; // cancelled — stay in placement mode
+        if (text === null) return; // cancelled
         this.doPlace(item, tx, ty, text);
       };
       bus.on('sign-text', done);
       return;
     }
     this.doPlace(item, tx, ty);
+  }
+
+  /**
+   * Drag-to-place: dropping an inventory Structure onto the canvas places it on
+   * the hovered tile if that tile is valid AND within a few tiles of the
+   * Player. The select→face→Enter/E flow still works unchanged.
+   */
+  private wireDragPlace(): void {
+    const canvas = this.game.canvas;
+    const TYPE = 'application/x-jw-structure';
+    canvas.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(TYPE)) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }
+    });
+    canvas.addEventListener('drop', (e) => {
+      const item = e.dataTransfer?.getData(TYPE) as StructureId;
+      if (!item) return;
+      e.preventDefault();
+      this.tryDragPlace(item, e.clientX, e.clientY);
+    });
+  }
+
+  /** map a client (screen) point to world coordinates via the camera */
+  private screenToWorld(clientX: number, clientY: number): Phaser.Math.Vector2 {
+    const rect = this.game.canvas.getBoundingClientRect();
+    const cx = (clientX - rect.left) * (this.scale.gameSize.width / rect.width);
+    const cy = (clientY - rect.top) * (this.scale.gameSize.height / rect.height);
+    return this.cameras.main.getWorldPoint(cx, cy);
+  }
+
+  private tryDragPlace(item: StructureId, clientX: number, clientY: number): void {
+    const world = this.screenToWorld(clientX, clientY);
+    const tx = Math.floor(world.x / TILE);
+    const ty = Math.floor(world.y / TILE);
+    const ptx = Math.floor(this.player.x / TILE);
+    const pty = Math.floor((this.player.y - 4) / TILE);
+    const REACH = 4; // a few tiles from the Player
+    if (Math.abs(tx - ptx) > REACH || Math.abs(ty - pty) > REACH) {
+      bus.emit('toast', 'Too far to reach — step closer to drop it there.', 'bad');
+      return;
+    }
+    if (!this.canPlaceLocal(item, tx, ty)) {
+      bus.emit('toast', ITEMS[item].onWater ? 'Bridges must be placed on water.' : "Can't build on that tile.", 'bad');
+      return;
+    }
+    this.placeAtTile(item, tx, ty);
   }
 
   private doPlace(item: StructureId, tx: number, ty: number, text?: string): void {
@@ -1568,14 +2024,33 @@ export class GameScene extends Phaser.Scene {
       const sprite = this.add.sprite(p.x, p.y, texture, AVATAR_IDLE.down);
       sprite.setOrigin(0.5, 1);
       const label = this.add.text(p.x, p.y - AVATAR_H - 4, p.name, {
-        fontSize: '8px',
+        fontSize: '7px',
         color: '#e8f5e9',
         stroke: '#000000',
         strokeThickness: 2,
       });
       label.setOrigin(0.5, 1);
-      label.setResolution(4);
-      r = { sprite, label, shadow, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving, look };
+      label.setResolution(6);
+      // world-space text is magnified by camera ZOOM — scale it well down so the
+      // name is a small tag over the head, not a billboard
+      label.setScale(0.34);
+      label.setAlpha(0.9);
+      // the item they hold, shown in their hand, synced through presence
+      const heldSprite = this.add
+        .image(p.x, p.y, 'held-axe')
+        .setOrigin(0.5, 0.5)
+        .setScale(0.8)
+        .setDepth(p.y + 1)
+        .setVisible(false);
+      // a Hand Torch in their hand lights them too
+      const torchGlow = this.add
+        .image(p.x, p.y - 8, 'glow')
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setTint(TORCH_TINT)
+        .setScale(1.6)
+        .setAlpha(0)
+        .setDepth(890_000);
+      r = { sprite, label, shadow, heldSprite, torchGlow, held: null, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving, look };
       this.remotes.set(p.name, r);
       this.emitPresence();
     } else if (r.look !== look) {
@@ -1589,6 +2064,11 @@ export class GameScene extends Phaser.Scene {
     r.targetY = p.y;
     r.dir = p.dir;
     r.moving = p.moving;
+    const held = p.held ?? null;
+    if (r.held !== held) {
+      r.held = held;
+      setHeldTexture(this, r.heldSprite, held);
+    }
   }
 
   private applyAnim(sprite: Phaser.GameObjects.Sprite, dir: Dir, moving: boolean): void {
@@ -1603,7 +2083,19 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------ helpers
 
   private sfx(key: string, volume: number): void {
-    if (this.cache.audio.exists(key)) this.sound.play(key, { volume });
+    if (this.cache.audio.exists(key)) {
+      this.sound.play(key, { volume: volume * this.volumes.sfx * this.volumes.master });
+    }
+  }
+
+  /** push the current mix onto the two live looping beds (SFX read it per-play) */
+  private applyMusicVolumes(): void {
+    const setVol = (s: Phaser.Sound.BaseSound | null, base: number, ch: AudioChannel) => {
+      // BaseSound has no setVolume in its type; the concrete web/HTML5 sounds do
+      (s as Phaser.Sound.WebAudioSound | null)?.setVolume?.(base * this.volumes[ch] * this.volumes.master);
+    };
+    setVol(this.ambientSound, AMBIENT_BASE_VOLUME, 'ambience');
+    setVol(this.fightMusic, FIGHT_MUSIC_BASE_VOLUME, 'music');
   }
 
   private floatText(x: number, y: number, text: string, color: string): void {
@@ -1633,9 +2125,7 @@ export class GameScene extends Phaser.Scene {
       this.currentZone = zone;
       bus.emit('zone', zone);
     }
-    if (this.leaves) {
-      this.leaves.emitting = zone === 'Dense Grove' || zone === 'Hidden Grove' || zone === 'Deep Jungle';
-    }
+    this.leavesActive = zone === 'Dense Grove' || zone === 'Hidden Grove' || zone === 'Deep Jungle';
     // the Seal monument shows its progress on approach
     const nearMon =
       Phaser.Math.Distance.Between(this.player.x, this.player.y, this.monumentPos.x, this.monumentPos.y) < TILE * 6;
@@ -1644,6 +2134,7 @@ export class GameScene extends Phaser.Scene {
       bus.emit('seal-near', nearMon);
       if (nearMon) this.tickJourney('visit_seal');
     }
+    this.updateFog();
     this.updateHints();
   }
 
@@ -1664,18 +2155,26 @@ export class GameScene extends Phaser.Scene {
       .setPosition(cam.midPoint.x, cam.midPoint.y)
       .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
       .setAlpha(Math.max(0, 1 - Math.abs(night - 0.5) * 4) * 0.12);
-    this.playerGlow.setPosition(this.player.x, this.player.y - 8).setAlpha(night * 0.3);
+    // v4: light follows only a held Hand Torch (warm orange, dim like a flame)
+    this.torchGlow
+      .setPosition(this.player.x, this.player.y - 8)
+      .setAlpha(this.heldItem === 'hand_torch' ? 0.1 + night * 0.35 : 0);
+    positionHeld(this.heldSprite, this.player.x, this.player.y, this.lastDir);
     this.playerShadow.setPosition(this.player.x, this.player.y - 1);
     for (let i = 0; i < this.glows.length; i++) {
       const g = this.glows[i];
       g.img.setAlpha(night * (g.base + 0.12 * Math.sin(time / 90 + i * 2.1)));
     }
-    this.fireflies.emitting = night > 0.5;
-    if (this.fireflies.emitting) {
+    if (night > 0.5 && time - this.lastFireflyAt > 260) {
+      this.lastFireflyAt = time;
       const v = cam.worldView;
-      this.fireflies.setPosition(v.x + Math.random() * v.width, v.y + Math.random() * v.height);
+      this.fireflies.emitParticleAt(v.x + Math.random() * v.width, v.y + Math.random() * v.height);
     }
-    this.leaves.setPosition(cam.worldView.centerX - 350, cam.worldView.y - 6);
+    if (this.leavesActive && time - this.lastLeafAt > 320) {
+      this.lastLeafAt = time;
+      const v = cam.worldView;
+      this.leaves.emitParticleAt(v.x + Math.random() * v.width, v.y - 6);
+    }
 
     // remote interpolation
     for (const r of this.remotes.values()) {
@@ -1686,13 +2185,19 @@ export class GameScene extends Phaser.Scene {
       r.shadow.setPosition(r.sprite.x, r.sprite.y - 1);
       r.label.setPosition(r.sprite.x, r.sprite.y - AVATAR_H - 2);
       r.label.setDepth(r.sprite.y + 1);
+      positionHeld(r.heldSprite, r.sprite.x, r.sprite.y, r.dir);
+      r.torchGlow
+        .setPosition(r.sprite.x, r.sprite.y - 8)
+        .setAlpha(r.held === 'hand_torch' ? 0.1 + night * 0.35 : 0);
       const visuallyMoving = r.moving || Math.hypot(r.targetX - r.sprite.x, r.targetY - r.sprite.y) > 2;
       this.applyAnim(r.sprite, r.dir, visuallyMoving);
     }
 
-    // ---- v2/v3: the Guardian fight — everything derives from summonedAt
-    if (this.fight) {
-      const elapsed = Date.now() - this.fight.summonedAt;
+    // ---- v2/v3/v5: the Guardian fight — the danger schedule derives from
+    // engagedAt (the first strike). A DORMANT Guardian (engagedAt null) roams
+    // harmlessly at home: no waves, no Eye, arena open — nothing to drive here.
+    if (this.fight && this.fight.engagedAt !== null) {
+      const elapsed = Date.now() - this.fight.engagedAt;
       if (elapsed >= GUARDIAN_AWAKE_MS) {
         // every client derives the timer's end locally; the backend event follows
         this.endFight('slumber');
@@ -1725,8 +2230,16 @@ export class GameScene extends Phaser.Scene {
           this.slamWave(wave);
         }
 
-        // scripted position: telegraphed lunges to pre-determined spots
-        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, this.guardianHomeSpot);
+        // scripted position: wave 0 leaps to the entrance (Ward slam), later
+        // waves telegraph lunges to pre-determined spots
+        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, this.guardianHomeSpot, this.entranceSpot);
+        // collision follows the Guardian's ground footprint; while airborne it has
+        // none, so the whole arena (incl. the tiles it just left) opens up
+        if (pose.airborne) this.setGuardianBlockersEnabled(false);
+        else {
+          this.positionGuardianBlockers(pose.spot);
+          this.setGuardianBlockersEnabled(true);
+        }
         this.guardianEyeGlow.setAlpha(0);
         if (pose.airborne && pose.target) {
           const a = this.world.arena;
@@ -1744,7 +2257,7 @@ export class GameScene extends Phaser.Scene {
           this.guardianSprite.setDepth(gy);
           this.guardianShadow.setPosition(gx, gy - 2).setAlpha(0.45);
           this.guardianGlow.setPosition(gx, gy - arc - 45);
-          this.guardianEyeGlow.setPosition(gx, gy - arc - 78);
+          this.guardianEyeGlow.setPosition(gx, gy - arc - 61);
         } else {
           this.placeGuardian(pose.spot, 0);
           if (pose.windup) {
@@ -1835,7 +2348,7 @@ export class GameScene extends Phaser.Scene {
 
     if (time - this.lastPosSent > 100) {
       this.lastPosSent = time;
-      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving);
+      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined);
     }
 
     // placement ghost
@@ -1861,13 +2374,18 @@ export class GameScene extends Phaser.Scene {
       if (ePressed) this.reelIn();
     } else if (ePressed || this.keys.e.isDown) {
       const now = Date.now();
-      const swingReady = now - this.lastSwingAt >= SWING_CADENCE_MS;
-      if (ePressed || swingReady) {
+      // resolve at the base cadence; a per-action cadence (the Bow's slower
+      // fire) then further gates the swing so bow < melee DPS
+      const minReady = now - this.lastSwingAt >= SWING_CADENCE_MS;
+      if (ePressed || minReady) {
         const action = this.resolveEAction();
-        if (action?.swing && swingReady) {
-          this.lastSwingAt = now;
-          action.run();
-        } else if (action && !action.swing && ePressed) {
+        if (action?.swing) {
+          const cadence = action.cadenceMs ?? SWING_CADENCE_MS;
+          if (now - this.lastSwingAt >= cadence) {
+            this.lastSwingAt = now;
+            action.run();
+          }
+        } else if (action && ePressed) {
           action.run();
         }
       }
