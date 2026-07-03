@@ -1,0 +1,43 @@
+import type { ItemId, ResourceId, ToolId } from './items';
+
+export interface Recipe {
+  id: string;
+  output: ItemId;
+  count: number;
+  cost: Partial<Record<ResourceId, number>>;
+  /** tool that must be in the inventory to craft (not consumed) */
+  requiresTool?: ToolId;
+  kind: 'tool' | 'structure' | 'consumable';
+}
+
+export const RECIPES: Recipe[] = [
+  { id: 'axe', output: 'axe', count: 1, cost: { wood: 3, stone: 2 }, kind: 'tool' },
+  { id: 'pickaxe', output: 'pickaxe', count: 1, cost: { wood: 2, stone: 3 }, kind: 'tool' },
+  { id: 'machete', output: 'machete', count: 1, cost: { wood: 1, stone: 2 }, kind: 'tool' },
+  { id: 'hammer', output: 'hammer', count: 1, cost: { wood: 2, stone: 2 }, kind: 'tool' },
+
+  // v2 tier-2 tools — every recipe demands Guardian Scales (fight at least once)
+  { id: 'ancient_axe', output: 'ancient_axe', count: 1, cost: { guardian_scale: 3, wood: 3, stone: 2 }, kind: 'tool' },
+  { id: 'ancient_pickaxe', output: 'ancient_pickaxe', count: 1, cost: { guardian_scale: 3, wood: 2, stone: 3 }, kind: 'tool' },
+  { id: 'fishing_rod', output: 'fishing_rod', count: 1, cost: { guardian_scale: 2, wood: 2, fiber: 2 }, kind: 'tool' },
+
+  // v2 — cheap, repeatable summon Offering (tier-1 resources only)
+  { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },
+
+  { id: 'campfire', output: 'campfire', count: 1, cost: { wood: 3, stone: 2 }, kind: 'structure' },
+  { id: 'torch', output: 'torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'structure' },
+  { id: 'hut_wall', output: 'hut_wall', count: 1, cost: { wood: 4 }, requiresTool: 'hammer', kind: 'structure' },
+  { id: 'fence', output: 'fence', count: 1, cost: { wood: 2 }, kind: 'structure' },
+  { id: 'bridge', output: 'bridge', count: 1, cost: { wood: 3, fiber: 2 }, requiresTool: 'hammer', kind: 'structure' },
+  { id: 'crate', output: 'crate', count: 1, cost: { wood: 4, stone: 1 }, kind: 'structure' },
+  { id: 'tiki_statue', output: 'tiki_statue', count: 1, cost: { stone: 4, fiber: 1 }, kind: 'structure' },
+  { id: 'fruit_basket', output: 'fruit_basket', count: 1, cost: { fiber: 2, fruit: 3 }, kind: 'structure' },
+  { id: 'stone_path', output: 'stone_path', count: 1, cost: { stone: 2 }, kind: 'structure' },
+
+  // v2 tier-2 structures
+  { id: 'obsidian_statue', output: 'obsidian_statue', count: 1, cost: { obsidian: 4 }, kind: 'structure' },
+  { id: 'hardwood_arch', output: 'hardwood_arch', count: 1, cost: { hardwood: 4 }, requiresTool: 'hammer', kind: 'structure' },
+  { id: 'guardian_trophy', output: 'guardian_trophy', count: 1, cost: { guardian_scale: 5, obsidian: 2 }, kind: 'structure' },
+  { id: 'obsidian_path', output: 'obsidian_path', count: 1, cost: { obsidian: 2 }, kind: 'structure' },
+  { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, wood: 2 }, kind: 'structure' },
+];
