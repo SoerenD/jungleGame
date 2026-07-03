@@ -25,8 +25,9 @@ the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*
     `fruit-basket.png`, `stone-path.png`, `ruin-pillar.png` — all cropped from
     `Overworld.png` / `objects.png`.
   - `public/assets/characters/character.png` — copy of `NPC_test.png`
-    (4-direction, 4-frame walk cycle, 16×32 frames). The four preset avatars
-    (Amber, Jade, Sky, Rose) are runtime tints of this sheet.
+    (4-direction, 4-frame walk cycle, 16×32 frames). **No longer loaded since
+    v3**: Player Avatars are blockhead sprites composed at runtime from four
+    palette picks (`src/avatars.ts`, original pixel art, no license concerns).
   - `objects/altar.png` (grove altar) — composed by `tools/compose-altar.ts`
     from the checked-in crops (legs from `ruin-pillar.png`, tabletop from
     `stone-path.png`, recolored to mossy gray-green; hand-placed moss and
@@ -35,10 +36,11 @@ the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*
   - **v2 (Guardian of the Ruins)** — composed by `tools/compose-v2-assets.ts`
     entirely from the CC0 crops above (recolors/recombinations of the same
     ArMM1998 pack pieces; a few hand-placed accent pixels):
-    - `objects/guardian.png` — the Guardian: 3-frame 48×48 idle sheet
-      (frame 0 slumber, 1–2 awake) composed from `rock.png` (torso + head,
-      2× scaled), `ruin-pillar.png` (arms) with hand-drawn moss, eye-glow and
-      chest-sigil pixels.
+    - `objects/guardian.png` — the Guardian. Since v3 an 8-frame 96×96 sheet
+      (slumber, awake idle ×2, eye-open ×2, lunge windup, airborne, landing)
+      composed by `tools/compose-guardian-v3.ts` from `rock.png` (torso +
+      head, 3× scaled) and `ruin-pillar.png` (arms + legs) with hand-drawn
+      moss, cracked-rune pixels and the single large amber eye.
     - `objects/hardwood-tree.png` / `hardwood-stump.png` — `tree.png` /
       `stump.png` hue-shifted to ancient dark timber, amber sap glints added.
     - `objects/obsidian-rock.png` / `obsidian-rubble.png` — `rock.png` /
@@ -56,6 +58,14 @@ the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*
       recolored dark, amber inlay pixels.
     - `objects/guardian-trophy.png` — pedestal from `ruin-pillar.png` + head
       from `rock.png`, amber eyes and teal scale-inlay pixels.
+  - **v3 (functional Structures)** — composed by
+    `tools/compose-structures-v3.ts` from the same CC0 crops plus drawn
+    pixels:
+    - `objects/sawmill.png` — timber frame cropped from `hut-wall.png`, saw
+      blade / work table / plank stack drawn.
+    - `objects/hammock.png`, `objects/signpost.png`, `objects/plank-floor.png`,
+      `objects/table.png` — drawn plank-and-post pixel art (original, no
+      license concerns).
 
 ## CC0 Background Ambience (Forest Ambience) — FGResources
 
