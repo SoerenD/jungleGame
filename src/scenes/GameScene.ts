@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { AVATARS, CHARACTER, OBJECTS, TILESET } from '../assetConfig';
+import { OBJECTS, TILESET } from '../assetConfig';
+import { AVATAR_H, AVATAR_IDLE, AVATAR_W, ensureAvatarTexture } from '../avatars';
 import type {
   Backend,
   ChatMsg,
@@ -95,6 +96,8 @@ interface RemoteView {
   targetY: number;
   dir: Dir;
   moving: boolean;
+  /** JSON of the composed Appearance — texture regenerates when it changes */
+  look: string;
 }
 
 /** deterministic per-id variance so the forest looks grown, not stamped */
@@ -315,15 +318,16 @@ export class GameScene extends Phaser.Scene {
       this.glows.push({ img: glow, base: 0.5, x, y });
     }
 
-    // player
+    // player — the Avatar texture is composed from this Player's palette picks
+    const myTexture = `avatar-${this.me.name}`;
+    ensureAvatarTexture(this, myTexture, this.me.appearance);
     this.playerShadow = this.addShadow(this.me.x, this.me.y, 14);
-    this.player = this.physics.add.sprite(this.me.x, this.me.y, CHARACTER.key, CHARACTER.idle.down);
+    this.player = this.physics.add.sprite(this.me.x, this.me.y, myTexture, AVATAR_IDLE.down);
     this.player.setOrigin(0.5, 1);
-    this.player.setTint(AVATARS[this.me.avatar].tint);
     const bw = 10;
     const bh = 8;
     this.player.body!.setSize(bw, bh);
-    this.player.body!.setOffset((CHARACTER.frameWidth - bw) / 2, CHARACTER.frameHeight - bh);
+    this.player.body!.setOffset((AVATAR_W - bw) / 2, AVATAR_H - bh);
     this.player.setCollideWorldBounds(true);
     this.physics.add.collider(this.player, this.groundLayer);
     this.physics.add.collider(this.player, this.blockersGroup);
@@ -623,7 +627,7 @@ export class GameScene extends Phaser.Scene {
     this.player.setVelocity(0, 0);
     this.stunMarker?.destroy();
     this.stunMarker = this.add
-      .text(this.player.x, this.player.y - CHARACTER.frameHeight - 6, '💫', { fontSize: '10px' })
+      .text(this.player.x, this.player.y - AVATAR_H - 6, '💫', { fontSize: '10px' })
       .setOrigin(0.5)
       .setResolution(4)
       .setDepth(999_999);
@@ -1336,13 +1340,15 @@ export class GameScene extends Phaser.Scene {
 
   private upsertRemote(p: PlayerPos): void {
     if (p.name === this.me.name) return;
+    const look = JSON.stringify(p.appearance);
+    const texture = `avatar-${p.name}`;
     let r = this.remotes.get(p.name);
     if (!r) {
+      ensureAvatarTexture(this, texture, p.appearance);
       const shadow = this.addShadow(p.x, p.y, 14);
-      const sprite = this.add.sprite(p.x, p.y, CHARACTER.key, CHARACTER.idle.down);
+      const sprite = this.add.sprite(p.x, p.y, texture, AVATAR_IDLE.down);
       sprite.setOrigin(0.5, 1);
-      sprite.setTint(AVATARS[p.avatar % AVATARS.length].tint);
-      const label = this.add.text(p.x, p.y - CHARACTER.frameHeight - 4, p.name, {
+      const label = this.add.text(p.x, p.y - AVATAR_H - 4, p.name, {
         fontSize: '8px',
         color: '#e8f5e9',
         stroke: '#000000',
@@ -1350,9 +1356,15 @@ export class GameScene extends Phaser.Scene {
       });
       label.setOrigin(0.5, 1);
       label.setResolution(4);
-      r = { sprite, label, shadow, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving };
+      r = { sprite, label, shadow, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving, look };
       this.remotes.set(p.name, r);
       this.emitPresence();
+    } else if (r.look !== look) {
+      // they re-joined with an edited Avatar — recompose their texture
+      r.look = look;
+      r.sprite.anims.stop();
+      ensureAvatarTexture(this, texture, p.appearance);
+      r.sprite.setTexture(texture, AVATAR_IDLE[p.dir]);
     }
     r.targetX = p.x;
     r.targetY = p.y;
@@ -1361,20 +1373,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyAnim(sprite: Phaser.GameObjects.Sprite, dir: Dir, moving: boolean): void {
-    let animDir = dir;
-    let flip = false;
-    if (CHARACTER.flipLeft) {
-      if (dir === 'left') {
-        animDir = 'right';
-        flip = true;
-      }
-    }
-    sprite.setFlipX(flip);
     if (moving) {
-      sprite.anims.play(`walk-${animDir}`, true);
+      sprite.anims.play(`${sprite.texture.key}-walk-${dir}`, true);
     } else {
       sprite.anims.stop();
-      sprite.setFrame(CHARACTER.idle[animDir]);
+      sprite.setFrame(AVATAR_IDLE[dir]);
     }
   }
 
@@ -1462,7 +1465,7 @@ export class GameScene extends Phaser.Scene {
       r.sprite.y += (r.targetY - r.sprite.y) * k;
       r.sprite.setDepth(r.sprite.y);
       r.shadow.setPosition(r.sprite.x, r.sprite.y - 1);
-      r.label.setPosition(r.sprite.x, r.sprite.y - CHARACTER.frameHeight - 2);
+      r.label.setPosition(r.sprite.x, r.sprite.y - AVATAR_H - 2);
       r.label.setDepth(r.sprite.y + 1);
       const visuallyMoving = r.moving || Math.hypot(r.targetX - r.sprite.x, r.targetY - r.sprite.y) > 2;
       this.applyAnim(r.sprite, r.dir, visuallyMoving);
@@ -1496,7 +1499,7 @@ export class GameScene extends Phaser.Scene {
       this.stunMarker.destroy();
       this.stunMarker = null;
     }
-    if (this.stunMarker) this.stunMarker.setPosition(this.player.x, this.player.y - CHARACTER.frameHeight - 6);
+    if (this.stunMarker) this.stunMarker.setPosition(this.player.x, this.player.y - AVATAR_H - 6);
 
     // ---- v2: fishing — bite arrives, window opens, then it gets away
     if (this.fishing) {

@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { AUDIO, CHARACTER, OBJECTS, TILESET } from '../assetConfig';
+import { AUDIO, OBJECTS, TILESET } from '../assetConfig';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -13,10 +13,6 @@ export class BootScene extends Phaser.Scene {
     // water tile can be animated by repainting its pixels
     this.load.image(`${TILESET.key}-src`, TILESET.url);
     this.load.image('water-frames', '/assets/tiles/water-frames.png');
-    this.load.spritesheet(CHARACTER.key, CHARACTER.url, {
-      frameWidth: CHARACTER.frameWidth,
-      frameHeight: CHARACTER.frameHeight,
-    });
     for (const [key, def] of Object.entries(OBJECTS)) {
       if (def.frameWidth) {
         this.load.spritesheet(key, def.url, { frameWidth: def.frameWidth, frameHeight: def.frameHeight! });
@@ -85,16 +81,7 @@ export class BootScene extends Phaser.Scene {
     for (const [x, y] of [[5, 6], [10, 12], [6, 20], [11, 26]]) bctx.fillRect(x, y, 2, 2);
     barrier.refresh();
 
-    const dirs = ['down', 'up', 'left', 'right'] as const;
-    for (const dir of dirs) {
-      const range = CHARACTER.walk[dir];
-      this.anims.create({
-        key: `walk-${dir}`,
-        frames: this.anims.generateFrameNumbers(CHARACTER.key, range),
-        frameRate: 8,
-        repeat: -1,
-      });
-    }
+    // Player walk animations are created per Avatar texture (src/avatars.ts).
     // the Guardian's slow awake idle (frame 0 is its slumber)
     this.anims.create({
       key: 'guardian-idle',

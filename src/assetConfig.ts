@@ -4,16 +4,6 @@
  * (see CREDITS.md for sources and licenses).
  */
 
-export interface SheetAnims {
-  frameWidth: number;
-  frameHeight: number;
-  /** frame ranges per walking direction */
-  walk: Record<'down' | 'up' | 'left' | 'right', { start: number; end: number }>;
-  idle: Record<'down' | 'up' | 'left' | 'right', number>;
-  /** true when the sheet has no left frames — flip right */
-  flipLeft?: boolean;
-}
-
 export const TILESET = {
   key: 'tiles',
   name: 'terrain', // must match the tileset name inside jungle-map.json
@@ -21,28 +11,8 @@ export const TILESET = {
   tileSize: 16,
 };
 
-export const CHARACTER: { key: string; url: string } & SheetAnims = {
-  key: 'char',
-  url: '/assets/characters/character.png',
-  frameWidth: 16,
-  frameHeight: 32,
-  // NPC sheet rows top→bottom: down, right, up, left (verified in play-test)
-  walk: {
-    down: { start: 0, end: 3 },
-    right: { start: 4, end: 7 },
-    up: { start: 8, end: 11 },
-    left: { start: 12, end: 15 },
-  },
-  idle: { down: 0, right: 4, up: 8, left: 12 },
-};
-
-/** Preset avatars = tint variations of the base character sheet. */
-export const AVATARS = [
-  { name: 'Amber', tint: 0xffc078 },
-  { name: 'Jade', tint: 0x8ce99a },
-  { name: 'Sky', tint: 0x74c0fc },
-  { name: 'Rose', tint: 0xfaa2c1 },
-] as const;
+// Player sprites are no longer loaded from a sheet: every Avatar is composed
+// at runtime from four palette picks (src/avatars.ts) into its own texture.
 
 export interface ObjectDef {
   url: string;

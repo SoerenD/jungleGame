@@ -1,12 +1,25 @@
 import type { ItemId, StructureId } from '../content/items';
 import type { NodeTypeId } from '../content/nodeTypes';
 
+/** legacy tint-preset id — only survives in pre-update Player rows for migration */
 export type AvatarId = 0 | 1 | 2 | 3;
 export type Dir = 'down' | 'up' | 'left' | 'right';
 
+/**
+ * A Player's Avatar: four palette indices (curated swatches — see
+ * src/avatars.ts). Chosen at first join, editable at every join, synced
+ * through the backend so every client composes the same look.
+ */
+export interface Appearance {
+  skin: number;
+  hair: number;
+  shirt: number;
+  pants: number;
+}
+
 export interface PlayerPos {
   name: string;
-  avatar: AvatarId;
+  appearance: Appearance;
   x: number;
   y: number;
   dir: Dir;
@@ -64,7 +77,7 @@ export type JoinResult =
   | {
       ok: true;
       name: string;
-      avatar: AvatarId;
+      appearance: Appearance;
       x: number;
       y: number;
       inventory: Inventory;
@@ -191,7 +204,8 @@ export interface BackendEvents {
 export interface Backend {
   /** Load world data + start internal machinery. Call once before join. */
   init(): Promise<void>;
-  join(name: string, pin: string, avatar: AvatarId): Promise<JoinResult>;
+  /** the sent Appearance becomes the Player's look — editable at every join */
+  join(name: string, pin: string, appearance: Appearance): Promise<JoinResult>;
   loadWorld(): Promise<WorldSnapshot>;
   /** fire-and-forget, like a Realtime broadcast */
   sendPosition(x: number, y: number, dir: Dir, moving: boolean): void;

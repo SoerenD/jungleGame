@@ -18,7 +18,9 @@ import { ADJUDICATION_SLACK_MS, guardianDamage, isDangerousAt, waveAt } from '..
 import { ITEMS, type StructureId } from '../content/items';
 import { NODE_TYPES, holdsBonusTool, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
+import { legacyAppearance, sanitizeAppearance } from '../avatars';
 import type {
+  Appearance,
   AvatarId,
   Backend,
   BackendEvents,
@@ -79,7 +81,9 @@ interface WorldData {
 
 interface DbPlayer {
   pin: string;
-  avatar: AvatarId;
+  /** legacy tint preset from pre-update rows — mapped to a default Appearance once */
+  avatar?: AvatarId;
+  appearance?: Appearance;
   x: number;
   y: number;
   inventory: Inventory;
@@ -116,10 +120,10 @@ interface Db {
 
 const SEAL_RESOURCES: SealResourceId[] = ['wood', 'stone', 'fiber', 'fruit'];
 
-const BOT_DEFS: { name: string; avatar: AvatarId; lines: string[] }[] = [
+const BOT_DEFS: { name: string; appearance: Appearance; lines: string[] }[] = [
   {
     name: 'Kiki',
-    avatar: 1,
+    appearance: { skin: 2, hair: 4, shirt: 1, pants: 3 },
     lines: [
       'the waterfall is thundering today',
       'found a juicy fruit bush near the delta',
@@ -131,7 +135,7 @@ const BOT_DEFS: { name: string; avatar: AvatarId; lines: string[] }[] = [
   },
   {
     name: 'Bruno',
-    avatar: 2,
+    appearance: { skin: 4, hair: 0, shirt: 2, pants: 1 },
     lines: [
       'the swamp smells... interesting',
       'stacking stones like a pro',
@@ -145,7 +149,7 @@ const BOT_DEFS: { name: string; avatar: AvatarId; lines: string[] }[] = [
 
 interface Bot {
   name: string;
-  avatar: AvatarId;
+  appearance: Appearance;
   x: number;
   y: number;
   dir: Dir;
@@ -265,7 +269,7 @@ export class MockBackend implements Backend {
 
   // ---------------------------------------------------------------- join / snapshot
 
-  async join(name: string, pin: string, avatar: AvatarId): Promise<JoinResult> {
+  async join(name: string, pin: string, appearance: Appearance): Promise<JoinResult> {
     await this.lag();
     name = name.trim();
     if (!/^[\w :-]{2,16}$/.test(name)) return { ok: false, reason: 'BAD_NAME' };
@@ -278,7 +282,6 @@ export class MockBackend implements Backend {
       isNew = true;
       p = {
         pin,
-        avatar,
         x: (this.world.spawn.tx + 0.5) * TILE,
         y: (this.world.spawn.ty + 0.5) * TILE,
         inventory: {},
@@ -286,6 +289,11 @@ export class MockBackend implements Backend {
       this.db.players[name] = p;
       this.saveNow();
     }
+    // the join screen's picks become the look (Appearance is editable at
+    // every join); a missing payload falls back to the legacy-tint mapping
+    p.appearance = appearance
+      ? sanitizeAppearance(appearance)
+      : p.appearance ?? legacyAppearance(p.avatar ?? 0);
     this.me = name;
     if (DEV_FIGHT && (p.inventory.summon_totem ?? 0) === 0) {
       p.inventory.summon_totem = 1; // ?fight — instant summon ready
@@ -296,7 +304,7 @@ export class MockBackend implements Backend {
     return {
       ok: true,
       name,
-      avatar: p.avatar,
+      appearance: { ...p.appearance },
       x: p.x,
       y: p.y,
       inventory: { ...p.inventory },
@@ -814,7 +822,7 @@ export class MockBackend implements Backend {
   // ---------------------------------------------------------------- bots
 
   private botPos(b: Bot): PlayerPos {
-    return { name: b.name, avatar: b.avatar, x: b.x, y: b.y, dir: b.dir, moving: b.moving };
+    return { name: b.name, appearance: b.appearance, x: b.x, y: b.y, dir: b.dir, moving: b.moving };
   }
 
   private startBots(): void {
@@ -822,7 +830,7 @@ export class MockBackend implements Backend {
     const now = Date.now();
     this.bots = BOT_DEFS.map((d, i) => ({
       name: d.name,
-      avatar: d.avatar,
+      appearance: d.appearance,
       x: (this.world.spawn.tx + 3 + i * 3) * TILE,
       y: (this.world.spawn.ty + 2 + i) * TILE,
       dir: 'down' as Dir,
