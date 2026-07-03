@@ -75,7 +75,22 @@ interface WorldData {
 type SelfPos = { name: string; appearance: Appearance; x: number; y: number; dir: Dir; moving: boolean; held?: ItemId };
 
 const POS_BROADCAST_MS = 150; // cap the position stream; ~7/player-s keeps an 8-player shared channel under the realtime msg/s cap (remote sprites interpolate, so it stays smooth)
-const PRESENCE_REFRESH_MS = 1500; // keep the presence snapshot fresh for late joiners
+// Presence refresh: keep the tracked snapshot from going totally stale for
+// late joiners. Rarely matters (a presence `join` makes every peer re-announce
+// within ~150ms) and the server enforces a strict per-client presence rate
+// limit — at 1.5s the server answered "Client presence rate limit exceeded"
+// and CLOSED the channel ~8s after every join, for every Player. Keep this
+// interval high; presence needs no keep-alive, it lives with the channel.
+const PRESENCE_REFRESH_MS = 30_000;
+
+// A server-initiated phx_close is TERMINAL in realtime-js: the channel object
+// is detached from the client and never rejoins on its own (only socket-level
+// drops self-heal via Phoenix). We must rebuild the channel ourselves — with
+// backoff, so a server that insta-closes (rate limit, restart loop) gets a
+// slower and slower knock instead of a join storm.
+const RESUBSCRIBE_MIN_MS = 1_000;
+const RESUBSCRIBE_MAX_MS = 30_000;
+const STABLE_SUBSCRIBE_MS = 60_000; // held a subscription this long → next close restarts the backoff
 
 /**
  * The real backend (ADR-0001): Supabase Realtime for presence/positions/events
@@ -113,6 +128,12 @@ export class SupabaseBackend implements Backend {
   private slumberTimer: number | null = null;
   private visibilityHooked = false;
 
+  // recovery from server-initiated channel closes (see scheduleResubscribe)
+  private resubscribeTimer: ReturnType<typeof setTimeout> | null = null;
+  private resubscribeDelayMs = RESUBSCRIBE_MIN_MS;
+  private lastSubscribedAt = 0;
+  private channelWasSubscribed = false; // did the CURRENT channel generation ever reach SUBSCRIBED?
+
   constructor(url: string, anonKey: string) {
     this.supa = createClient(url, anonKey, {
       auth: { persistSession: false },
@@ -130,9 +151,6 @@ export class SupabaseBackend implements Backend {
             void this.supa.realtime.connect();
           }
         },
-        // server-side per-client event window: one shared channel fans in every
-        // Player's position stream, so give generous headroom over the 20 default
-        params: { eventsPerSecond: 100 },
       },
     });
   }
@@ -245,6 +263,19 @@ export class SupabaseBackend implements Backend {
   }
 
   private async connectRealtime(x: number, y: number): Promise<void> {
+    const ch = this.buildChannel();
+    this.channel = ch;
+    this.hookVisibility();
+    // Settle on the FIRST status either way: SUBSCRIBED means we're live, and
+    // a failure (CLOSED/CHANNEL_ERROR/TIMED_OUT) must not strand the Player on
+    // the join screen — the World is playable meanwhile (broadcasts fall back
+    // to REST) and recovery continues in the background (scheduleResubscribe
+    // for closes, Phoenix's own rejoin for errors/timeouts).
+    await new Promise<void>((resolve) => this.subscribeChannel(ch, x, y, resolve));
+  }
+
+  /** every world-channel binding in one place, so a rebuilt channel is identical */
+  private buildChannel(): RealtimeChannel {
     const ch = this.supa.channel('jw-world', {
       config: { broadcast: { self: false }, presence: { key: this.me! } },
     });
@@ -252,31 +283,74 @@ export class SupabaseBackend implements Backend {
     ch.on('broadcast', { event: 'pos' }, ({ payload }) => this.onRemotePos(payload as SelfPos));
     ch.on('presence', { event: 'sync' }, () => this.onPresenceSync());
     ch.on('presence', { event: 'join' }, () => this.broadcastPos(true)); // re-announce so new joiners see me
-    this.channel = ch;
-    this.hookVisibility();
-    // Re-announce on EVERY (re)subscribe, not just the first. Phoenix auto-
-    // rejoins the channel after a socket reconnect and re-fires this callback,
-    // but presence track() is a SEPARATE push that is not part of the rejoin —
-    // so without re-tracking here a reconnected client stays invisible and
-    // frozen to peers until a page reload. Use the freshest known position.
-    let resolved = false;
-    await new Promise<void>((resolve) => {
-      ch.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          const pos: SelfPos =
-            this.lastLocal ?? { name: this.me!, appearance: this.appearance, x, y, dir: 'down', moving: false };
-          void ch.track(pos);
-          this.lastPresence = Date.now();
-          this.broadcastPos(true); // push our spot to peers now (lastPresence just set → no double-track)
-          if (!resolved) {
-            resolved = true;
-            resolve();
-          }
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.warn('[jw] realtime channel status:', status);
-        }
-      });
+    // the server explains itself (rate limit, restart, auth…) via a `system`
+    // message right before it errors/closes a channel — log it so a production
+    // close is diagnosable from the browser console alone
+    ch.on('system', {}, (payload: unknown) => console.warn('[jw] realtime system:', JSON.stringify(payload)));
+    return ch;
+  }
+
+  /**
+   * Subscribe a world channel. Re-announces presence on EVERY (re)subscribe,
+   * not just the first: Phoenix auto-rejoins the channel after a socket drop
+   * and re-fires this callback, but presence track() is a SEPARATE push that
+   * is not part of the rejoin — without re-tracking here a reconnected client
+   * stays invisible and frozen to peers until a page reload.
+   */
+  private subscribeChannel(ch: RealtimeChannel, x: number, y: number, onFirstStatus?: () => void): void {
+    ch.subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        this.lastSubscribedAt = Date.now();
+        this.channelWasSubscribed = true;
+        const pos: SelfPos =
+          this.lastLocal ?? { name: this.me!, appearance: this.appearance, x, y, dir: 'down', moving: false };
+        void ch.track(pos);
+        this.lastPresence = Date.now();
+        this.broadcastPos(true); // push our spot to peers now (lastPresence just set → no double-track)
+      } else if (status === 'CLOSED') {
+        this.scheduleResubscribe();
+      } else {
+        // CHANNEL_ERROR / TIMED_OUT: Phoenix retries these itself while the
+        // socket is up — log only
+        console.warn('[jw] realtime channel status:', status, err ?? '');
+      }
+      if (onFirstStatus) {
+        const settle = onFirstStatus;
+        onFirstStatus = undefined;
+        settle();
+      }
     });
+  }
+
+  /**
+   * Recover from a server-initiated channel close (phx_close). realtime-js
+   * treats that as final — the channel is already detached from the client, so
+   * `subscribe()` on it again would throw. Rebuild the replacement channel
+   * SYNCHRONOUSLY: registering it immediately cancels the client's "no
+   * channels left → disconnect the socket" timer, which would otherwise race
+   * our delayed re-join and could win (stranding the game offline until the
+   * next visibilitychange). Only the join itself waits out the backoff, so a
+   * server that insta-closes (rate limit, restart loop) gets a slower and
+   * slower knock; only a subscription that actually held for
+   * STABLE_SUBSCRIBE_MS resets the backoff — a close that lands before
+   * SUBSCRIBED keeps doubling. Peers keep (roughly) seeing us in the gap
+   * because broadcast send() falls back to REST.
+   */
+  private scheduleResubscribe(): void {
+    if (this.resubscribeTimer !== null) return;
+    const wasStable = this.channelWasSubscribed && Date.now() - this.lastSubscribedAt >= STABLE_SUBSCRIBE_MS;
+    this.resubscribeDelayMs = wasStable
+      ? RESUBSCRIBE_MIN_MS
+      : Math.min(this.resubscribeDelayMs * 2, RESUBSCRIBE_MAX_MS);
+    this.channel?.teardown(); // frees timers/bindings without re-firing close callbacks
+    this.channelWasSubscribed = false; // the replacement must re-earn "stable"
+    this.channel = this.buildChannel();
+    console.warn(`[jw] realtime channel closed by server — resubscribing in ${this.resubscribeDelayMs}ms`);
+    this.resubscribeTimer = setTimeout(() => {
+      this.resubscribeTimer = null;
+      const p = this.lastLocal;
+      if (this.channel) this.subscribeChannel(this.channel, p?.x ?? 0, p?.y ?? 0);
+    }, this.resubscribeDelayMs);
   }
 
   /**
@@ -349,7 +423,9 @@ export class SupabaseBackend implements Backend {
     if (!force && now - this.lastPosSent < POS_BROADCAST_MS) return;
     this.lastPosSent = now;
     void this.channel.send({ type: 'broadcast', event: 'pos', payload: this.lastLocal });
-    if (now - this.lastPresence > PRESENCE_REFRESH_MS) {
+    // presence track() (unlike broadcast send()) has no REST fallback and
+    // throws on an unjoined channel — skip it while a resubscribe is pending
+    if (now - this.lastPresence > PRESENCE_REFRESH_MS && (this.channel.state as string) === 'joined') {
       this.lastPresence = now;
       void this.channel.track(this.lastLocal); // refresh snapshot for future joiners
     }
