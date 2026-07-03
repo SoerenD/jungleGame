@@ -25,16 +25,16 @@ jobs:
       VITE_SUPABASE_URL: https://irjxvtgrzkmvjomozyiv.supabase.co
       VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlyanh2dGdyemttdmpvbW96eWl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxMDI3NzYsImV4cCI6MjA5ODY3ODc3Nn0.x1A54g3-AANjnbuydXeMLWgSZ3UeZbObAchEVmbfytY
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
       - run: npm ci
       - run: npm run build
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         with:
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
@@ -46,4 +46,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
