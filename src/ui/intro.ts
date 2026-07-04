@@ -1,4 +1,5 @@
 import { INTRO_TEXT, INTRO_TITLE } from '../content/lore';
+import { t } from '../i18n';
 
 /**
  * Full-screen intro story. Shown once per Player on first join (before
@@ -16,7 +17,7 @@ export function showIntro(): Promise<void> {
       <div id="intro-card" data-testid="intro-card">
         <h2>${INTRO_TITLE}</h2>
         ${paragraphs}
-        <div class="intro-hint">click or press Enter to begin</div>
+        <div class="intro-hint">${t.intro.hint}</div>
       </div>
     `;
     document.body.appendChild(overlay);

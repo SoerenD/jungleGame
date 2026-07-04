@@ -22,17 +22,108 @@ export const ARENA_H = 13;
 /** server-side tolerance for client→server latency when validating hits/knockdowns */
 export const ADJUDICATION_SLACK_MS = 700;
 
+// ------------------------------------------------------------- weapon damage
+
 /**
- * Damage of one landing hit in an Eye Window. Bare hands and the Bow deal 2;
- * an in-hand axe or pickaxe (or its tier-2 upgrade) adds a flat +1 → 3. NOTE:
- * this is a +1 for the matching Tool, NOT the ×2 of Resource Nodes. The in-hand
- * Tool arrives as an argument (already ownership-validated by the server) so
- * this module stays node-importable — no config/inventory read.
+ * Cosmetic multiplier applied to on-screen damage + HP ONLY (the float text and
+ * the HP bar) — never to the authoritative roll or the stored pool (ADR-0006
+ * §5). Because it hits damage and HP identically it is provably balance-neutral:
+ * hits-to-kill is unchanged. Pure data — safe for node importers.
  */
-export function guardianDamage(withTool: ToolId | undefined): number {
-  const meleeBonus =
-    withTool === 'axe' || withTool === 'pickaxe' || withTool === 'ancient_axe' || withTool === 'ancient_pickaxe';
-  return meleeBonus ? 3 : 2;
+export const GUARDIAN_DISPLAY_SCALE = 6;
+
+/**
+ * One weapon's Guardian-combat profile (ADR-0006). Numbers are BASE
+ * (pre-display-scale) units, the same small magnitude as the retired flat model
+ * (~2–3 per hit); the ×GUARDIAN_DISPLAY_SCALE happens at render time only.
+ * **DPS = avg band × attack speed × crit factor** is the balance axis, not the
+ * per-hit number. `attackMs` is the COMBAT swing cadence — it applies only when
+ * striking the Guardian; harvesting always keeps config's uniform
+ * SWING_CADENCE_MS (§4). Bare hands and any non-combat Tool fall back to
+ * BARE_HANDS: a weak, crit-less baseline (never locked out — but bring a weapon).
+ */
+export interface WeaponCombat {
+  /** inclusive damage band, base units */
+  min: number;
+  max: number;
+  /** passive crit chance 0..1 (0 → cannot crit) */
+  critChance: number;
+  /** crit damage multiplier on the rolled band value */
+  critMult: number;
+  /** combat-only swing cadence in ms (= 1000 / attacks-per-second) */
+  attackMs: number;
+}
+
+/** bare hands / any non-combat Tool: weakest, never crits, slow */
+export const BARE_HANDS: WeaponCombat = { min: 1, max: 2, critChance: 0, critMult: 1, attackMs: 667 };
+
+/**
+ * The Tools that meaningfully strike the Guardian; anything else → BARE_HANDS.
+ * Intended relationships (hold these when tuning integers): Bow ≈ 60% of melee
+ * DPS (a safety tax for hitting from range); axe ≈ pickaxe DPS but opposite feel
+ * (axe wide/swingy/high-crit, pickaxe fast/steady/narrow); ancients a ~×1.6 band
+ * scale-up with the base tool's crit + cadence.
+ */
+export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
+  bow: { min: 2, max: 2, critChance: 0.06, critMult: 1.5, attackMs: 500 },
+  pickaxe: { min: 2, max: 3, critChance: 0.1, critMult: 1.8, attackMs: 400 },
+  axe: { min: 2, max: 4, critChance: 0.16, critMult: 2.0, attackMs: 556 },
+  ancient_pickaxe: { min: 3, max: 5, critChance: 0.1, critMult: 1.8, attackMs: 400 },
+  ancient_axe: { min: 3, max: 6, critChance: 0.16, critMult: 2.0, attackMs: 556 },
+  // The Sword (ADR-0007): the game's first PURE-COMBAT weapon — no harvest use.
+  // It sits at the top of the melee band (≈ ancient-axe DPS) with its own crit +
+  // cadence, and unlike every other weapon it strikes Husks, the Deep Guardian,
+  // AND the Guardian. Crafted from Delve loot; plugs straight into this table.
+  sword: { min: 3, max: 5, critChance: 0.14, critMult: 1.9, attackMs: 480 },
+};
+
+/** the combat profile of the in-hand Tool (bare hands / non-combat → BARE_HANDS) */
+export function weaponCombat(tool: ToolId | undefined): WeaponCombat {
+  return (tool && WEAPON_COMBAT[tool]) || BARE_HANDS;
+}
+
+/**
+ * Roll one landing hit's damage + crit for the in-hand Tool, using an INJECTED
+ * rng (backends pass Math.random) so this module stays node-importable — no
+ * browser globals, no config/inventory read. Damage is in base units; a crit
+ * multiplies the rolled band value. The Tool is already ownership-validated by
+ * the caller. Replaces the retired flat guardianDamage().
+ */
+export function rollGuardianDamage(tool: ToolId | undefined, rng: () => number): { damage: number; crit: boolean } {
+  const w = weaponCombat(tool);
+  const base = w.min + Math.floor(rng() * (w.max - w.min + 1));
+  const crit = w.critChance > 0 && rng() < w.critChance;
+  const damage = Math.max(1, Math.round(crit ? base * w.critMult : base));
+  return { damage, crit };
+}
+
+/** average band value in base units */
+export function weaponAvg(w: WeaponCombat): number {
+  return (w.min + w.max) / 2;
+}
+
+/** a weapon's DPS in DISPLAY units: avg band × crit factor × attacks-per-second × scale */
+export function weaponDps(tool: ToolId | undefined): number {
+  const w = weaponCombat(tool);
+  const critFactor = 1 + w.critChance * (w.critMult - 1);
+  return weaponAvg(w) * critFactor * (1000 / w.attackMs) * GUARDIAN_DISPLAY_SCALE;
+}
+
+/**
+ * One-line tooltip summary: band · crit · attack speed · DPS, all in display
+ * units. Localizable via `labels` (the caller in a browser passes translations);
+ * the defaults keep this node-importable with no i18n dependency.
+ */
+export function weaponStatLine(
+  tool: ToolId | undefined,
+  labels: { dmg: string; crit: string; noCrit: string; dps: string } = { dmg: 'dmg', crit: 'crit', noCrit: 'no crit', dps: 'DPS' },
+): string {
+  const w = weaponCombat(tool);
+  const s = GUARDIAN_DISPLAY_SCALE;
+  const band = w.min === w.max ? `${w.min * s}` : `${w.min * s}–${w.max * s}`;
+  const crit = w.critChance > 0 ? `${Math.round(w.critChance * 100)}% ×${w.critMult.toFixed(1)} ${labels.crit}` : labels.noCrit;
+  const aps = (1000 / w.attackMs).toFixed(1);
+  return `⚔ ${band} ${labels.dmg} · ${crit} · ${aps}/s · ~${Math.round(weaponDps(tool))} ${labels.dps}`;
 }
 
 // ------------------------------------------------------------- fury phases
@@ -330,6 +421,69 @@ export function isDangerousAt(
     } else if (waveTiles(w.index, w.phase.density)[ay * ARENA_W + ax]) {
       return true;
     }
+  }
+  return false;
+}
+
+// ------------------------------------------------------------- melee danger-ring
+
+/**
+ * The authored melee tax (ADR-0006 §7). A danger-ring hugs the Guardian's 3×3
+ * footprint — the arena tiles at Chebyshev distance MELEE_RING_MIN..MAX from its
+ * scripted centre, i.e. exactly where a melee attacker must stand. A Bow user
+ * (~8 tiles out) sits clear of it. The ring is hot only during the wind-up slice
+ * of each stationary slam wave, so camping on the body between Eye Windows costs
+ * knockdowns while ranged play stays safe — the higher melee DPS taxed
+ * positionally, never reactively. Like every danger source here it is a PURE
+ * function of the schedule + the Guardian's scripted spot (ADR-0002): the
+ * Guardian never reacts. Lunge waves and wave 0 (the Ward slam) carry no ring.
+ */
+export const MELEE_RING_MIN = 2;
+export const MELEE_RING_MAX = 3;
+/** the ring is hot from this fraction of the wind-up through to the slam */
+export const MELEE_RING_HOT_FROM = 0.45;
+
+/** the ring's hot window within a wave, or null if this wave carries no ring */
+export function meleeRingWindow(w: WaveInfo): EyeWindow | null {
+  if (w.index === 0 || w.kind === 'lunge') return null;
+  return {
+    openMs: w.startMs + w.phase.telegraphMs * MELEE_RING_HOT_FROM,
+    closeMs: w.startMs + w.phase.telegraphMs,
+  };
+}
+
+/** is arena tile (ax, ay) inside the melee ring around `centre`? */
+export function inMeleeRing(ax: number, ay: number, centre: ArenaSpot): boolean {
+  const d = Math.max(Math.abs(ax - centre.ax), Math.abs(ay - centre.ay));
+  return d >= MELEE_RING_MIN && d <= MELEE_RING_MAX;
+}
+
+/**
+ * Server-side melee-ring adjudication: was tile (ax, ay) inside the HOT ring
+ * around the Guardian's scripted spot within ±slackMs of `elapsedMs`? Mirrors
+ * isDangerousAt's slack discipline; `home` locates the ring's centre via the
+ * same guardianSpotAt() every client renders with.
+ */
+export function inMeleeRingDangerAt(
+  elapsedMs: number,
+  ax: number,
+  ay: number,
+  awakeMs: number,
+  home: ArenaSpot,
+  slackMs = 0,
+): boolean {
+  if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return false;
+  const lo = Math.max(0, elapsedMs - slackMs);
+  const hi = elapsedMs + slackMs;
+  let lastIndex = -1;
+  for (const t of [lo, hi]) {
+    const w = waveInfoAt(t, awakeMs);
+    if (w.index === lastIndex) continue;
+    lastIndex = w.index;
+    const ring = meleeRingWindow(w);
+    if (!ring) continue;
+    if (hi < ring.openMs || lo > ring.closeMs) continue;
+    if (inMeleeRing(ax, ay, guardianSpotAt(w.lungeCount, home))) return true;
   }
   return false;
 }

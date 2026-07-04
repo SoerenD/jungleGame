@@ -1,11 +1,13 @@
 /** Lore tablets scattered through the World. Ids match world-data tablet spots. */
+import { pick } from '../i18n';
+
 export interface Tablet {
   id: string;
   title: string;
   text: string;
 }
 
-export const TABLETS: Record<string, Tablet> = {
+const TABLETS_EN: Record<string, Tablet> = {
   t0: {
     id: 't0',
     title: 'The First Tablet',
@@ -38,12 +40,57 @@ export const TABLETS: Record<string, Tablet> = {
   },
 };
 
+const TABLETS_DE: Record<string, Tablet> = {
+  t0: {
+    id: 't0',
+    title: 'Die Erste Steintafel',
+    text: 'Wir kamen in diesen Dschungel mit nichts als unseren Händen. Die Bäume gaben Holz, die Felsen gaben Stein — und der Dschungel heilte stets hinter uns. Was du nimmst, kehrt zurück. Was du baust, bleibt bestehen.',
+  },
+  t1: {
+    id: 't1',
+    title: 'Steintafel des Hains',
+    text: 'Westlich der großen Furt liegt ein Hain, der sich vor hastigen Augen verbirgt. Sein Rankentor weicht weder Klinge noch Feuer. Bring dem Dschungel seine eigenen Gaben: zwei seiner Süße, zwei seiner Fäden — und lege sie auf den Altar.',
+  },
+  t2: {
+    id: 't2',
+    title: 'Steintafel der Wasserfälle',
+    text: 'Die Wasserfälle donnern, seit die erste Hütte stand. Lausche genau in der Dämmerung: Das Wasser spricht lauter, wenn das Licht erstirbt. Jene, die die Ruinen bauten, badeten hier vor jeder Ernte.',
+  },
+  t3: {
+    id: 't3',
+    title: 'Steintafel des Vergrabenen',
+    text: 'Die Alten vergruben ihre Schätze, wo keine Karte sie ganz zeigt. Zerrissene Fetzen treiben im Wind zurück, wenn im Dschungel gearbeitet wird — sammle drei, und die Erde selbst wird die Stelle markieren. Grabe, wo das ✕ steht.',
+  },
+  t4: {
+    id: 't4',
+    title: 'Die Letzte Steintafel',
+    text: 'Ein goldenes Götzenbild wacht über jedes Lager, das es sich verdient hat. Stell es voller Stolz auf. Der Sumpf verschlingt die Achtlosen, die Ruinen belohnen die Geduldigen, und der Dschungel erinnert sich an jedes Feuer und jede Wand, die du zurücklässt.',
+  },
+  t5: {
+    id: 't5',
+    title: 'Steintafel des Siegels',
+    text: 'Wir konnten nicht erschlagen, was in der Arena schlummert, also mauerten wir es hinter einer Schuld ein: Holz, Stein, Faden und Süße, frei und gemeinsam gegeben. Wenn der Dschungel voll entlohnt ist, öffnet sich das Siegel — und wer es wagt, mag den Wächter mit einer Opfergabe auf seinem Altar wecken. Seine Schuppen sind der einzige Schlüssel zum schwarzen Gestein und zum uralten Holz.',
+  },
+};
+
+/** Lore tablets in the session's language (ids match world-data tablet spots). */
+export const TABLETS: Record<string, Tablet> = pick(TABLETS_EN, TABLETS_DE);
+
 /** Intro story — shown once per Player on first join, re-readable at the Welcome Stone. */
-export const INTRO_TITLE = 'The Jungle Remembers';
-export const INTRO_TEXT = `The jungle remembers. Whatever you take, it returns; whatever you build, it remains.
+export const INTRO_TITLE = pick('The Jungle Remembers', 'Der Dschungel erinnert sich');
+export const INTRO_TEXT = pick(
+  `The jungle remembers. Whatever you take, it returns; whatever you build, it remains.
 
 You and your friends share one world. Gather wood, stone, fiber and fruit; craft tools; build a camp that outlasts you.
 
 But deep in the Ruins something older sleeps. The ancients sealed it behind a wall of offerings — bring the jungle's gifts to the Seal, all of you together, and it will open.
 
-Beyond the Guardian's slumber lie the black rock no pickaxe can break and the ancient hardwood no axe can cut. Earn its scales. Master the jungle.`;
+Beyond the Guardian's slumber lie the black rock no pickaxe can break and the ancient hardwood no axe can cut. Earn its scales. Master the jungle.`,
+  `Der Dschungel erinnert sich. Was du nimmst, kehrt zurück; was du baust, bleibt bestehen.
+
+Du und deine Freunde teilt euch eine Welt. Sammelt Holz, Stein, Fasern und Frucht; stellt Werkzeuge her; baut ein Lager, das euch überdauert.
+
+Doch tief in den Ruinen schläft etwas Älteres. Die Alten versiegelten es hinter einer Mauer aus Opfergaben — bringt die Gaben des Dschungels zum Siegel, ihr alle gemeinsam, und es wird sich öffnen.
+
+Jenseits des Schlummers des Wächters liegen das schwarze Gestein, das keine Spitzhacke bricht, und das uralte Hartholz, das keine Axt fällt. Verdiene dir seine Schuppen. Meistere den Dschungel.`,
+);

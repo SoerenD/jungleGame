@@ -1,0 +1,308 @@
+/**
+ * Procedural pixel-art sprites for the Delve's Husks + boss (ADR-0007), drawn
+ * the same way as the Avatars (src/avatars.ts) and the BootScene FX: block-by-
+ * block with ctx.fillRect onto a canvas, then registered as a Phaser texture.
+ * No external art — every pixel is code, so the mobs match the game's look and
+ * ship in the bundle. Designs follow art-directed specs (silhouette + limited
+ * palette + one emissive feature that pops on the dark Delve floor).
+ *
+ * Each mob is a 3-frame sheet: frame 0/1 are a gentle idle heave (the `*-idle`
+ * anim — the whole mass lifts 1px while the feet stay planted, and the glow dims
+ * on the exhale), frame 2 is the TELEGRAPH pose (reared up, glow blazing white)
+ * the renderer snaps to during a wind-up. They face the camera; the renderer
+ * flips them for left/right.
+ */
+import type Phaser from 'phaser';
+import type { MobKind } from './content/dungeon';
+
+export const MOB_TEX: Record<MobKind, string> = {
+  grasp: 'husk-grasp',
+  spit: 'husk-spit',
+  boss: 'deep-guardian',
+};
+
+/** per-mob sheet frame size (px). Boss is far bigger — a boss silhouette. */
+export const MOB_FRAME: Record<MobKind, { w: number; h: number }> = {
+  grasp: { w: 20, h: 22 },
+  spit: { w: 20, h: 24 },
+  boss: { w: 46, h: 50 },
+};
+
+type Ctx = CanvasRenderingContext2D;
+const R = (ctx: Ctx, x: number, y: number, w: number, h: number, c: string) => {
+  if (w <= 0 || h <= 0) return;
+  ctx.fillStyle = c;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+};
+
+// -------------------------------------------------------- Grasp Husk (melee brute)
+// Wide, low, top-heavy clay brute: hunched shoulders, two mismatched grasping
+// fists hanging past the hips, a single warm amber crack-core in the chest.
+const GRASP = {
+  outline: '#2b2622',
+  shadow: '#4a423b',
+  base: '#6b6058',
+  highlight: '#8c8073',
+  rim: '#b3a493',
+  moss: '#7a7a5e',
+  glowCore: '#ffcf5c',
+  glowHot: '#ff8c2a',
+  glowEdge: '#c43a12',
+};
+function drawGrasp(ctx: Ctx, ox: number, f: number): void {
+  const P = GRASP;
+  const oy = f === 0 ? 0 : -1; // idleB/telegraph heave the mass up; feet stay
+  const tel = f === 2;
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 4, 20, 12, 2, P.outline); // ground shadow (planted)
+  // legs / plinth
+  R(ctx, ox + 4, Y(16), 12, 4, P.base);
+  R(ctx, ox + 4, 19, 12, 2, P.shadow); // feet planted
+  R(ctx, ox + 4, Y(16), 12, 1, P.highlight);
+  // torso / shoulder mass
+  R(ctx, ox + 3, Y(7), 14, 10, P.base);
+  R(ctx, ox + 3, Y(7), 2, 1, P.outline); // chip notch L
+  R(ctx, ox + 15, Y(7), 2, 1, P.outline); // chip notch R
+  R(ctx, ox + 3, Y(14), 14, 2, P.shadow);
+  // moss on top faces
+  R(ctx, ox + 4, Y(7), 12, 1, P.moss);
+  R(ctx, ox + 5, Y(8), 3, 1, P.moss);
+  // rim light (top-left)
+  R(ctx, ox + 3, Y(7), 10, 1, P.rim);
+  R(ctx, ox + 3, Y(7), 1, 4, P.highlight);
+  // sunk head
+  R(ctx, ox + 7, Y(3), 6, 5, P.base);
+  R(ctx, ox + 7, Y(3), 6, 1, P.shadow);
+  R(ctx, ox + 7, Y(3), 4, 1, P.highlight);
+  R(ctx, ox + 8, Y(5), 1, 1, P.outline); // dim eyes
+  R(ctx, ox + 11, Y(5), 1, 1, P.outline);
+  // arms + mismatched fists (raised on telegraph)
+  const fy = tel ? Y(10) : Y(13);
+  const uy = tel ? Y(6) : Y(8);
+  R(ctx, ox + 1, uy, 3, 6, P.base); // L upper (bigger)
+  R(ctx, ox + 0, fy, 4, 4, P.base); // L fist
+  R(ctx, ox + 0, fy, 4, 1, P.highlight);
+  R(ctx, ox + 16, uy, 3, 5, P.base); // R upper (smaller)
+  R(ctx, ox + 16, fy, 4, 3, P.base); // R fist
+  R(ctx, ox + 16, fy, 4, 1, P.highlight);
+  R(ctx, ox + 0, fy + 3, 4, 1, P.shadow);
+  R(ctx, ox + 16, fy + 2, 4, 1, P.shadow);
+  if (tel) {
+    R(ctx, ox + 2, uy, 1, 6, P.glowEdge); // charging arm seams
+    R(ctx, ox + 17, uy, 1, 5, P.glowEdge);
+  }
+  // chest core (the one emissive feature)
+  const gy = Y(10);
+  if (tel) {
+    R(ctx, ox + 7, gy, 6, 6, P.glowHot); // flare into shoulder cracks
+    R(ctx, ox + 8, gy, 4, 5, '#ffbf6a');
+    R(ctx, ox + 9, gy + 1, 2, 2, '#ffffff');
+  } else {
+    R(ctx, ox + 9, gy, 2, 4, P.glowEdge); // crack seam
+    R(ctx, ox + 9, gy + 1, 2, 2, P.glowHot);
+    if (f === 0) R(ctx, ox + 9, gy + 1, 1, 1, P.glowCore); // white pip (dims on exhale)
+    R(ctx, ox + 8, gy + 2, 1, 1, P.glowEdge);
+    R(ctx, ox + 11, gy + 2, 1, 1, P.glowEdge);
+  }
+}
+
+// -------------------------------------------------------- Spit Husk (ranged kiter)
+// Lean and tall, hunched around a bulbous glowing acid throat-sac carried high;
+// spindly limbs. Cool grey-green so it reads instantly apart from the brute.
+const SPIT = {
+  outline: '#2b3327',
+  shadow: '#3f4d38',
+  base: '#556a49',
+  highlight: '#6d855c',
+  sacShadow: '#0e3d2f',
+  sacBody: '#1f9e6b',
+  sacBright: '#39e467',
+  sacCore: '#b6ffcf',
+};
+function drawSpit(ctx: Ctx, ox: number, f: number): void {
+  const P = SPIT;
+  const oy = f === 0 ? 0 : f === 1 ? -1 : -2; // telegraph rears the sac up 2px
+  const swell = f === 0 ? 0 : f === 1 ? 1 : 2; // sac inhale / bulge
+  const tel = f === 2;
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 6, 22, 8, 1, P.sacShadow); // ground emissive oval (planted)
+  R(ctx, ox + 7, 23, 6, 1, '#13563b');
+  // gaunt legs
+  R(ctx, ox + 6, Y(17), 3, 5, P.base);
+  R(ctx, ox + 11, Y(17), 3, 5, P.base);
+  R(ctx, ox + 6, 21, 3, 1, P.shadow);
+  R(ctx, ox + 11, 21, 3, 1, P.shadow);
+  // narrow torso
+  R(ctx, ox + 6, Y(10), 8, 8, P.base);
+  R(ctx, ox + 6, Y(15), 8, 2, P.shadow);
+  R(ctx, ox + 6, Y(10), 6, 1, P.highlight);
+  // spindly arms (kept 1px off the torso)
+  R(ctx, ox + 4, Y(11), 2, 6, P.shadow);
+  R(ctx, ox + 3, Y(16), 2, 2, P.base);
+  R(ctx, ox + 14, Y(11), 2, 5, P.shadow);
+  R(ctx, ox + 15, Y(15), 2, 2, P.base);
+  // gaunt head high on a thin neck
+  R(ctx, ox + 8, Y(4), 4, 4, P.base);
+  R(ctx, ox + 8, Y(4), 4, 1, P.shadow);
+  R(ctx, ox + 8, Y(6), 1, 1, P.outline);
+  R(ctx, ox + 11, Y(6), 1, 1, P.outline);
+  R(ctx, ox + 9, Y(8), 2, 2, P.shadow);
+  // throat-sac (the one glow), swelling with the frame
+  const sx = 6 - swell;
+  const sy = Y(7) - swell;
+  const sw = 8 + swell * 2;
+  const sh = 7 + swell * 2;
+  R(ctx, ox + sx, sy, sw, sh, P.sacShadow); // seat ring = its own outline
+  R(ctx, ox + sx + 1, sy + 1, sw - 2, sh - 2, P.sacBody);
+  R(ctx, ox + sx + 2, sy + 2, sw - 4, sh - 4, tel ? '#7dff9f' : P.sacBright);
+  if (f !== 1) {
+    R(ctx, ox + 9, Y(9), 2, 2, P.sacCore);
+    R(ctx, ox + 10, Y(9), 1, 1, tel ? '#ffffff' : P.sacCore);
+  }
+  // corrosion drips
+  R(ctx, ox + 9, Y(13), 1, 2, P.sacBright);
+  R(ctx, ox + 10, Y(15), 1, 1, P.sacBody);
+  if (tel) R(ctx, ox + 9, Y(14), 1, 1, P.sacBright);
+  // rim light
+  R(ctx, ox + 6, Y(4), 1, 4, P.highlight);
+  R(ctx, ox + 6, Y(10), 1, 3, P.highlight);
+}
+
+// -------------------------------------------------------- Deep Guardian (boss)
+// A massive crowned obsidian-violet colossus: horns over a blazing recessed
+// core-eye, a branching molten vein network — a scaled-up, cursed husk.
+const BOSS = {
+  outline: '#0d0a14',
+  shadow: '#1a1426',
+  base: '#2a1f3d',
+  highlight: '#3d2d59',
+  rim: '#5a3f82',
+  crackRoot: '#4a0d1f',
+  crackMid: '#c2381a',
+  crackHot: '#ff7a2a',
+  crackWhite: '#ffe08a',
+  coreCenter: '#ffd24a',
+  coreBloom: '#ff8a2a',
+  corona: '#7e1dfb',
+};
+function drawBoss(ctx: Ctx, ox: number, f: number): void {
+  const P = BOSS;
+  const oy = f === 0 ? 0 : f === 1 ? -1 : -3; // telegraph rears the whole colossus
+  const tel = f === 2;
+  const aL = tel ? 3 : 0; // arms/shoulders lift extra on the wind-up
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 8, 46, 30, 3, P.outline); // ground shadow (planted)
+  R(ctx, ox + 10, 48, 26, 1, '#080610');
+  // stubby legs
+  R(ctx, ox + 9, Y(36), 12, 10, P.base);
+  R(ctx, ox + 25, Y(36), 12, 10, P.base);
+  R(ctx, ox + 8, 44, 14, 2, P.shadow);
+  R(ctx, ox + 24, 44, 14, 2, P.shadow);
+  R(ctx, ox + 9, Y(36), 12, 1, P.highlight);
+  R(ctx, ox + 25, Y(36), 12, 1, P.highlight);
+  // heavy trapezoid torso
+  R(ctx, ox + 6, Y(14), 34, 24, P.base);
+  R(ctx, ox + 6, Y(30), 34, 6, P.shadow);
+  R(ctx, ox + 8, Y(14), 30, 1, P.highlight);
+  R(ctx, ox + 10, Y(16), 10, 8, P.highlight);
+  R(ctx, ox + 6, Y(14), 2, 2, P.outline);
+  R(ctx, ox + 38, Y(14), 2, 2, P.outline);
+  // knuckle-dragging arms + fists
+  R(ctx, ox + 2, Y(16) - aL, 6, 14, P.base);
+  R(ctx, ox + 0, Y(28) - aL, 8, 8, P.base);
+  R(ctx, ox + 0, Y(28) - aL, 8, 1, P.highlight);
+  R(ctx, ox + 38, Y(16) - aL, 6, 13, P.base);
+  R(ctx, ox + 38, Y(27) - aL, 8, 8, P.base);
+  R(ctx, ox + 38, Y(27) - aL, 8, 1, P.highlight);
+  R(ctx, ox + 0, Y(35) - aL, 8, 1, P.shadow);
+  R(ctx, ox + 38, Y(34) - aL, 8, 1, P.shadow);
+  // head + shadowed brow socket
+  R(ctx, ox + 15, Y(6), 16, 12, P.base);
+  R(ctx, ox + 17, Y(10), 12, 5, P.shadow);
+  // forward horns over the brow
+  R(ctx, ox + 13, Y(7), 3, 3, P.base);
+  R(ctx, ox + 11, Y(9), 3, 3, P.base);
+  R(ctx, ox + 10, Y(11), 2, 3, P.shadow);
+  R(ctx, ox + 30, Y(7), 3, 3, P.base);
+  R(ctx, ox + 33, Y(9), 3, 3, P.base);
+  R(ctx, ox + 35, Y(11), 2, 3, P.shadow);
+  // asymmetric crown shards
+  R(ctx, ox + 17, Y(0), 3, 6, P.base);
+  R(ctx, ox + 17, Y(0), 3, 1, P.rim);
+  R(ctx, ox + 21, Y(2), 3, 4, P.shadow);
+  R(ctx, ox + 25, Math.max(0, Y(0)), 3, 7, P.base);
+  R(ctx, ox + 25, Math.max(0, Y(0)), 3, 1, P.rim);
+  R(ctx, ox + 29, Y(3), 2, 3, P.shadow);
+  R(ctx, ox + 14, Y(3), 2, 3, P.shadow);
+  // rim light (violet, top-left)
+  R(ctx, ox + 6, Y(14), 1, 10, P.rim);
+  R(ctx, ox + 15, Y(6), 1, 6, P.rim);
+  R(ctx, ox + 10, Y(16), 1, 1, P.rim);
+  // molten vein network (branching, feeding the brow)
+  const ch = tel ? P.crackWhite : P.crackHot;
+  const cm = tel ? P.crackHot : P.crackMid;
+  R(ctx, ox + 22, Y(18), 2, 14, cm); // trunk
+  R(ctx, ox + 16, Y(24), 6, 1, cm);
+  R(ctx, ox + 16, Y(24), 3, 1, ch);
+  R(ctx, ox + 24, Y(28), 7, 1, cm);
+  R(ctx, ox + 28, Y(28), 3, 1, ch);
+  R(ctx, ox + 22, Y(32), 2, 2, P.crackRoot);
+  R(ctx, ox + 22, Y(20), 1, 10, ch);
+  R(ctx, ox + 22, Y(22), 1, 4, tel ? '#ffffff' : P.crackWhite);
+  R(ctx, ox + 12, Y(10), 1, 3, cm);
+  R(ctx, ox + 34, Y(10), 1, 3, cm);
+  if (tel) {
+    R(ctx, ox + 18, Y(2), 1, 4, P.crackHot); // seams flood the crown
+    R(ctx, ox + 27, Y(1), 1, 4, P.crackHot);
+  }
+  // blazing core-eye in the brow socket (the dominant glow)
+  const cs = tel ? 2 : 0;
+  R(ctx, ox + 20 - cs, Y(10) - cs, 7 + cs * 2, 5 + cs * 2, P.corona);
+  R(ctx, ox + 21 - cs, Y(11) - cs, 5 + cs * 2, 3 + cs * 2, P.coreBloom);
+  if (f !== 1) {
+    R(ctx, ox + 22, Y(11), 3, 2, tel ? '#ffffff' : P.coreCenter);
+    R(ctx, ox + 23, Y(12), 1, 1, P.crackWhite);
+  }
+}
+
+const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
+  grasp: drawGrasp,
+  spit: drawSpit,
+  boss: drawBoss,
+};
+
+/** draw one mob frame at an x-offset — exported so it can be rasterized/previewed
+ *  outside the browser (the functions only touch fillStyle + fillRect). */
+export function drawMobFrame(ctx: Ctx, kind: MobKind, ox: number, frame: number): void {
+  DRAW[kind](ctx, ox, frame);
+}
+
+/**
+ * Build the three mob textures (3-frame sheets) + their idle animations. Global
+ * (game-level) textures/anims, so calling this once in BootScene makes them
+ * available to GameScene. Idempotent.
+ */
+export function ensureMobTextures(scene: Phaser.Scene): void {
+  (Object.keys(MOB_TEX) as MobKind[]).forEach((kind) => {
+    const key = MOB_TEX[kind];
+    const { w, h } = MOB_FRAME[kind];
+    if (!scene.textures.exists(key)) {
+      const canvas = document.createElement('canvas');
+      canvas.width = w * 3;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      for (let f = 0; f < 3; f++) DRAW[kind](ctx, f * w, f);
+      const tex = scene.textures.addCanvas(key, canvas)!;
+      for (let f = 0; f < 3; f++) tex.add(f, 0, f * w, 0, w, h);
+    }
+    const animKey = `${key}-idle`;
+    if (!scene.anims.exists(animKey)) {
+      scene.anims.create({
+        key: animKey,
+        frames: scene.anims.generateFrameNumbers(key, { start: 0, end: 1 }),
+        frameRate: 2.5,
+        repeat: -1,
+      });
+    }
+  });
+}

@@ -21,15 +21,18 @@ import {
 import {
   ADJUDICATION_SLACK_MS,
   eyeOpenWithin,
-  guardianDamage,
+  inMeleeRingDangerAt,
   isDangerousAt,
+  rollGuardianDamage,
   waveInfoAt,
+  type ArenaSpot,
 } from '../content/guardian';
 import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
 import { asset } from '../paths';
+import { t } from '../i18n';
 import type {
   Appearance,
   AvatarId,
@@ -52,7 +55,9 @@ import type {
   JourneyStepId,
   KnockdownResult,
   NodeState,
+  DungeonMsg,
   OfferResult,
+  OpenDelveResult,
   PlaceResult,
   PlayerPos,
   QuestState,
@@ -138,6 +143,8 @@ interface Db {
   chatLog: ChatMsg[];
   world?: {
     gateOpen: boolean;
+    /** the Delve mine shaft, cleared once forever with an Ancient Pickaxe (ADR-0007) */
+    delveOpen?: boolean;
     treasureIndex: number;
     seal?: { broken: boolean; contributed: Record<SealResourceId, number> };
     fight?: DbFight | null;
@@ -150,26 +157,12 @@ const BOT_DEFS: { name: string; appearance: Appearance; lines: string[] }[] = [
   {
     name: 'Kiki',
     appearance: { skin: 2, hair: 4, shirt: 1, pants: 3 },
-    lines: [
-      'the waterfall is thundering today',
-      'found a juicy fruit bush near the delta',
-      'anyone seen the hidden grove?',
-      'chopping some wood, brb',
-      'these vines are impossible without a machete',
-      'meet me at the ruins!',
-    ],
+    lines: t.botChatter.Kiki,
   },
   {
     name: 'Bruno',
     appearance: { skin: 4, hair: 0, shirt: 2, pants: 1 },
-    lines: [
-      'the swamp smells... interesting',
-      'stacking stones like a pro',
-      'gonna build a hut wall around camp later',
-      'watch out, I take the last hit >:)',
-      'this jungle heals fast',
-      'who put a crate in the river delta?',
-    ],
+    lines: t.botChatter.Bruno,
   },
 ];
 
@@ -457,6 +450,7 @@ export class MockBackend implements Backend {
       mapPieces: pieces,
       gateOpen: this.db.world!.gateOpen,
       treasureLocation: pieces >= 3 ? { ...this.world.treasureSpots[this.db.world!.treasureIndex] } : null,
+      delveOpen: !!this.db.world!.delveOpen,
     };
   }
 
@@ -496,6 +490,17 @@ export class MockBackend implements Backend {
       ax: Math.max(0, Math.min(a.w - 1, mid.tx - a.x)),
       ay: Math.max(0, Math.min(a.h - 1, mid.ty - a.y)),
     };
+  }
+
+  /**
+   * Arena-local centre of the Guardian's 3×3 home footprint (guardianHome is the
+   * top-left tile; +1 gives the centre) — the melee-ring adjudicates around the
+   * same spot every client renders with (guardianSpotAt).
+   */
+  private homeSpot(): ArenaSpot {
+    const a = this.world.arena;
+    const g = this.world.guardianHome;
+    return { ax: g.tx + 1 - a.x, ay: g.ty + 1 - a.y };
   }
 
   /**
@@ -774,7 +779,7 @@ export class MockBackend implements Backend {
         p.tablets.push(id);
         this.saveNow();
         if (p.tablets.length === this.world.tablets.length) {
-          this.pushChat({ from: '🌿 Jungle', text: `${this.me} has read all the ancient tablets!`, ts: Date.now() });
+          this.pushChat({ from: t.system.sender, text: t.system.tabletsAllRead(this.me ?? ''), ts: Date.now() });
         }
       }
     }
@@ -795,7 +800,7 @@ export class MockBackend implements Backend {
     this.db.world!.gateOpen = true;
     this.saveNow();
     this.emit('gateOpened');
-    this.pushChat({ from: '🌿 Jungle', text: `the vines part — ${this.me} has opened the Hidden Grove!`, ts: Date.now() });
+    this.pushChat({ from: t.system.sender, text: t.system.groveOpened(this.me ?? ''), ts: Date.now() });
     const q = this.questState();
     this.emit('quest', q);
     return { ok: true, inventory: { ...p.inventory }, quest: q };
@@ -817,7 +822,7 @@ export class MockBackend implements Backend {
     const n = this.world.treasureSpots.length;
     this.db.world!.treasureIndex = (this.db.world!.treasureIndex + 1 + Math.floor(Math.random() * (n - 1))) % n;
     this.saveNow();
-    this.pushChat({ from: '🌿 Jungle', text: `${this.me} unearthed a buried treasure!`, ts: Date.now() });
+    this.pushChat({ from: t.system.sender, text: t.system.treasureUnearthed(this.me ?? ''), ts: Date.now() });
     const q = this.questState();
     this.emit('quest', q);
     return { ok: true, loot, inventory: { ...p.inventory }, quest: q };
@@ -860,14 +865,14 @@ export class MockBackend implements Backend {
     const after = this.sealPercent();
     for (const milestone of [25, 50, 75]) {
       if (before < milestone && after >= milestone && after < 100) {
-        this.pushChat({ from: '🌿 Jungle', text: `the Seal weakens — ${milestone}% of the offerings are gathered!`, ts: Date.now() });
+        this.pushChat({ from: t.system.sender, text: t.system.sealWeakens(milestone), ts: Date.now() });
       }
     }
     if (SEAL_RESOURCES.every((res) => seal.contributed[res] >= q[res])) {
       seal.broken = true; // once, forever
       this.pushChat({
-        from: '🌿 Jungle',
-        text: '⚡ THE SEAL IS BROKEN! The arena at the Ruins stands open — the Guardian awaits whoever dares bring an Offering to its altar.',
+        from: t.system.sender,
+        text: t.system.sealBroken,
         ts: Date.now(),
       });
       this.emit('sealBroken');
@@ -896,8 +901,8 @@ export class MockBackend implements Backend {
       this.db.world!.fight = null;
       this.saveNow();
       this.pushChat({
-        from: '🌿 Jungle',
-        text: 'no one struck in time — the Guardian loses interest and sinks back into slumber. The totem is spent.',
+        from: t.system.sender,
+        text: t.system.guardianNoStrike,
         ts: now,
       });
       this.emit('guardianSlumber');
@@ -907,8 +912,8 @@ export class MockBackend implements Backend {
       this.db.world!.fight = null; // HP resets by discarding the fight
       this.saveNow();
       this.pushChat({
-        from: '🌿 Jungle',
-        text: 'the Guardian returns to slumber, unbeaten. The arena falls silent — another Offering will wake it.',
+        from: t.system.sender,
+        text: t.system.guardianUnbeaten,
         ts: now,
       });
       this.emit('guardianSlumber');
@@ -956,10 +961,38 @@ export class MockBackend implements Backend {
     // schedule the ~90s dormant re-slumber (setTimeout via DORMANT_TIMEOUT_MS);
     // the first strike reschedules this to the awake-window deadline instead
     this.scheduleSlumberCheck();
-    this.pushChat({ from: '🌿 Jungle', text: `${this.me} laid an Offering on the altar — the Guardian STIRS! Gather at the arena and strike to begin.`, ts: Date.now() });
+    this.pushChat({ from: t.system.sender, text: t.system.guardianStirs(this.me ?? ''), ts: Date.now() });
     const pub = this.fightState()!;
     this.emit('guardianSummoned', pub);
     return { ok: true, fight: pub, inventory: { ...p.inventory } };
+  }
+
+  // ---------------------------------------------------------------- the Delve (ADR-0007)
+
+  async openDelve(): Promise<OpenDelveResult> {
+    await this.lag();
+    if (this.db.world!.delveOpen) return { ok: false, reason: 'ALREADY_OPEN' };
+    this.db.world!.delveOpen = true;
+    this.saveNow();
+    this.emit('delveOpened');
+    this.pushChat({ from: t.system.sender, text: t.system.delveOpened(this.me ?? ''), ts: Date.now() });
+    this.emit('quest', this.questState());
+    return { ok: true, delveOpen: true };
+  }
+
+  async claimDelveLoot(loot: Inventory): Promise<{ inventory: Inventory }> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { inventory: {} };
+    // the run's only persisted write (ADR-0007 §8) — mob HP never touches the DB
+    for (const [k, v] of Object.entries(loot)) p.inventory[k as ItemId] = (p.inventory[k as ItemId] ?? 0) + (v as number);
+    this.saveNow();
+    return { inventory: { ...p.inventory } };
+  }
+
+  /** single-player: the lone Player is always the host, so nothing is on the wire */
+  sendDungeon(_msg: DungeonMsg): void {
+    /* no peers to broadcast to in the Mock world */
   }
 
   async hitGuardian(withTool?: ToolId): Promise<GuardianHitResult> {
@@ -987,19 +1020,19 @@ export class MockBackend implements Backend {
       // roster is locked: only Players sealed inside the Ward at the first
       // strike may damage the Guardian — outsiders deflect off it
       if (!f.roster.includes(me)) {
-        return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true };
+        return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true, damage: 0, crit: false };
       }
       // later hits are adjudicated from engagedAt + SERVER elapsed time, exactly
       // like knockdowns: they land only inside an Eye Window
       const elapsed = now - f.engagedAt;
       if (!eyeOpenWithin(elapsed, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
-        return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true };
+        return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true, damage: 0, crit: false };
       }
     }
-    // trust the claimed in-hand Tool only if owned: axe/pickaxe (or tier-2) → 3,
-    // bow or bare → 2 (a flat +1 for the matching Tool, NOT the Node ×2)
+    // trust the claimed in-hand Tool only if owned; the SERVER rolls the weapon
+    // band + crit (ADR-0006 §2/§3), supplying Math.random as the rng
     const owned = withTool && (p.inventory[withTool] ?? 0) > 0 ? withTool : undefined;
-    const dmg = guardianDamage(owned);
+    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random);
     f.hp = Math.max(0, f.hp - dmg);
     if (!f.participants.includes(me)) f.participants.push(me);
     this.emit('guardianHit', f.hp, me);
@@ -1014,15 +1047,15 @@ export class MockBackend implements Backend {
       this.saveNow();
       this.scheduleSlumberCheck();
       this.pushChat({
-        from: '🌿 Jungle',
-        text: `🏆 THE GUARDIAN IS BESTED! ${participants.join(', ')} carried the day — ${GUARDIAN_SCALE_DROP} Guardian Scales to every fighter. It sinks back into slumber.`,
+        from: t.system.sender,
+        text: t.system.guardianBested(participants.join(', '), GUARDIAN_SCALE_DROP),
         ts: Date.now(),
       });
       this.emit('guardianVictory', participants);
-      return { ok: true, hp: 0, victory: true, inventory: { ...p.inventory }, deflected: false };
+      return { ok: true, hp: 0, victory: true, inventory: { ...p.inventory }, deflected: false, damage: dmg, crit };
     }
     this.saveSoon();
-    return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: false };
+    return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: false, damage: dmg, crit };
   }
 
   async reportKnockdown(tx: number, ty: number): Promise<KnockdownResult> {
@@ -1043,7 +1076,12 @@ export class MockBackend implements Backend {
     const elapsed = Date.now() - f.engagedAt;
     const ax = tx - this.world.arena.x;
     const ay = ty - this.world.arena.y;
-    if (!isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot())) {
+    // danger is a slam/lunge tile OR the authored melee danger-ring hugging the
+    // Guardian's live footprint (ADR-0006 §7) — both pure functions of the
+    // schedule + position, adjudicated against SERVER time with the same slack
+    const inSlam = isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot());
+    const inRing = inMeleeRingDangerAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, this.homeSpot(), ADJUDICATION_SLACK_MS);
+    if (!inSlam && !inRing) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
     // Exhaustion wakes a Player at their Hammock, else at the World spawn
@@ -1068,8 +1106,8 @@ export class MockBackend implements Backend {
       p.x = (wake.tx + 0.5) * TILE;
       p.y = (wake.ty + 0.5) * TILE;
       this.pushChat({
-        from: '🌿 Jungle',
-        text: `${me} collapses from Exhaustion — out for this fight, waking ${atHammock ? 'in their Hammock' : 'at the spawn'}. Hits already landed still count toward the loot.`,
+        from: t.system.sender,
+        text: t.system.exhaustionCollapse(me, atHammock),
         ts: Date.now(),
       });
     }

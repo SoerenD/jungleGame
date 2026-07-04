@@ -31,6 +31,11 @@ export const PAL: Record<string, string> = {
   p: '#8a6cc9', // rune purple
   P: '#cdb6f2', // light rune purple
   f: '#f0f4f8', // near-white
+  u: '#6b6058', // husk stone (Grasp Husk)
+  U: '#8c8073', // husk stone, lit
+  o: '#ff8c2a', // ember / molten glow (Husk core)
+  v: '#3b2c57', // deep obsidian-violet (Deep Guardian)
+  V: '#6a52a0', // obsidian-violet, lit
 };
 
 export const GRIDS: Partial<Record<ItemId, string[]>> = {
@@ -186,6 +191,49 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '...xsddx....',
     '....xdx.....',
     '.....x......',
+    '............',
+  ],
+  // Dungeons v1 — Delve drops (palettes echo the Husks + Deep Guardian)
+  husk_shard: [
+    '............',
+    '....xxx.....',
+    '...xUuux....',
+    '..xuuuuUx...',
+    '..xuoouux...',
+    '..xuoouux...',
+    '..xUuuuux...',
+    '...xuuuux...',
+    '...xUuudx...',
+    '....xddx....',
+    '.....xx.....',
+    '............',
+  ],
+  deep_core: [
+    '............',
+    '.....xx.....',
+    '....xvvx....',
+    '...xvVVvx...',
+    '..xvVmmVvx..',
+    '..xVmoofVx..',
+    '..xvVmmVvx..',
+    '...xvVVvx...',
+    '....xvvx....',
+    '.....xx.....',
+    '............',
+    '............',
+  ],
+  sword: [
+    '............',
+    '.........xx.',
+    '........xSx.',
+    '.......xSsx.',
+    '......xSsx..',
+    '.....xSsx...',
+    '....xSsx....',
+    '...xmmmx....',
+    '...xhhx.....',
+    '..xhhx......',
+    '..xmx.......',
     '............',
   ],
   axe: [

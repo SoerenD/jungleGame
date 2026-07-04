@@ -105,6 +105,12 @@ export interface QuestState {
   gateOpen: boolean;
   /** revealed only once 3+ map pieces are held */
   treasureLocation: { tx: number; ty: number } | null;
+  /**
+   * the rubble-sealed Delve mine shaft: broken once, forever, by harvesting it
+   * with an Ancient Pickaxe (ADR-0007). A world flag like `gateOpen`; once true
+   * the shaft is freely re-enterable by anyone.
+   */
+  delveOpen: boolean;
 }
 
 /** the four Resources the Seal demands */
@@ -188,6 +194,10 @@ export type GuardianHitResult =
       inventory: Inventory;
       /** true when the eye was closed at server time — 0 damage, no participation */
       deflected: boolean;
+      /** damage this hit dealt to the pool, base units (0 on a deflect) — the client floats it, scaled */
+      damage: number;
+      /** did this hit crit? (a passive bigger-number pop; false on a deflect) — display only */
+      crit: boolean;
     };
 
 export type KnockdownResult =
@@ -228,6 +238,49 @@ export type EatResult =
   | { ok: false; reason: 'NOTHING_TO_EAT' }
   | { ok: true; inventory: Inventory; buffMs: number };
 
+export type OpenDelveResult =
+  | { ok: false; reason: 'ALREADY_OPEN' }
+  | { ok: true; delveOpen: true };
+
+/**
+ * A live mob as the host broadcasts it (ADR-0007 §2/§10). Mob HP lives ONLY in
+ * host memory and on the wire — never a DB row. Peers render straight from these
+ * snapshots; the host is the sole simulator/authority for the run.
+ */
+export interface MobSnap {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  st: string;
+  ax: number;
+  ay: number;
+  phase: number;
+}
+export interface ProjSnap {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * The Delve's peer-host-authority transport (ADR-0007 §3), carried on the
+ * existing Realtime channel as a distinct broadcast event. The host emits
+ * `start`/`snap`/`end`; peers emit `join`/`pos`/`hit`/`down`. In single-player
+ * (MockBackend) nothing is on the wire — the lone player IS the host and drives
+ * the run locally. `runId` scopes every message to one instance.
+ */
+export type DungeonMsg =
+  | { t: 'start'; runId: string; host: string; heads: number; roster: string[] }
+  | { t: 'snap'; runId: string; mobs: MobSnap[]; projectiles: ProjSnap[] }
+  | { t: 'end'; runId: string; reason: 'victory' | 'wipe' | 'hostleft'; loot?: Inventory }
+  | { t: 'join'; runId: string; name: string }
+  | { t: 'pos'; runId: string; name: string; x: number; y: number }
+  | { t: 'hit'; runId: string; mobId: string; by: string; tool?: ItemId }
+  | { t: 'down'; runId: string; name: string; out: boolean };
+
 export interface BackendEvents {
   position: (pos: PlayerPos) => void;
   presence: (players: PlayerPos[]) => void;
@@ -248,6 +301,10 @@ export interface BackendEvents {
   guardianVictory: (participants: string[]) => void;
   /** the slumber timer ran out — HP reset, no loot */
   guardianSlumber: () => void;
+  /** the rubble cleared — the Delve mine shaft opens for everyone, forever */
+  delveOpened: () => void;
+  /** a peer-host-authority Delve message arrived from another client (ADR-0007) */
+  dungeon: (msg: DungeonMsg) => void;
 }
 
 /**
@@ -295,8 +352,27 @@ export interface Backend {
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
   /**
-   * land one hit on the Guardian (server-ordered, participation recorded);
-   * `withTool` is the in-hand Tool (axe/pickaxe → 3, bow → 2), honoured only if owned
+   * clear the rubble sealing the Delve mine shaft — a one-time, server-ordered
+   * world flag (like the vine gate). The client has already checked an Ancient
+   * Pickaxe is in hand; the server flips `delveOpen` and emits `delveOpened`.
+   */
+  openDelve(): Promise<OpenDelveResult>;
+  /**
+   * grant this Player their Delve participation loot at run completion — the run's
+   * ONLY DB write (ADR-0007 §8). Mob HP never persists; only this does. Merged
+   * into the caller's own inventory (each client claims for itself).
+   */
+  claimDelveLoot(loot: Inventory): Promise<{ inventory: Inventory }>;
+  /**
+   * fire-and-forget a peer-host-authority Delve message over the Realtime channel
+   * (ADR-0007 §3). No-op in single-player (MockBackend) — the lone host is local.
+   */
+  sendDungeon(msg: DungeonMsg): void;
+  /**
+   * land one hit on the Guardian (server-ordered, participation recorded); the
+   * backend rolls the damage + crit from `withTool`'s weapon band with an
+   * injected rng and returns `{ damage, crit }`. `withTool` is the in-hand Tool,
+   * honoured only if actually owned (else it rolls the bare-hands band).
    */
   hitGuardian(withTool?: ToolId): Promise<GuardianHitResult>;
   /**

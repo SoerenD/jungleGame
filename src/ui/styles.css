@@ -420,6 +420,29 @@ button.ui-btn:disabled {
   accent-color: var(--accent);
   cursor: pointer;
 }
+/* small section header inside the settings panel (Language / Audio) */
+.settings-section {
+  margin: 10px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.settings-section:first-of-type {
+  margin-top: 0;
+}
+.settings-lang {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg, #eef);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  cursor: pointer;
+}
 
 /* v4: the Loadout bar (three in-hand quick-slots) */
 #loadout-bar {

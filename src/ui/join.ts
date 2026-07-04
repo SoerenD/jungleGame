@@ -1,4 +1,5 @@
 import { SESSION_KEY } from '../config';
+import { t } from '../i18n';
 import type { Appearance, Backend, JoinResult } from '../backend/types';
 import {
   AVATAR_H,
@@ -21,10 +22,10 @@ interface StoredSession {
 }
 
 const SLOTS: { key: keyof Appearance; label: string }[] = [
-  { key: 'skin', label: 'Skin' },
-  { key: 'hair', label: 'Hair' },
-  { key: 'shirt', label: 'Shirt' },
-  { key: 'pants', label: 'Pants' },
+  { key: 'skin', label: t.join.slotSkin },
+  { key: 'hair', label: t.join.slotHair },
+  { key: 'shirt', label: t.join.slotShirt },
+  { key: 'pants', label: t.join.slotPants },
 ];
 
 /**
@@ -46,13 +47,13 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
     overlay.innerHTML = `
       <div id="join-card">
         <h1>🌴 JUNGLE WORLD</h1>
-        <div class="sub">one persistent jungle · gather, craft, build</div>
+        <div class="sub">${t.join.subtitle}</div>
         <div>
-          <label for="join-name">Player name</label>
-          <input id="join-name" data-testid="join-name" maxlength="16" placeholder="e.g. Robin" />
+          <label for="join-name">${t.join.playerName}</label>
+          <input id="join-name" data-testid="join-name" maxlength="16" placeholder="${t.join.namePlaceholder}" />
         </div>
         <div>
-          <label for="join-pin">4-digit PIN (to reclaim your Player anywhere)</label>
+          <label for="join-pin">${t.join.pinLabel}</label>
           <input id="join-pin" data-testid="join-pin" maxlength="4" inputmode="numeric" placeholder="0000" />
         </div>
         <div id="customizer">
@@ -60,7 +61,7 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
           <div id="palette-rows"></div>
         </div>
         <div id="join-error" data-testid="join-error"></div>
-        <button id="join-btn" data-testid="join-btn">Enter the Jungle</button>
+        <button id="join-btn" data-testid="join-btn">${t.join.enter}</button>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -137,10 +138,10 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
       } else {
         errorBox.textContent =
           result.reason === 'WRONG_PIN'
-            ? 'That name is taken and the PIN does not match.'
+            ? t.join.errWrongPin
             : result.reason === 'BAD_PIN'
-              ? 'PIN must be exactly 4 digits.'
-              : 'Name must be 2–16 letters/numbers.';
+              ? t.join.errBadPin
+              : t.join.errBadName;
       }
     };
 

@@ -1,4 +1,5 @@
 import { FAST_REGROW, FAST_REGROW_MS } from '../config';
+import { getLang } from '../i18n';
 import type { Inventory } from '../backend/types';
 import type { ResourceId, ToolId } from './items';
 
@@ -45,7 +46,7 @@ export function toolSatisfies(withTool: ToolId | undefined, tool: ToolId | undef
   return withTool === tool || TOOL_UPGRADES[tool] === withTool;
 }
 
-export const NODE_TYPES: Record<NodeTypeId, NodeType> = {
+const BASE_NODE_TYPES: Record<NodeTypeId, NodeType> = {
   tree: {
     id: 'tree',
     name: 'Jungle Tree',
@@ -112,3 +113,21 @@ export const NODE_TYPES: Record<NodeTypeId, NodeType> = {
     blocks: false,
   },
 };
+
+/** German display names for the Resource Nodes (all other fields stay shared) */
+const NODE_NAMES_DE: Record<NodeTypeId, string> = {
+  tree: 'Dschungelbaum',
+  rock: 'Fels',
+  fruit_bush: 'Obststrauch',
+  fiber_vine: 'Faserranke',
+  hardwood_tree: 'Uralter Hartholzbaum',
+  obsidian_rock: 'Obsidianfels',
+  fishing_spot: 'Angelstelle',
+};
+
+export const NODE_TYPES: Record<NodeTypeId, NodeType> =
+  getLang() === 'de'
+    ? (Object.fromEntries(
+        (Object.entries(BASE_NODE_TYPES) as [NodeTypeId, NodeType][]).map(([id, def]) => [id, { ...def, name: NODE_NAMES_DE[id] }]),
+      ) as Record<NodeTypeId, NodeType>)
+    : BASE_NODE_TYPES;

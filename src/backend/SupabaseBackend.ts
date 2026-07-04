@@ -16,12 +16,13 @@ import {
   SPEED_BUFF_MS,
   TILE,
 } from '../config';
-import { ADJUDICATION_SLACK_MS, eyeOpenWithin, guardianDamage, waveInfoAt } from '../content/guardian';
+import { ADJUDICATION_SLACK_MS, eyeOpenWithin, rollGuardianDamage, waveInfoAt } from '../content/guardian';
 import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
 import { sanitizeAppearance } from '../avatars';
 import { asset } from '../paths';
+import { t } from '../i18n';
 import type {
   Appearance,
   Backend,
@@ -33,6 +34,7 @@ import type {
   CrateResult,
   DigResult,
   Dir,
+  DungeonMsg,
   EatResult,
   FightState,
   GuardianHitResult,
@@ -44,6 +46,7 @@ import type {
   KnockdownResult,
   NodeState,
   OfferResult,
+  OpenDelveResult,
   PlaceResult,
   PlayerPos,
   QuestState,
@@ -112,6 +115,7 @@ export class SupabaseBackend implements Backend {
   private inv: Inventory = {};
   private tablets: string[] = [];
   private gateOpen = false;
+  private delveOpen = false;
   private treasureIndex = 0;
   private fightState: FightState | null = null;
   // the Seal scales per-head: how many Players are online (from presence) and
@@ -281,6 +285,10 @@ export class SupabaseBackend implements Backend {
     });
     ch.on('broadcast', { event: 'evt' }, ({ payload }) => this.dispatch(payload.event, payload.args));
     ch.on('broadcast', { event: 'pos' }, ({ payload }) => this.onRemotePos(payload as SelfPos));
+    // the Delve's peer-host-authority stream (ADR-0007) — mob snapshots, hits,
+    // positions; delivered straight to whoever is in the run (self:false already
+    // stops the sender hearing its own frame)
+    ch.on('broadcast', { event: 'delve' }, ({ payload }) => this.emit('dungeon', payload as DungeonMsg));
     ch.on('presence', { event: 'sync' }, () => this.onPresenceSync());
     ch.on('presence', { event: 'join' }, () => this.broadcastPos(true)); // re-announce so new joiners see me
     // the server explains itself (rate limit, restart, auth…) via a `system`
@@ -446,7 +454,7 @@ export class SupabaseBackend implements Backend {
       this.supa.from('nodes').select('id,type,tx,ty,hp,harvested_at'),
       this.supa.from('structures').select('id,type,tx,ty,placed_by,placed_at,text'),
       this.supa.from('chat').select('from_name,text,ts').order('ts', { ascending: false }).limit(50),
-      this.supa.from('world').select('gate_open,treasure_index,seal,fight').eq('id', 1).single(),
+      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight').eq('id', 1).single(),
       this.me ? this.supa.from('players').select('inventory,tablets').eq('name', this.me).single() : Promise.resolve({ data: null } as any),
     ]);
 
@@ -456,6 +464,7 @@ export class SupabaseBackend implements Backend {
     }
     const world = worldR.data as any;
     this.gateOpen = !!world?.gate_open;
+    this.delveOpen = !!world?.delve_open;
     this.treasureIndex = world?.treasure_index ?? 0;
     this.fightState = this.fightPublic(world?.fight);
 
@@ -507,6 +516,7 @@ export class SupabaseBackend implements Backend {
       mapPieces: pieces,
       gateOpen: this.gateOpen,
       treasureLocation: pieces >= 3 ? { ...this.wd.treasureSpots[this.treasureIndex] } : null,
+      delveOpen: this.delveOpen,
     };
   }
 
@@ -669,7 +679,7 @@ export class SupabaseBackend implements Backend {
     const res = await this.rpc<any>('jw_read_tablet', { p_who: this.me, p_id: id, p_total: this.wd.tablets.length });
     if (res) {
       this.tablets = res.tablets as string[];
-      if (res.allRead) this.pushChat('🌿 Jungle', `${this.me} has read all the ancient tablets!`);
+      if (res.allRead) this.pushChat(t.system.sender, t.system.tabletsAllRead(this.me ?? ''));
     }
     const q = this.questState();
     this.emit('quest', q);
@@ -682,7 +692,7 @@ export class SupabaseBackend implements Backend {
     this.inv = res.inventory as Inventory;
     this.gateOpen = true;
     this.relay('gateOpened');
-    this.pushChat('🌿 Jungle', `the vines part — ${this.me} has opened the Hidden Grove!`);
+    this.pushChat(t.system.sender, t.system.groveOpened(this.me ?? ''));
     const q = this.questState();
     this.emit('quest', q);
     return { ok: true, inventory: { ...this.inv }, quest: q };
@@ -695,7 +705,7 @@ export class SupabaseBackend implements Backend {
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NO_MAP' };
     this.inv = res.inventory as Inventory;
     // the dig spot rotates server-side; refresh from the world row next loadWorld
-    this.pushChat('🌿 Jungle', `${this.me} unearthed a buried treasure!`);
+    this.pushChat(t.system.sender, t.system.treasureUnearthed(this.me ?? ''));
     const q = this.questState();
     this.emit('quest', q);
     return { ok: true, loot: res.loot as Inventory, inventory: { ...this.inv }, quest: q };
@@ -709,11 +719,11 @@ export class SupabaseBackend implements Backend {
     this.relay('sealChanged', seal);
     for (const m of [25, 50, 75]) {
       if (res.beforePct < m && res.afterPct >= m && res.afterPct < 100) {
-        this.pushChat('🌿 Jungle', `the Seal weakens — ${m}% of the offerings are gathered!`);
+        this.pushChat(t.system.sender, t.system.sealWeakens(m));
       }
     }
     if (res.broken) {
-      this.pushChat('🌿 Jungle', '⚡ THE SEAL IS BROKEN! The arena at the Ruins stands open — the Guardian awaits whoever dares bring an Offering to its altar.');
+      this.pushChat(t.system.sender, t.system.sealBroken);
       this.relay('sealBroken');
     }
     return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, seal };
@@ -726,16 +736,48 @@ export class SupabaseBackend implements Backend {
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NO_TOTEM' };
     this.inv = res.inventory as Inventory;
     const fight = this.fightPublic(res.fight)!;
-    this.pushChat('🌿 Jungle', `${this.me} laid an Offering on the altar — the Guardian STIRS! Gather at the arena and strike to begin.`);
+    this.pushChat(t.system.sender, t.system.guardianStirs(this.me ?? ''));
     this.relay('guardianSummoned', fight);
     return { ok: true, fight, inventory: { ...this.inv } };
+  }
+
+  // ---------------------------------------------------------------- the Delve (ADR-0007)
+
+  async openDelve(): Promise<OpenDelveResult> {
+    if (this.delveOpen) return { ok: false, reason: 'ALREADY_OPEN' };
+    // jw_open_delve flips the `delve_open` world flag once, forever. If the RPC
+    // isn't deployed yet the call returns null; degrade gracefully so the session
+    // still opens the shaft (it re-seals on reload until the migration lands).
+    await this.rpc('jw_open_delve', { p_who: this.me });
+    this.delveOpen = true;
+    this.relay('delveOpened');
+    this.pushChat(t.system.sender, t.system.delveOpened(this.me ?? ''));
+    this.emit('quest', this.questState());
+    return { ok: true, delveOpen: true };
+  }
+
+  async claimDelveLoot(loot: Inventory): Promise<{ inventory: Inventory }> {
+    // the run's ONLY DB write (ADR-0007 §8): grant the participation drop set to
+    // this Player's own inventory. jw_claim_delve_loot returns the merged
+    // inventory; if it isn't deployed, merge into the local mirror optimistically.
+    const res = await this.rpc<any>('jw_claim_delve_loot', { p_who: this.me, p_loot: loot });
+    if (res?.inventory) this.inv = res.inventory as Inventory;
+    else for (const [k, v] of Object.entries(loot)) this.inv[k as ItemId] = (this.inv[k as ItemId] ?? 0) + (v as number);
+    return { inventory: { ...this.inv } };
+  }
+
+  sendDungeon(msg: DungeonMsg): void {
+    void this.channel?.send({ type: 'broadcast', event: 'delve', payload: msg });
   }
 
   async hitGuardian(withTool?: ToolId): Promise<GuardianHitResult> {
     const f = this.fightState;
     if (!f) return { ok: false, reason: 'NO_FIGHT' };
+    // roll the weapon band + crit here (the Backend is the server boundary,
+    // ADR-0006 §3): the authoritative pool subtraction still happens in the
+    // server-ordered jw_guardian_hit RPC, which just applies this p_dmg
     const owned = withTool && (this.inv[withTool] ?? 0) > 0 ? withTool : undefined;
-    const dmg = guardianDamage(owned);
+    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random);
     const engaging = f.engagedAt === null;
     let roster = f.roster;
     let maxHp = f.maxHp;
@@ -758,7 +800,7 @@ export class SupabaseBackend implements Backend {
     });
     if (!res || res.ok === false) return { ok: false, reason: 'NO_FIGHT' };
     if (res.deflected) {
-      return { ok: true, hp: res.hp, victory: false, inventory: { ...this.inv }, deflected: true };
+      return { ok: true, hp: res.hp, victory: false, inventory: { ...this.inv }, deflected: true, damage: 0, crit: false };
     }
     this.inv = (res.inventory ?? this.inv) as Inventory;
     if (res.engaged) {
@@ -767,10 +809,10 @@ export class SupabaseBackend implements Backend {
     }
     if (res.victory) {
       this.relay('guardianVictory', (res.participants ?? []) as string[]);
-      return { ok: true, hp: 0, victory: true, inventory: { ...this.inv }, deflected: false };
+      return { ok: true, hp: 0, victory: true, inventory: { ...this.inv }, deflected: false, damage: dmg, crit };
     }
     this.relay('guardianHit', res.hp, this.me);
-    return { ok: true, hp: res.hp, victory: false, inventory: { ...this.inv }, deflected: false };
+    return { ok: true, hp: res.hp, victory: false, inventory: { ...this.inv }, deflected: false, damage: dmg, crit };
   }
 
   async reportKnockdown(tx: number, ty: number): Promise<KnockdownResult> {
@@ -790,7 +832,7 @@ export class SupabaseBackend implements Backend {
     void ty;
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOT_IN_DANGER' };
     if (res.exhausted) {
-      this.pushChat('🌿 Jungle', `${this.me} collapses from Exhaustion — out for this fight, waking ${res.atHammock ? 'in their Hammock' : 'at the spawn'}. Hits already landed still count toward the loot.`);
+      this.pushChat(t.system.sender, t.system.exhaustionCollapse(this.me ?? '', res.atHammock));
     }
     return { ok: true, knockdowns: res.knockdowns, exhausted: res.exhausted, wake: res.wake, atHammock: res.atHammock };
   }
@@ -818,10 +860,8 @@ export class SupabaseBackend implements Backend {
       void this.rpc<any>('jw_guardian_reconcile', { p_awake_ms: GUARDIAN_AWAKE_MS, p_dormant_ms: DORMANT_TIMEOUT_MS }).then((res) => {
         if (res?.slumbered) {
           this.pushChat(
-            '🌿 Jungle',
-            res.reason === 'dormant'
-              ? 'no one struck in time — the Guardian loses interest and sinks back into slumber. The totem is spent.'
-              : 'the Guardian returns to slumber, unbeaten. The arena falls silent — another Offering will wake it.',
+            t.system.sender,
+            res.reason === 'dormant' ? t.system.guardianNoStrike : t.system.guardianUnbeaten,
           );
           this.relay('guardianSlumber');
         }

@@ -3,6 +3,9 @@ import { AUDIO, OBJECTS, TILESET } from '../assetConfig';
 import { asset } from '../paths';
 import { GRIDS, PAL } from '../ui/icons';
 import { ITEMS, type ItemId } from '../content/items';
+import { ensureMobTextures } from '../mobSprites';
+import { ensureDelvePropTextures } from '../delveProps';
+import { t } from '../i18n';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -27,12 +30,12 @@ export class BootScene extends Phaser.Scene {
       this.load.audio(key, asset(url));
     }
 
-    const progress = this.add.text(this.scale.width / 2, this.scale.height / 2, 'Loading jungle... 0%', {
+    const progress = this.add.text(this.scale.width / 2, this.scale.height / 2, t.boot.loading(0), {
       color: '#8ce99a',
       fontSize: '18px',
     });
     progress.setOrigin(0.5);
-    this.load.on('progress', (v: number) => progress.setText(`Loading jungle... ${Math.round(v * 100)}%`));
+    this.load.on('progress', (v: number) => progress.setText(t.boot.loading(Math.round(v * 100))));
   }
 
   create(): void {
@@ -146,6 +149,11 @@ export class BootScene extends Phaser.Scene {
       });
       held.refresh();
     }
+
+    // the Delve's Husks + Deep Guardian — procedural 3-frame sprites (ADR-0007)
+    ensureMobTextures(this);
+    // the Delve's props (beams, pillars, braziers, rubble, rails, glyphs…)
+    ensureDelvePropTextures(this);
 
     // Player walk animations are created per Avatar texture (src/avatars.ts).
     // the Guardian's slow awake idle (frame 0 is its slumber)

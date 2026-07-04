@@ -9,12 +9,10 @@ export const ZOOM = 2.5;
  * the Guardian). The cadence also caps tapped E — mashing is never faster.
  */
 export const SWING_CADENCE_MS = 300;
-/**
- * The Bow looses on a slower cadence than melee (500 vs 300 ms), so axe-melee
- * (3 dmg / 300 ms) out-DPSes the Bow (2 dmg / 500 ms) by a wide margin — the
- * risky-fast vs. safe-slow ladder. Do not tighten toward 300 (see ADR-0003).
- */
-export const BOW_CADENCE_MS = 500;
+// Combat attack speed is per-weapon and combat-only — it lives in the weapon
+// table (WEAPON_COMBAT, src/content/guardian.ts, ADR-0006 §4) and never changes
+// this harvest cadence. The Bow's slower combat cadence (500 ms vs melee) still
+// keeps it below melee DPS (the risky-fast vs. safe-slow ladder, ADR-0003).
 
 // Mock backend tuning
 export const LATENCY_MIN = 50;
@@ -109,16 +107,21 @@ export function sealQuotas(heads: number): Record<'wood' | 'stone' | 'fiber' | '
 // ?fight = instant summon ready: the Seal starts broken, joining grants a
 // Summoning Totem, and the Guardian is weak/brief enough to win or lose solo.
 export const DEV_FIGHT = params.has('fight');
+// ?dungeon = bypass the Delve gate and drop at the mine-shaft entrance for
+// playtesting (ADR-0007); no Ancient Pickaxe required, the shaft reads as open.
+export const DEV_DUNGEON = params.has('dungeon');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
- * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). 750 is the
- * old flat 2250 ÷ the party of 3 it was validated against, so a 3-party plays
- * exactly as before, an 8-party faces the same per-person tension (6000), and a
- * lone summoner faces 750 — a brutal-but-possible hardcore feat (ADR-0004).
- * There is deliberately NO minimum-roster floor. ?fight (DEV_FIGHT) keeps a
+ * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006
+ * §5) cuts this ~¼ (750 → 560) so a competent group finishes ~25% sooner and
+ * rarely grinds deep into the fury phase; GUARDIAN_AWAKE_MS is unchanged. These
+ * are BASE (pre-display-scale) units — on-screen HP and damage are multiplied by
+ * GUARDIAN_DISPLAY_SCALE alike, so the cut lands at hits-to-kill ≈ 75% of v5.
+ * A 3-party faces 1680, an 8-party 4480, a lone summoner 560 — per-person
+ * tension roughly constant, no minimum-roster floor. ?fight (DEV_FIGHT) keeps a
  * trivial fixed pool via DEV_FIGHT_HP, independent of roster size.
  */
-export const HP_PER_HEAD = 750;
+export const HP_PER_HEAD = 560;
 /** ?fight: a tiny fixed Guardian pool so a summon can be won or lost solo, fast */
 export const DEV_FIGHT_HP = 30;
 /** awake window: how long the Guardian stays dangerous AFTER the first strike (engagedAt) */

@@ -5,21 +5,26 @@ import type {
   Backend,
   ChatMsg,
   Dir,
+  DungeonMsg,
   FightState,
   Inventory,
   JoinResult,
   JourneyState,
   JourneyStepId,
+  KnockdownResult,
+  MobSnap,
   NodeState,
   PlayerPos,
+  ProjSnap,
   QuestState,
   SealState,
   Structure,
 } from '../backend/types';
 import { hintRetired, journeyComplete, type HintId } from '../content/journey';
 import {
-  BOW_CADENCE_MS,
   DAY_CYCLE_MS,
+  DEV_DUNGEON,
+  EXHAUSTION_KNOCKDOWNS,
   FOG_CHUNK,
   FOG_REVEAL_RADIUS,
   FORCE_NIGHT,
@@ -46,18 +51,53 @@ import {
   eyeOpenAt,
   furyPhaseAt,
   guardianPoseAt,
+  guardianSpotAt,
+  GUARDIAN_DISPLAY_SCALE,
+  inMeleeRing,
   LUNGE_ZONE,
   lungeTarget,
+  MELEE_RING_MAX,
+  meleeRingWindow,
   waveInfoAt,
   waveTiles,
+  weaponCombat,
   type ArenaSpot,
   type WaveInfo,
 } from '../content/guardian';
+import {
+  applyMobHit,
+  createMob,
+  DEEP_CORE,
+  DEEP_CORE_DROP,
+  DELVE_CORRIDORS,
+  DELVE_ENTRY,
+  DELVE_H,
+  DELVE_LIGHTS,
+  DELVE_PROPS,
+  DELVE_ROOMS,
+  DELVE_W,
+  HUSK_SHARD,
+  isDelveBlocked,
+  isDelveWall,
+  MOB_PROFILES,
+  planDelveSpawns,
+  PROP_BLOCKS,
+  PROP_LIGHT,
+  RUINS_FROM_X,
+  SHARD_PER_KILL,
+  stepMob,
+  type MobEvent,
+  type MobKind,
+  type MobState,
+} from '../content/dungeon';
 import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
+import { MOB_FRAME, MOB_TEX } from '../mobSprites';
+import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import { showIntro } from '../ui/intro';
+import { t } from '../i18n';
 
 type OkJoin = Extract<JoinResult, { ok: true }>;
 
@@ -167,6 +207,38 @@ function idHash(id: string): number {
   return Math.abs(h);
 }
 
+/** the host's per-mob render objects (drawn on the high-depth Delve overlay) */
+interface MobView {
+  sprite: Phaser.GameObjects.Sprite;
+  shadow: Phaser.GameObjects.Image;
+  tele: Phaser.GameObjects.Graphics;
+  bar: Phaser.GameObjects.Rectangle;
+}
+/** a host-simulated Husk/boss projectile (tile units; velocity tiles/second) */
+interface DelveProjectile {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
+  life: number;
+}
+/** a party-mate rendered inside the Delve from their interior position broadcasts */
+interface DelvePeerView {
+  marker: Phaser.GameObjects.Arc;
+  label: Phaser.GameObjects.Text;
+  x: number;
+  y: number;
+}
+
+/** Delve overlay draws above every persistent World object (max depth ≈ MAP_H·TILE)
+ *  so the World is simply hidden behind it — no per-object visibility toggling. */
+const DELVE_DEPTH_BG = 900_000;
+const DELVE_DEPTH_FLOOR = 900_010;
+const DELVE_DEPTH_ENTITY = 950_000; // + y (px) so player/mobs y-sort together
+const DELVE_DEPTH_PROJ = 970_000;
+
 export class GameScene extends Phaser.Scene {
   private backend!: Backend;
   private me!: OkJoin;
@@ -215,6 +287,8 @@ export class GameScene extends Phaser.Scene {
   private guardianBlockers: Phaser.GameObjects.Rectangle[] = [];
   private guardianAltarPos = { x: 0, y: 0 };
   private dangerRects: Phaser.GameObjects.Rectangle[] = [];
+  /** the authored melee danger-ring's tiles, live only while it is hot (ADR-0006 §7) */
+  private meleeRingRects: Phaser.GameObjects.Rectangle[] = [];
   private renderedWave = -1;
   private slammedWave = -1;
   private landedWave = -1;
@@ -229,6 +303,49 @@ export class GameScene extends Phaser.Scene {
   private entranceSpot: ArenaSpot = { ax: 0, ay: 0 };
   /** set once this Player is knocked out (3 knockdowns) — the Ward then bars re-entry */
   private exhaustedThisFight = false;
+  // ---- Dungeons v1: the Delve (ADR-0007) — an ephemeral, host-simmed instance
+  /** world-tile + pixel position of the sealed mine-shaft entrance */
+  private delveEntrance = { x: 0, y: 0, tx: 0, ty: 0 };
+  private delveEntranceSprite: Phaser.GameObjects.Container | null = null;
+  /** ?dungeon: treat the shaft as open regardless of the persisted flag */
+  private delveForceOpen = DEV_DUNGEON;
+  private rubbleHits = 0;
+  /** captured World colliders, disabled while inside the Delve */
+  private worldColliders: Phaser.Physics.Arcade.Collider[] = [];
+  private inDelve = false;
+  private delveRunId: string | null = null;
+  private isDelveHost = false;
+  /** roster locked at entry (like the Ward) — no late join */
+  private delveRoster: string[] = [];
+  private delveHeadcount = 1;
+  /** host: authoritative mob state (HP lives ONLY here — never the DB). Peers: last snapshot. */
+  private mobs = new Map<string, MobState>();
+  private mobViews = new Map<string, MobView>();
+  /** host: live projectiles. Peers render them from snapshots. */
+  private projectiles: DelveProjectile[] = [];
+  private projViews = new Map<string, Phaser.GameObjects.Arc>();
+  private delveObjects: Phaser.GameObjects.GameObject[] = [];
+  /** per-room floor CanvasTexture keys — removed on teardown so a re-entry rebuilds */
+  private delveFloorKeys: string[] = [];
+  private delveBackdrop: Phaser.GameObjects.Rectangle | null = null;
+  private delveWalls: Phaser.Physics.Arcade.StaticGroup | null = null;
+  private delveWallCollider: Phaser.Physics.Arcade.Collider | null = null;
+  /** my knockdowns this run; 3 → Exhaustion (out) */
+  private delveKnockdowns = 0;
+  private delveExhausted = false;
+  /** did I land ≥1 hit this run? (participation-loot eligibility) */
+  private delveHitLanded = false;
+  /** host-only: Husks felled (drives shard loot) + everyone who has landed a hit */
+  private delveKills = 0;
+  private delveParticipants = new Set<string>();
+  private delvePeers = new Map<string, DelvePeerView>();
+  /** the host's name — a peer boots itself if the host vanishes from presence (v1: no migration) */
+  private delveHostName = '';
+  /** the run I was Exhausted out of, kept so I still claim loot if my party wins */
+  private delveExhaustedRun: string | null = null;
+  private lastMobSnapAt = 0;
+  private nextMobId = 1;
+  private nextProjId = 1;
   // ---- v3: the Journey (onboarding tracker + contextual hints)
   private journey: JourneyState = { steps: {}, hintUses: {} };
   private hintText: Phaser.GameObjects.Text | null = null;
@@ -438,8 +555,12 @@ export class GameScene extends Phaser.Scene {
     this.player.body!.setSize(bw, bh);
     this.player.body!.setOffset((AVATAR_W - bw) / 2, AVATAR_H - bh);
     this.player.setCollideWorldBounds(true);
-    this.physics.add.collider(this.player, this.groundLayer);
-    this.physics.add.collider(this.player, this.blockersGroup);
+    // kept so they can be disabled while inside the Delve (which swaps in its own
+    // wall collider); the World is only hidden behind the overlay, not unloaded
+    this.worldColliders = [
+      this.physics.add.collider(this.player, this.groundLayer),
+      this.physics.add.collider(this.player, this.blockersGroup),
+    ];
 
     // v4: Loadout visuals — created before wireBus()/the first inventory emit so
     // the initial 'held' event can update them. Light now comes only from a held
@@ -574,6 +695,7 @@ export class GameScene extends Phaser.Scene {
 
     this.initFog();
     this.wireDragPlace();
+    this.buildDelveEntrance();
 
     if (import.meta.env.DEV) {
       (window as any).__jw = {
@@ -609,7 +731,7 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('nodeChanged', (n: NodeState) => this.updateNode(n));
     this.backend.on('structurePlaced', (s: Structure) => {
       this.addStructure(s);
-      if (s.placedBy !== this.me.name) bus.emit('toast', `${s.placedBy} built a ${ITEMS[s.type].name}`, 'info');
+      if (s.placedBy !== this.me.name) bus.emit('toast', t.builtBy(s.placedBy, ITEMS[s.type].name), 'info');
     });
     this.backend.on('crateChanged', (crateId: string, contents: Inventory) => {
       bus.emit('crate-changed', crateId, contents);
@@ -632,6 +754,8 @@ export class GameScene extends Phaser.Scene {
     });
     this.backend.on('guardianVictory', () => this.endFight('victory'));
     this.backend.on('guardianSlumber', () => this.endFight('slumber'));
+    this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
+    this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
   }
 
   // ------------------------------------------------------------ v2: the Seal
@@ -683,7 +807,7 @@ export class GameScene extends Phaser.Scene {
       part.body.destroy();
     }
     this.sealBarrierParts = [];
-    bus.emit('toast', '⚡ The Seal is broken — the arena stands open, forever!', 'good');
+    bus.emit('toast', t.toast.sealBroken, 'good');
   }
 
   // ------------------------------------------------------------ v2: the Guardian fight
@@ -710,6 +834,8 @@ export class GameScene extends Phaser.Scene {
       this.setGuardianBlockersEnabled(true);
       for (const r of this.dangerRects) r.destroy();
       this.dangerRects = [];
+      for (const r of this.meleeRingRects) r.destroy();
+      this.meleeRingRects = [];
       if (fresh) this.sfx('roar', 0.4); // a low stir, not the full engage roar
       bus.emit('fight-start', { hp: 0, maxHp: 0, engagedAt: null, awakeMs: GUARDIAN_AWAKE_MS, roster: [] });
     } else {
@@ -810,6 +936,8 @@ export class GameScene extends Phaser.Scene {
     this.dropWard(); // the Ward falls — the arena opens again
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
+    for (const r of this.meleeRingRects) r.destroy();
+    this.meleeRingRects = [];
     this.renderedWave = -1;
     this.furyIndex = -1;
     this.guardianSprite.anims.stop();
@@ -825,11 +953,11 @@ export class GameScene extends Phaser.Scene {
     if (kind === 'victory') {
       this.sfx('seal_gong', 0.6);
       this.cameras.main.shake(500, 0.006);
-      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, 'The Guardian is bested!', '#ffd166');
-      bus.emit('toast', '🏆 The Guardian sinks into slumber — every fighter earns its Scales!', 'good');
+      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, t.fight.bestedFloat, '#ffd166');
+      bus.emit('toast', t.toast.guardianBested, 'good');
     } else {
       this.sfx('roar', 0.35);
-      bus.emit('toast', 'The Guardian returns to slumber, unbeaten. The totem is spent.', 'bad');
+      bus.emit('toast', t.toast.guardianUnbeaten, 'bad');
     }
   }
 
@@ -923,6 +1051,12 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     // caught! stun locally, let the server adjudicate against ITS clock
+    this.beginKnockdown();
+    void this.backend.reportKnockdown(ptx, pty).then((res) => this.resolveKnockdown(res));
+  }
+
+  /** local knockdown FX: freeze, stun-marker, and the 5 s stun clock */
+  private beginKnockdown(): void {
     this.stunnedUntil = Date.now() + KNOCKDOWN_STUN_MS;
     this.player.setVelocity(0, 0);
     this.stunMarker?.destroy();
@@ -931,34 +1065,92 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setResolution(4)
       .setDepth(999_999);
-    void this.backend.reportKnockdown(ptx, pty).then((res) => {
-      if (!res.ok) {
-        if (res.reason === 'NOT_IN_DANGER') this.stunnedUntil = 0; // the server disagrees — get up
-        return;
+  }
+
+  /** apply the server's knockdown verdict (shared by slam tiles and the melee ring) */
+  private resolveKnockdown(res: KnockdownResult): void {
+    if (!res.ok) {
+      if (res.reason === 'NOT_IN_DANGER') this.stunnedUntil = 0; // the server disagrees — get up
+      return;
+    }
+    if (res.exhausted) {
+      // HARD Exhaustion (ADR-0004): out for this fight — the Ward now bars
+      // re-entry (permeability recomputes to "blocked"), though prior hits
+      // keep loot eligibility. Wake at Hammock/spawn, pack intact.
+      this.exhaustedThisFight = true;
+      this.updateWardPermeability();
+      bus.emit(
+        'toast',
+        res.atHammock
+          ? t.toast.exhaustionHammock
+          : t.toast.exhaustionSpawn,
+        'bad',
+      );
+      this.cameras.main.fadeOut(400, 0, 0, 0);
+      this.time.delayedCall(450, () => {
+        this.player.setPosition((res.wake.tx + 0.5) * TILE, (res.wake.ty + 0.5) * TILE);
+        this.stunnedUntil = 0;
+        this.cameras.main.fadeIn(500, 0, 0, 0);
+      });
+    } else {
+      bus.emit('toast', t.toast.knockedDown(res.knockdowns), 'bad');
+    }
+  }
+
+  /**
+   * The authored melee danger-ring (ADR-0006 §7): while it is hot (the wind-up
+   * slice of a stationary slam wave) it glows around the Guardian's footprint
+   * and knocks down — with a knockback shove off the body — any melee attacker
+   * camping inside it. A Bow user at range stays clear. Pure schedule + position;
+   * the Guardian never reacts.
+   */
+  private updateMeleeRing(elapsed: number, wave: WaveInfo, time: number): void {
+    const ring = meleeRingWindow(wave);
+    const hot = ring !== null && elapsed >= ring.openMs && elapsed < ring.closeMs;
+    if (!hot) {
+      if (this.meleeRingRects.length) {
+        for (const r of this.meleeRingRects) r.destroy();
+        this.meleeRingRects = [];
       }
-      if (res.exhausted) {
-        // HARD Exhaustion (ADR-0004): out for this fight — the Ward now bars
-        // re-entry (permeability recomputes to "blocked"), though prior hits
-        // keep loot eligibility. Wake at Hammock/spawn, pack intact.
-        this.exhaustedThisFight = true;
-        this.updateWardPermeability();
-        bus.emit(
-          'toast',
-          res.atHammock
-            ? 'Exhaustion overtakes you — out for this fight, waking in your Hammock. Prior hits still count.'
-            : 'Exhaustion overtakes you — out for this fight, waking at the spawn. Prior hits still count.',
-          'bad',
-        );
-        this.cameras.main.fadeOut(400, 0, 0, 0);
-        this.time.delayedCall(450, () => {
-          this.player.setPosition((res.wake.tx + 0.5) * TILE, (res.wake.ty + 0.5) * TILE);
-          this.stunnedUntil = 0;
-          this.cameras.main.fadeIn(500, 0, 0, 0);
-        });
-      } else {
-        bus.emit('toast', `Knocked down! (${res.knockdowns}/3 — the third means Exhaustion)`, 'bad');
+      return;
+    }
+    const a = this.world.arena;
+    const centre = guardianSpotAt(wave.lungeCount, this.guardianHomeSpot);
+    if (!this.meleeRingRects.length) {
+      for (let dy = -MELEE_RING_MAX; dy <= MELEE_RING_MAX; dy++) {
+        for (let dx = -MELEE_RING_MAX; dx <= MELEE_RING_MAX; dx++) {
+          const ax = centre.ax + dx;
+          const ay = centre.ay + dy;
+          if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) continue;
+          if (!inMeleeRing(ax, ay, centre)) continue;
+          const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 3, TILE - 3, 0xff5a2f, 0.26);
+          rect.setDepth(3);
+          this.meleeRingRects.push(rect);
+        }
       }
+    }
+    const pulse = 0.2 + 0.12 * Math.sin(time / 55);
+    for (const r of this.meleeRingRects) r.setFillStyle(0xff5a2f, pulse);
+    // adjudicate the local Player: caught if standing in the hot ring
+    if (Date.now() < this.stunnedUntil) return;
+    const ptx = Math.floor(this.player.x / TILE);
+    const pty = Math.floor((this.player.y - 4) / TILE);
+    if (!inMeleeRing(ptx - a.x, pty - a.y, centre)) return;
+    // knockback juice: shove the Player off the body, away from the ring centre
+    const cx = (a.x + centre.ax + 0.5) * TILE;
+    const cy = (a.y + centre.ay + 0.5) * TILE;
+    const ang = Phaser.Math.Angle.Between(cx, cy, this.player.x, this.player.y);
+    this.beginKnockdown();
+    this.sfx('chop', 0.4);
+    this.cameras.main.shake(160, 0.004);
+    this.tweens.add({
+      targets: this.player,
+      x: this.player.x + Math.cos(ang) * TILE * 2.2,
+      y: this.player.y + Math.sin(ang) * TILE * 2.2,
+      duration: 220,
+      ease: 'quad.out',
     });
+    void this.backend.reportKnockdown(ptx, pty).then((res) => this.resolveKnockdown(res));
   }
 
   private guardianAction(): EAction | null {
@@ -977,14 +1169,15 @@ export class GameScene extends Phaser.Scene {
       if (this.seal?.broken) {
         return {
           swing: false,
-          run: () => bus.emit('toast', 'The Guardian slumbers. Lay a Summoning Totem upon the altar to wake it.', 'info'),
+          run: () => bus.emit('toast', t.toast.guardianSlumbersLay, 'info'),
         };
       }
       return null; // sealed away — nothing to interact with yet
     }
-    // the Bow looses from range on a slower cadence; melee closes and swings fast
-    if (bow) return { swing: true, cadenceMs: BOW_CADENCE_MS, run: () => this.looseArrow() };
-    return { swing: true, run: () => this.swingAtGuardian() };
+    // each weapon carries its own COMBAT attack speed (ADR-0006 §4); harvesting
+    // is untouched — resolveEAction only sets cadenceMs on Guardian swings
+    if (bow) return { swing: true, cadenceMs: weaponCombat('bow').attackMs, run: () => this.looseArrow() };
+    return { swing: true, cadenceMs: weaponCombat(this.heldTool()).attackMs, run: () => this.swingAtGuardian() };
   }
 
   private swingAtGuardian(): void {
@@ -1029,14 +1222,20 @@ export class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
     } else {
       this.sfx('blip', 0.35);
-      this.floatText(x + Phaser.Math.Between(-10, 10), y, 'clang', '#9aa0a8');
+      this.floatText(x + Phaser.Math.Between(-10, 10), y, t.fight.clang, '#9aa0a8');
     }
     void this.backend.hitGuardian(tool).then((res) => {
       if (!res.ok) return;
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
-      if (res.deflected || res.victory) return;
-      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, `${res.hp}`, '#ff8866');
+      if (res.deflected) return;
+      // float the DAMAGE DEALT (cosmetically scaled), NOT remaining HP — the HP
+      // bar owns the pool. A crit pops bigger and gold (ADR-0006 §1).
+      const shown = res.damage * GUARDIAN_DISPLAY_SCALE;
+      const fx = this.guardianSprite.x + Phaser.Math.Between(-8, 8);
+      const fy = this.guardianSprite.y - 100;
+      if (res.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 15);
+      else this.floatText(fx, fy, `${shown}`, '#ff8866', 10);
     });
   }
 
@@ -1044,10 +1243,10 @@ export class GameScene extends Phaser.Scene {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.guardianAltarPos.x, this.guardianAltarPos.y - 8);
     if (d > INTERACT_RANGE + 8) return null;
     if (this.fight) {
-      return { swing: false, run: () => bus.emit('toast', 'The Guardian is already awake!', 'info') };
+      return { swing: false, run: () => bus.emit('toast', t.toast.guardianAlreadyAwake, 'info') };
     }
     if ((this.inventory.summon_totem ?? 0) <= 0) {
-      return { swing: false, run: () => bus.emit('toast', 'The altar awaits a Summoning Totem (5 wood · 3 fiber · 2 fruit).', 'info') };
+      return { swing: false, run: () => bus.emit('toast', t.toast.altarAwaitsTotem, 'info') };
     }
     return {
       swing: false,
@@ -1057,11 +1256,11 @@ export class GameScene extends Phaser.Scene {
             this.inventory = res.inventory;
             bus.emit('inventory', this.inventory);
           } else if (res.reason === 'FIGHT_IN_PROGRESS') {
-            bus.emit('toast', 'A fight is already raging — join it!', 'bad');
+            bus.emit('toast', t.toast.fightAlreadyRaging, 'bad');
           } else if (res.reason === 'NO_TOTEM') {
-            bus.emit('toast', 'You need a Summoning Totem.', 'bad');
+            bus.emit('toast', t.toast.needTotem, 'bad');
           } else if (res.reason === 'SEAL_INTACT') {
-            bus.emit('toast', 'The Seal still holds.', 'bad');
+            bus.emit('toast', t.toast.sealStillHolds, 'bad');
           }
         });
       },
@@ -1072,7 +1271,7 @@ export class GameScene extends Phaser.Scene {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.monumentPos.x, this.monumentPos.y - 8);
     if (d > INTERACT_RANGE + 8) return null;
     if (this.seal?.broken) {
-      return { swing: false, run: () => bus.emit('toast', 'The Seal lies broken — the arena stands open.', 'info') };
+      return { swing: false, run: () => bus.emit('toast', t.toast.sealBrokenArenaOpen, 'info') };
     }
     return {
       swing: false,
@@ -1085,11 +1284,11 @@ export class GameScene extends Phaser.Scene {
               .map(([item, n]) => `-${n} ${item}`)
               .join('  ');
             this.floatText(this.monumentPos.x, this.monumentPos.y - 20, text, '#b478ff');
-            bus.emit('toast', 'You lay your Offerings upon the Seal.', 'good');
+            bus.emit('toast', t.toast.laidOfferings, 'good');
             this.sfx('place', 0.6);
             this.tickJourney('first_offering');
           } else if (res.reason === 'NOTHING_TO_GIVE') {
-            bus.emit('toast', 'The Seal asks for wood, stone, fiber and fruit — you carry nothing it still needs.', 'bad');
+            bus.emit('toast', t.toast.offerNothingNeeded, 'bad');
           }
         });
       },
@@ -1104,7 +1303,7 @@ export class GameScene extends Phaser.Scene {
     this.journey.steps[step] = true;
     bus.emit('journey', this.journey);
     if (journeyComplete(this.journey)) {
-      bus.emit('toast', '🌱 Your Journey is complete — the jungle is yours!', 'good');
+      bus.emit('toast', t.toast.journeyComplete, 'good');
     }
     void this.backend.completeJourneyStep(step).then((j) => {
       this.journey = j;
@@ -1134,15 +1333,15 @@ export class GameScene extends Phaser.Scene {
     let y = 0;
     if (!hintRetired(this.journey, 'read')) {
       if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
-        text = 'E — read';
+        text = t.hint.read;
         x = this.welcomeStonePos.x;
         y = this.welcomeStonePos.y - 26;
       } else {
-        for (const t of this.tabletSpots) {
-          if (Phaser.Math.Distance.Between(px, py, t.x, t.y - 8) < INTERACT_RANGE) {
-            text = 'E — read';
-            x = t.x;
-            y = t.y - 22;
+        for (const spot of this.tabletSpots) {
+          if (Phaser.Math.Distance.Between(px, py, spot.x, spot.y - 8) < INTERACT_RANGE) {
+            text = t.hint.read;
+            x = spot.x;
+            y = spot.y - 22;
             break;
           }
         }
@@ -1153,8 +1352,8 @@ export class GameScene extends Phaser.Scene {
       let bestDist = INTERACT_RANGE;
       for (const view of this.nodes.values()) {
         if (view.depletedShown) continue;
-        const t = NODE_TYPES[view.state.type];
-        if (t.requiredTool && (this.inventory[t.requiredTool] ?? 0) <= 0) continue; // only nodes the Player can harvest teach
+        const nt = NODE_TYPES[view.state.type];
+        if (nt.requiredTool && (this.inventory[nt.requiredTool] ?? 0) <= 0) continue; // only nodes the Player can harvest teach
         const d = Phaser.Math.Distance.Between(px, py, view.sprite.x, view.sprite.y - TILE / 2);
         if (d < bestDist) {
           bestDist = d;
@@ -1162,7 +1361,7 @@ export class GameScene extends Phaser.Scene {
         }
       }
       if (best) {
-        text = 'E — gather';
+        text = t.hint.gather;
         x = best.sprite.x;
         y = best.sprite.y - best.sprite.displayHeight - 4;
       }
@@ -1184,7 +1383,7 @@ export class GameScene extends Phaser.Scene {
       bit: false,
       marker: null,
     };
-    bus.emit('toast', 'You cast your line... wait for the "!"', 'info');
+    bus.emit('toast', t.toast.castLine, 'info');
   }
 
   private cancelFishing(reason?: string): void {
@@ -1198,7 +1397,7 @@ export class GameScene extends Phaser.Scene {
   private reelIn(): void {
     const f = this.fishing!;
     if (!f.bit) {
-      this.cancelFishing('You reel in too soon — nothing on the hook.');
+      this.cancelFishing(t.toast.reelTooSoon);
       return;
     }
     const nodeId = f.nodeId;
@@ -1207,12 +1406,12 @@ export class GameScene extends Phaser.Scene {
     this.sfx('splash', 0.6);
     void this.backend.hitNode(nodeId, this.heldTool()).then((result) => {
       if (!result.ok) {
-        if (result.reason === 'DEPLETED') bus.emit('toast', 'Too late — someone else landed it. It will return.', 'bad');
+        if (result.reason === 'DEPLETED') bus.emit('toast', t.toast.fishTooLate, 'bad');
         return;
       }
       if (result.finishing && result.gained) {
         const text = Object.entries(result.gained)
-          .map(([item, n]) => `+${n} ${item}`)
+          .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
           .join('  ');
         this.floatText(x, y - 10, text, '#8ce9ff');
       }
@@ -1242,7 +1441,7 @@ export class GameScene extends Phaser.Scene {
           if (res.ok) {
             this.inventory = res.inventory;
             bus.emit('inventory', this.inventory);
-            bus.emit('toast', 'You cook a fish over the fire. (Eat it from your inventory.)', 'good');
+            bus.emit('toast', t.toast.cookFish, 'good');
             this.sfx('craft', 0.5);
           }
         });
@@ -1255,6 +1454,7 @@ export class GameScene extends Phaser.Scene {
   private applyQuest(q: QuestState): void {
     this.quest = q;
     bus.emit('quest', q);
+    this.refreshDelveEntrance(this.delveOpenNow());
     if (q.treasureLocation) {
       const x = (q.treasureLocation.tx + 0.5) * TILE;
       const y = (q.treasureLocation.ty + 0.5) * TILE;
@@ -1396,13 +1596,13 @@ export class GameScene extends Phaser.Scene {
         if (result.ok) {
           this.inventory = result.inventory;
           bus.emit('inventory', this.inventory);
-          bus.emit('toast', `Crafted ${ITEMS[result.crafted].name}!`, 'good');
+          bus.emit('toast', t.toast.crafted(ITEMS[result.crafted].name), 'good');
           this.sfx('craft', 0.5);
           if (result.crafted === 'axe' || result.crafted === 'ancient_axe') this.tickJourney('craft_axe');
         } else if (result.reason === 'INSUFFICIENT') {
-          bus.emit('toast', 'Not enough resources.', 'bad');
+          bus.emit('toast', t.toast.notEnoughResources, 'bad');
         } else if (result.reason === 'TOOL_REQUIRED') {
-          bus.emit('toast', 'You are missing the required tool.', 'bad');
+          bus.emit('toast', t.toast.missingTool, 'bad');
         }
       });
     });
@@ -1419,7 +1619,7 @@ export class GameScene extends Phaser.Scene {
     bus.on('crate-withdraw', (crateId: string, item: ItemId, count: number) => {
       void this.backend.crateWithdraw(crateId, item, count).then((res) => {
         if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', 'Someone was quicker — the crate no longer holds that.', 'bad');
+          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.crateGone, 'bad');
           return;
         }
         this.inventory = res.inventory;
@@ -1430,7 +1630,7 @@ export class GameScene extends Phaser.Scene {
     bus.on('sawmill-deposit', (sawmillId: string) => {
       void this.backend.sawmillDeposit(sawmillId).then((res) => {
         if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', 'The mill is full or you carry no wood.', 'bad');
+          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.millFullOrNoWood, 'bad');
           return;
         }
         this.inventory = res.inventory;
@@ -1443,13 +1643,13 @@ export class GameScene extends Phaser.Scene {
     bus.on('sawmill-collect', (sawmillId: string) => {
       void this.backend.sawmillCollect(sawmillId).then((res) => {
         if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', 'No plank is finished yet — the mill works slowly.', 'bad');
+          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.noPlankYet, 'bad');
           return;
         }
         this.inventory = res.inventory;
         bus.emit('inventory', this.inventory);
         bus.emit('sawmill-open', sawmillId, res.state);
-        bus.emit('toast', 'You collect the finished planks.', 'good');
+        bus.emit('toast', t.toast.collectPlanks, 'good');
         this.sfx('harvest', 0.6);
       });
     });
@@ -1460,7 +1660,7 @@ export class GameScene extends Phaser.Scene {
         bus.emit('inventory', this.inventory);
         this.buffUntil = Date.now() + res.buffMs;
         bus.emit('buff', this.buffUntil);
-        bus.emit('toast', 'Warm and hearty — your step quickens! (+20% speed)', 'good');
+        bus.emit('toast', t.toast.warmHearty, 'good');
         this.sfx('munch', 0.6);
       });
     });
@@ -1484,6 +1684,12 @@ export class GameScene extends Phaser.Scene {
     }
     for (const name of [...this.remotes.keys()]) if (!live.has(name)) this.removeRemote(name);
     this.emitPresence();
+    // v1 host-leave (ADR-0007 §6): if I'm a guest and the host dropped off
+    // presence without a clean 'end', the mobs' brain is gone — boot out, no loot
+    if (this.inDelve && !this.isDelveHost && this.delveHostName && !live.has(this.delveHostName)) {
+      bus.emit('toast', t.toast.hostLeftCollapse, 'bad');
+      this.leaveDelve();
+    }
   }
 
   private removeRemote(name: string): void {
@@ -1643,6 +1849,12 @@ export class GameScene extends Phaser.Scene {
     const px = this.player.x;
     const py = this.player.y - 4;
 
+    // inside the Delve, E means "attack a Husk" or "leave" — never a World action
+    if (this.inDelve) return this.delveEAction(px, py);
+    // the sealed mine shaft (clear it with an Ancient Pickaxe) / open shaft (enter)
+    const delve = this.delveEntranceAction(px, py);
+    if (delve) return delve;
+
     // special interactables take priority over nodes
     if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
       return {
@@ -1658,14 +1870,14 @@ export class GameScene extends Phaser.Scene {
         },
       };
     }
-    for (const t of this.tabletSpots) {
-      if (Phaser.Math.Distance.Between(px, py, t.x, t.y - 8) < INTERACT_RANGE) {
+    for (const spot of this.tabletSpots) {
+      if (Phaser.Math.Distance.Between(px, py, spot.x, spot.y - 8) < INTERACT_RANGE) {
         return {
           swing: false,
           run: () => {
-            void this.backend.readTablet(t.id);
-            const tab = TABLETS[t.id];
-            bus.emit('lore', tab?.title ?? 'Ancient Tablet', tab?.text ?? 'The runes have faded beyond reading.');
+            void this.backend.readTablet(spot.id);
+            const tab = TABLETS[spot.id];
+            bus.emit('lore', tab?.title ?? t.lore.tabletFallbackTitle, tab?.text ?? t.lore.tabletFallbackText);
             this.sfx('blip', 0.4);
             this.useHint('read');
             this.tickJourney('read_tablet');
@@ -1680,16 +1892,16 @@ export class GameScene extends Phaser.Scene {
         swing: false,
         run: () => {
           if (this.quest?.gateOpen) {
-            bus.emit('toast', 'The grove already stands open.', 'info');
+            bus.emit('toast', t.toast.groveOpen, 'info');
           } else {
             void this.backend.offerAltar().then((res) => {
               if (res.ok) {
                 this.inventory = res.inventory;
                 bus.emit('inventory', this.inventory);
-                bus.emit('toast', 'The offering is accepted — the vines part!', 'good');
+                bus.emit('toast', t.toast.offeringAccepted, 'good');
                 this.sfx('craft', 0.6);
               } else if (res.reason === 'INSUFFICIENT') {
-                bus.emit('toast', 'The altar asks for 2 fruit and 2 fiber.', 'bad');
+                bus.emit('toast', t.toast.altarAsks2, 'bad');
               }
             });
           }
@@ -1712,10 +1924,10 @@ export class GameScene extends Phaser.Scene {
                   .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
                   .join('  ');
                 this.floatText(dx, dy - 8, text, '#ffd166');
-                bus.emit('toast', 'You unearthed a buried treasure!', 'good');
+                bus.emit('toast', t.toast.unearthedTreasure, 'good');
                 this.sfx('craft', 0.7);
               } else if (res.reason === 'NOT_HERE') {
-                bus.emit('toast', 'Dig closer to the ✕.', 'bad');
+                bus.emit('toast', t.toast.digCloser, 'bad');
               }
             });
           },
@@ -1762,21 +1974,21 @@ export class GameScene extends Phaser.Scene {
 
   private swingAtNode(view: NodeView): void {
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
-    const t = view.state.type;
-    const swingSfx = t === 'tree' || t === 'hardwood_tree' ? 'chop' : t === 'rock' || t === 'obsidian_rock' ? 'pick' : 'harvest';
+    const nodeType = view.state.type;
+    const swingSfx = nodeType === 'tree' || nodeType === 'hardwood_tree' ? 'chop' : nodeType === 'rock' || nodeType === 'obsidian_rock' ? 'pick' : 'harvest';
     this.sfx(swingSfx, 0.5);
     void this.backend.hitNode(view.state.id, this.heldTool()).then((result) => {
       if (!result.ok) {
         if (result.reason === 'TOOL_REQUIRED') {
-          bus.emit('toast', `You need a ${ITEMS[result.requiredTool as StructureId]?.name ?? result.requiredTool} for that.`, 'bad');
+          bus.emit('toast', t.toast.needToolFor(ITEMS[result.requiredTool as StructureId]?.name ?? result.requiredTool), 'bad');
         } else if (result.reason === 'DEPLETED') {
-          bus.emit('toast', 'Too late — someone else took the yield. It will regrow.', 'bad');
+          bus.emit('toast', t.toast.yieldTaken, 'bad');
         }
         return;
       }
       if (result.finishing && result.gained) {
         const text = Object.entries(result.gained)
-          .map(([item, n]) => `+${n} ${item}`)
+          .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
           .join('  ');
         this.floatText(view.sprite.x, view.sprite.y - TILE, text, '#ffd166');
         this.sfx('harvest', 0.6);
@@ -1885,13 +2097,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private enterPlaceMode(item: StructureId): void {
+    if (this.inDelve) return; // no building inside the ephemeral Delve
     if ((this.inventory[item] ?? 0) <= 0) return;
     this.placing = item;
     this.ghost?.destroy();
     this.ghost = this.objImage(0, 0, `st_${item}`);
     this.ghost?.setAlpha(0.6).setDepth(99999);
     bus.emit('place-mode', true);
-    bus.emit('toast', `Placing ${ITEMS[item].name} — face a tile and press Enter`, 'info');
+    bus.emit('toast', t.toast.placing(ITEMS[item].name), 'info');
   }
 
   private exitPlaceMode(): void {
@@ -1980,11 +2193,11 @@ export class GameScene extends Phaser.Scene {
     const pty = Math.floor((this.player.y - 4) / TILE);
     const REACH = 4; // a few tiles from the Player
     if (Math.abs(tx - ptx) > REACH || Math.abs(ty - pty) > REACH) {
-      bus.emit('toast', 'Too far to reach — step closer to drop it there.', 'bad');
+      bus.emit('toast', t.toast.tooFarDrop, 'bad');
       return;
     }
     if (!this.canPlaceLocal(item, tx, ty)) {
-      bus.emit('toast', ITEMS[item].onWater ? 'Bridges must be placed on water.' : "Can't build on that tile.", 'bad');
+      bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
       return;
     }
     this.placeAtTile(item, tx, ty);
@@ -1995,16 +2208,16 @@ export class GameScene extends Phaser.Scene {
       if (result.ok) {
         this.inventory = result.inventory;
         bus.emit('inventory', this.inventory);
-        bus.emit('toast', `${ITEMS[item].name} placed!`, 'good');
+        bus.emit('toast', t.toast.placed(ITEMS[item].name), 'good');
         this.sfx('place', 0.6);
         this.useHint('place');
         if (item === 'campfire') this.tickJourney('place_campfire');
-        if (item === 'hammock') bus.emit('toast', 'Your Hammock is set — Exhaustion and login bring you here.', 'info');
+        if (item === 'hammock') bus.emit('toast', t.toast.hammockSet, 'info');
         this.exitPlaceMode();
       } else if (result.reason === 'OCCUPIED') {
-        bus.emit('toast', 'Someone already built here — first placement wins. Item kept.', 'bad');
+        bus.emit('toast', t.toast.alreadyBuiltHere, 'bad');
       } else if (result.reason === 'INVALID') {
-        bus.emit('toast', ITEMS[item].onWater ? 'Bridges must be placed on water.' : "Can't build on that tile.", 'bad');
+        bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
       } else {
         this.exitPlaceMode();
       }
@@ -2098,8 +2311,8 @@ export class GameScene extends Phaser.Scene {
     setVol(this.fightMusic, FIGHT_MUSIC_BASE_VOLUME, 'music');
   }
 
-  private floatText(x: number, y: number, text: string, color: string): void {
-    const t = this.add.text(x, y, text, { fontSize: '10px', color, stroke: '#000', strokeThickness: 3 });
+  private floatText(x: number, y: number, text: string, color: string, sizePx = 10): void {
+    const t = this.add.text(x, y, text, { fontSize: `${sizePx}px`, color, stroke: '#000', strokeThickness: 3 });
     t.setOrigin(0.5, 1);
     t.setResolution(4);
     t.setDepth(999999);
@@ -2107,6 +2320,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private checkZone(): void {
+    if (this.inDelve) return; // the Delve owns the zone banner while you're inside
     bus.emit('pos', {
       x: this.player.x,
       y: this.player.y,
@@ -2140,9 +2354,836 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ update
 
+  // ============================================================ Dungeons v1: the Delve (ADR-0007)
+
+  /** is the mine shaft open? (the persisted world flag, or the ?dungeon dev bypass) */
+  private delveOpenNow(): boolean {
+    return this.delveForceOpen || !!this.quest?.delveOpen;
+  }
+
+  /** the sealed mine-shaft entrance in the World, a few tiles south of the arena */
+  private buildDelveEntrance(): void {
+    // the sealed mine shaft sits in the South Quarry — a rocky dig, fitting for a
+    // mine, and a trek from the Ruins where the Ancient Pickaxe is earned
+    const tx = 48;
+    const ty = 128;
+    const x = (tx + 0.5) * TILE;
+    const y = (ty + 0.5) * TILE;
+    this.delveEntrance = { x, y, tx, ty };
+    const c = this.add.container(x, y);
+    const frame = this.add.ellipse(0, 2, TILE * 2.9, TILE * 1.9, 0x000000, 0).setStrokeStyle(3, 0x4a3a2a);
+    const mouth = this.add.ellipse(0, 2, TILE * 2.3, TILE * 1.45, 0x07080b).setStrokeStyle(2, 0x2a2018);
+    const rubble = this.add.container(0, 0);
+    const rockColors = [0x6b5844, 0x574636, 0x7a6650];
+    for (let i = 0; i < 9; i++) {
+      const rk = this.add
+        .rectangle(Phaser.Math.Between(-17, 17), Phaser.Math.Between(-8, 9), Phaser.Math.Between(5, 9), Phaser.Math.Between(4, 7), rockColors[i % 3])
+        .setStrokeStyle(1, 0x2a2018)
+        .setAngle(Phaser.Math.Between(-20, 20));
+      rubble.add(rk);
+    }
+    const label = this.add
+      .text(0, -TILE * 1.7, '', { fontSize: '8px', color: '#c9b28a', stroke: '#000', strokeThickness: 3 })
+      .setOrigin(0.5)
+      .setResolution(4);
+    c.add([frame, mouth, rubble, label]);
+    c.setDepth(y);
+    c.setData('rubble', rubble);
+    c.setData('label', label);
+    this.delveEntranceSprite = c;
+    this.refreshDelveEntrance(this.delveOpenNow());
+    if (DEV_DUNGEON) this.player.setPosition(x, y + TILE * 1.4);
+  }
+
+  /** show the rubble sealed, or dissolve it once the shaft is opened, forever */
+  private refreshDelveEntrance(open: boolean): void {
+    const c = this.delveEntranceSprite;
+    if (!c) return;
+    const rubble = c.getData('rubble') as Phaser.GameObjects.Container;
+    const label = c.getData('label') as Phaser.GameObjects.Text;
+    if (open) {
+      if (rubble.visible) this.tweens.add({ targets: rubble, alpha: 0, duration: 500, onComplete: () => rubble.setVisible(false) });
+      label.setText(t.delve.descend);
+    } else {
+      rubble.setVisible(true).setAlpha(1);
+      label.setText(t.delve.sealed);
+    }
+  }
+
+  /** E at the shaft: clear the rubble (Ancient Pickaxe) while sealed, or descend once open */
+  private delveEntranceAction(px: number, py: number): EAction | null {
+    const e = this.delveEntrance;
+    if (Phaser.Math.Distance.Between(px, py, e.x, e.y) > INTERACT_RANGE + 10) return null;
+    if (this.delveOpenNow()) return { swing: false, run: () => this.enterDelve() };
+    if (this.heldItem === 'ancient_pickaxe') return { swing: true, run: () => this.chipRubble() };
+    return { swing: false, run: () => bus.emit('toast', t.toast.shaftSealed, 'info') };
+  }
+
+  private chipRubble(): void {
+    this.sfx('pick', 0.5);
+    this.cameras.main.shake(110, 0.003);
+    this.floatText(this.delveEntrance.x, this.delveEntrance.y - 10, '*chip*', '#c9b28a', 9);
+    if (++this.rubbleHits < 4) return;
+    this.rubbleHits = 0;
+    void this.backend.openDelve().then((res) => {
+      if (res.ok) {
+        this.sfx('craft', 0.7);
+        this.cameras.main.shake(300, 0.006);
+        bus.emit('toast', t.toast.rubbleCollapses, 'good');
+      }
+      this.refreshDelveEntrance(true);
+    });
+  }
+
+  /** create + host an instanced run: lock the roster, spawn scaled mobs, descend */
+  private enterDelve(): void {
+    if (this.inDelve) return;
+    const me = this.me.name;
+    const roster = [me];
+    for (const [name, r] of this.remotes) {
+      if (Phaser.Math.Distance.Between(r.sprite.x, r.sprite.y, this.delveEntrance.x, this.delveEntrance.y) < TILE * 6) roster.push(name);
+    }
+    const runId = `${me}:${Date.now()}`;
+    this.isDelveHost = true;
+    this.delveHostName = me;
+    this.delveRoster = roster;
+    this.delveHeadcount = Math.max(1, roster.length);
+    this.backend.sendDungeon({ t: 'start', runId, host: me, heads: this.delveHeadcount, roster });
+    this.spawnDelveMobs();
+    this.beginDelve(runId);
+    bus.emit('toast', roster.length > 1 ? t.toast.descendWithOthers(roster.length - 1) : t.toast.descendAlone, 'info');
+  }
+
+  /** host: build the authoritative mob roster (HP lives ONLY here — never the DB) */
+  private spawnDelveMobs(): void {
+    this.mobs.clear();
+    for (const s of planDelveSpawns(this.delveHeadcount, Math.random)) {
+      const id = `m${this.nextMobId++}`;
+      this.mobs.set(id, createMob(id, s, this.delveHeadcount));
+    }
+    this.delveKills = 0;
+    this.delveParticipants.clear();
+  }
+
+  /** a party-mate's client announced a run — join it if I'm rostered and at the shaft */
+  private onDelveStart(msg: Extract<DungeonMsg, { t: 'start' }>): void {
+    if (this.inDelve || msg.host === this.me.name) return;
+    if (!msg.roster.includes(this.me.name)) return;
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this.delveEntrance.x, this.delveEntrance.y) > TILE * 8) return;
+    this.isDelveHost = false;
+    this.delveHostName = msg.host;
+    this.delveRoster = msg.roster;
+    this.delveHeadcount = msg.heads;
+    this.mobs.clear(); // a guest renders mobs from the host's snapshots
+    this.beginDelve(msg.runId);
+    this.backend.sendDungeon({ t: 'join', runId: msg.runId, name: this.me.name });
+    bus.emit('toast', t.toast.followInto(msg.host), 'info');
+  }
+
+  /** shared entry: reset run state, build the interior, swap collision, teleport in */
+  private beginDelve(runId: string): void {
+    this.inDelve = true;
+    this.delveRunId = runId;
+    this.delveKnockdowns = 0;
+    this.delveExhausted = false;
+    this.delveHitLanded = false;
+    this.delveExhaustedRun = null;
+    this.projectiles = [];
+    this.rubbleHits = 0;
+    this.stunnedUntil = 0;
+    if (this.placing) this.exitPlaceMode();
+    this.buildDelveInterior();
+    for (const c of this.worldColliders) c.active = false;
+    if (this.delveWallCollider) this.delveWallCollider.active = true;
+    this.player.setPosition((DELVE_ENTRY.tx + 0.5) * TILE, (DELVE_ENTRY.ty + 0.5) * TILE);
+    this.player.setVelocity(0, 0);
+    const cam = this.cameras.main;
+    cam.setBounds(0, 0, DELVE_W * TILE, DELVE_H * TILE);
+    cam.flash(400, 3, 5, 9);
+    bus.emit('zone', 'The Delve');
+  }
+
+  /** the interior render (a high-depth overlay hiding the World) + collision */
+  private buildDelveInterior(): void {
+    this.delveBackdrop = this.add.rectangle(0, 0, 10, 10, 0x07090c).setDepth(DELVE_DEPTH_BG);
+    this.buildDelveFloor();
+    const ex = (DELVE_ENTRY.tx + 0.5) * TILE;
+    const ey = (DELVE_ENTRY.ty + 0.5) * TILE;
+    const exit = this.add
+      .text(ex, ey - TILE, t.delve.leave, { fontSize: '8px', color: '#9fe0a0', stroke: '#000', strokeThickness: 3 })
+      .setOrigin(0.5)
+      .setResolution(4)
+      .setDepth(DELVE_DEPTH_FLOOR + 3);
+    this.delveObjects.push(exit);
+    // static bodies for wall tiles bordering floor, PLUS blocking cover props —
+    // the player physics-collides with both; mobs + projectiles use isDelveBlocked
+    this.delveWalls = this.physics.add.staticGroup();
+    for (let ty = 0; ty < DELVE_H; ty++) {
+      for (let tx = 0; tx < DELVE_W; tx++) {
+        if (!isDelveWall(tx, ty)) continue;
+        let border = false;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          if (!isDelveWall(tx + dx, ty + dy)) {
+            border = true;
+            break;
+          }
+        }
+        if (!border) continue;
+        const body = this.add.rectangle((tx + 0.5) * TILE, (ty + 0.5) * TILE, TILE, TILE).setVisible(false);
+        this.delveWalls.add(body);
+      }
+    }
+    for (const p of DELVE_PROPS) {
+      if (!PROP_BLOCKS[p.kind]) continue;
+      const body = this.add.rectangle((p.tx + 0.5) * TILE, (p.ty + 0.5) * TILE, TILE - 2, TILE - 2).setVisible(false);
+      this.delveWalls.add(body);
+    }
+    this.delveWallCollider = this.physics.add.collider(this.player, this.delveWalls);
+    this.buildDelveProps();
+  }
+
+  /** per-room textured stone floors (mine → ruins ramp) — kills the flat fill */
+  private buildDelveFloor(): void {
+    const F = {
+      base: '#2a2620', toneA: '#221f1a', toneB: '#302b24', toneC: '#241f18',
+      stain: '#1b1813', scuff: '#37312a', speckle: '#17140f',
+      ruinTint: '#282430', ruinToneA: '#221f2a', ruinToneB: '#2f2a38',
+      edgeMine: '#1e1a15', edgeRuin: '#1c1922',
+    };
+    for (const r of [...DELVE_ROOMS, ...DELVE_CORRIDORS]) {
+      const ruins = r.x >= RUINS_FROM_X;
+      const ramp = ruins ? [F.ruinToneA, F.ruinTint, F.ruinToneB, F.toneC] : [F.toneA, F.base, F.toneB, F.toneC];
+      const edge = ruins ? F.edgeRuin : F.edgeMine;
+      const key = `delveFloor_${r.x}_${r.y}`;
+      if (this.textures.exists(key)) this.textures.remove(key);
+      const tex = this.textures.createCanvas(key, r.w * TILE, r.h * TILE);
+      if (!tex) continue;
+      const c = tex.context;
+      for (let ty = r.y; ty < r.y + r.h; ty++) {
+        for (let tx = r.x; tx < r.x + r.w; tx++) {
+          const lx = (tx - r.x) * TILE;
+          const ly = (ty - r.y) * TILE;
+          const h = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
+          const h2 = (h * 2654435761) >>> 0;
+          c.fillStyle = ramp[h & 3];
+          c.fillRect(lx, ly, TILE, TILE);
+          const m = h % 100;
+          if (m < 8) {
+            c.fillStyle = F.stain;
+            c.fillRect(lx, ly, TILE, TILE);
+          } else if (m < 13) {
+            c.fillStyle = F.scuff;
+            c.fillRect(lx, ly, TILE, TILE);
+          }
+          c.fillStyle = edge; // wall-cast edge shade (recessed look)
+          if (isDelveWall(tx, ty - 1)) c.fillRect(lx, ly, TILE, 3);
+          if (isDelveWall(tx, ty + 1)) c.fillRect(lx, ly + TILE - 3, TILE, 3);
+          if (isDelveWall(tx - 1, ty)) c.fillRect(lx, ly, 3, TILE);
+          if (isDelveWall(tx + 1, ty)) c.fillRect(lx + TILE - 3, ly, 3, TILE);
+          if (h2 % 10 < 3) {
+            const spine = ty === 10 || ty === 11; // keep the walking lane clean
+            c.fillStyle = F.speckle;
+            const sx = 2 + (h2 % 12);
+            const sy = 3 + ((h2 >> 4) % 11);
+            if (!(spine && sx > 4 && sx < 10)) c.fillRect(lx + sx, ly + sy, 1, 1);
+            const sx2 = 8 + ((h2 >> 8) % 6);
+            const sy2 = 6 + ((h2 >> 12) % 8);
+            if (!(spine && sx2 > 4 && sx2 < 10)) c.fillRect(lx + sx2, ly + sy2, 1, 1);
+          }
+        }
+      }
+      tex.refresh();
+      const img = this.add.image(r.x * TILE, r.y * TILE, key).setOrigin(0, 0).setDepth(DELVE_DEPTH_FLOOR);
+      this.delveObjects.push(img);
+      this.delveFloorKeys.push(key);
+    }
+  }
+
+  /** place every authored prop + its light pool (ADR-0007 §10 dressing) */
+  private buildDelveProps(): void {
+    for (const p of DELVE_PROPS) {
+      const flat = PROP_FLAT[p.kind];
+      const px = (p.tx + 0.5) * TILE;
+      const py = flat ? (p.ty + 0.5) * TILE : (p.ty + 1) * TILE; // upright props stand on the tile
+      const img = this.add.image(px, py, PROP_TEX[p.kind]).setOrigin(0.5, flat ? 0.5 : 1);
+      img.setDepth(flat ? DELVE_DEPTH_FLOOR + 1 : DELVE_DEPTH_ENTITY + py);
+      this.delveObjects.push(img);
+      const light = PROP_LIGHT[p.kind];
+      if (light) this.addDelveLight((p.tx + 0.5) * TILE, (p.ty + 0.5) * TILE - (flat ? 0 : TILE * 0.4), light.color, light.scale, light.alpha, light.flicker);
+    }
+    for (const l of DELVE_LIGHTS) this.addDelveLight((l.tx + 0.5) * TILE, (l.ty + 0.5) * TILE, l.color, l.scale, l.alpha, false);
+  }
+
+  /** an additive glow pool above the floor, below entities — the room's light */
+  private addDelveLight(x: number, y: number, color: number, scale: number, alpha: number, flicker: boolean): void {
+    const glow = this.add
+      .image(x, y, 'glow')
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(color)
+      .setScale(scale)
+      .setAlpha(alpha)
+      .setDepth(DELVE_DEPTH_FLOOR + 2);
+    this.delveObjects.push(glow);
+    if (flicker) this.tweens.add({ targets: glow, alpha: Math.max(0.08, alpha - 0.06), duration: 900, yoyo: true, repeat: -1, ease: 'sine.inout' });
+  }
+
+  private teardownDelve(): void {
+    for (const o of this.delveObjects) o.destroy();
+    this.delveObjects = [];
+    for (const key of this.delveFloorKeys) if (this.textures.exists(key)) this.textures.remove(key);
+    this.delveFloorKeys = [];
+    this.delveBackdrop?.destroy();
+    this.delveBackdrop = null;
+    for (const v of this.mobViews.values()) {
+      v.sprite.destroy();
+      v.shadow.destroy();
+      v.tele.destroy();
+      v.bar.destroy();
+    }
+    this.mobViews.clear();
+    for (const a of this.projViews.values()) a.destroy();
+    this.projViews.clear();
+    for (const pv of this.delvePeers.values()) {
+      pv.marker.destroy();
+      pv.label.destroy();
+    }
+    this.delvePeers.clear();
+    this.delveWallCollider?.destroy();
+    this.delveWallCollider = null;
+    this.delveWalls?.destroy(true);
+    this.delveWalls = null;
+    this.mobs.clear();
+    this.projectiles = [];
+    this.stunMarker?.destroy();
+    this.stunMarker = null;
+  }
+
+  /** tear down the instance and return to the World entrance (broadcasts are at call sites) */
+  private leaveDelve(): void {
+    if (!this.inDelve) return;
+    this.inDelve = false;
+    this.delveRunId = null;
+    this.isDelveHost = false;
+    this.delveHostName = '';
+    this.teardownDelve();
+    for (const c of this.worldColliders) c.active = true;
+    const cam = this.cameras.main;
+    cam.setBounds(0, 0, MAP_W * TILE, MAP_H * TILE);
+    cam.flash(300, 6, 8, 12);
+    this.player.setPosition((this.delveEntrance.tx + 0.5) * TILE, (this.delveEntrance.ty + 1.5) * TILE);
+    this.player.setVelocity(0, 0);
+    this.stunnedUntil = 0;
+    this.delveExhausted = false;
+    bus.emit('zone', this.currentZone || 'Ancient Ruins');
+    // restore the entity depths the Delve overlay had bumped sky-high
+    this.playerShadow.setDepth(2);
+    this.torchGlow.setDepth(890_000);
+    this.heldSprite.setDepth(this.player.y + 1);
+  }
+
+  /** walk out via the entrance room — a host leaving ends the run for everyone (v1) */
+  private leaveDelveManual(): void {
+    if (this.delveRunId) {
+      if (this.isDelveHost) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'hostleft' });
+      else this.backend.sendDungeon({ t: 'down', runId: this.delveRunId, name: this.me.name, out: true });
+    }
+    bus.emit('toast', t.toast.climbOut, 'info');
+    this.leaveDelve();
+  }
+
+  /** host: the Deep Guardian fell — grant participation loot and complete the run */
+  private completeDelveRun(): void {
+    const shards = this.delveKills * SHARD_PER_KILL;
+    const loot: Inventory = {};
+    if (shards > 0) loot[HUSK_SHARD] = shards;
+    loot[DEEP_CORE] = DEEP_CORE_DROP;
+    if (this.delveRunId) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'victory', loot });
+    this.cameras.main.flash(600, 120, 90, 255);
+    this.grantDelveLootIfEligible(loot, this.delveHitLanded);
+    this.leaveDelve();
+  }
+
+  /** each client claims its OWN loot iff it landed ≥1 hit — the run's only DB write */
+  private grantDelveLootIfEligible(loot: Inventory, eligible: boolean): void {
+    if (!eligible) {
+      bus.emit('toast', t.toast.delveClearedNoHit, 'info');
+      return;
+    }
+    void this.backend.claimDelveLoot(loot).then((res) => {
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      const parts = Object.entries(loot)
+        .filter(([, n]) => (n as number) > 0)
+        .map(([k, n]) => `+${n} ${ITEMS[k as ItemId]?.name ?? k}`)
+        .join('  ');
+      bus.emit('toast', t.toast.deepGuardianFalls(parts), 'good');
+      this.sfx('craft', 0.8);
+    });
+  }
+
+  /** inside the Delve, E means leave (at the entrance) or strike the nearest mob in reach */
+  private delveEAction(px: number, py: number): EAction | null {
+    void px;
+    void py;
+    const ex = (DELVE_ENTRY.tx + 0.5) * TILE;
+    const ey = (DELVE_ENTRY.ty + 0.5) * TILE;
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, ex, ey) < INTERACT_RANGE) {
+      return { swing: false, run: () => this.leaveDelveManual() };
+    }
+    if (this.delveExhausted) return null;
+    const reach = this.heldItem === 'bow' ? 6 : 1.7; // the Bow strikes mobs from range
+    const ptx = this.player.x / TILE;
+    const pty = (this.player.y - 4) / TILE;
+    let best: MobState | null = null;
+    let bd = reach;
+    for (const m of this.mobs.values()) {
+      if (m.st === 'dead') continue;
+      const d = Math.hypot(m.x - ptx, m.y - pty) - MOB_PROFILES[m.kind].radius;
+      if (d < bd) {
+        bd = d;
+        best = m;
+      }
+    }
+    if (!best) return null;
+    const target = best;
+    return { swing: true, cadenceMs: weaponCombat(this.heldTool()).attackMs, run: () => this.delveSwing(target) };
+  }
+
+  private delveSwing(m: MobState): void {
+    const tool = this.heldTool();
+    this.sfx(tool === 'bow' ? 'blip' : 'chop', 0.5);
+    if (this.isDelveHost) {
+      this.applyDelveHit(m.id, tool, this.me.name);
+    } else if (this.delveRunId) {
+      // ask the host to adjudicate; the mob's HP bar (from snapshots) shows the drop
+      this.backend.sendDungeon({ t: 'hit', runId: this.delveRunId, mobId: m.id, by: this.me.name, tool });
+      this.delveHitLanded = true;
+    }
+  }
+
+  /** host: adjudicate a player→mob hit — reuse the ADR-0006 weapon roll, apply, float */
+  private applyDelveHit(mobId: string, tool: ToolId | undefined, by: string): void {
+    const m = this.mobs.get(mobId);
+    if (!m || m.st === 'dead') return;
+    if (!this.delveHitInRange(by, m)) return; // loose trusted-friends range check (ADR-0005)
+    const roll = applyMobHit(m, tool, Math.random);
+    this.delveParticipants.add(by);
+    if (by === this.me.name) this.delveHitLanded = true;
+    const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
+    const fy = m.y * TILE - MOB_PROFILES[m.kind].radius * TILE - 8;
+    const shown = roll.damage * GUARDIAN_DISPLAY_SCALE;
+    if (roll.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 13);
+    else this.floatText(fx, fy, `${shown}`, '#ff9a66', 10);
+    if (roll.dead) this.onMobFelled(m);
+  }
+
+  private delveHitInRange(by: string, m: MobState): boolean {
+    let x: number;
+    let y: number;
+    if (by === this.me.name) {
+      x = this.player.x / TILE;
+      y = (this.player.y - 4) / TILE;
+    } else {
+      const pv = this.delvePeers.get(by);
+      if (!pv) return true; // no position yet — trust the friend
+      x = pv.x / TILE;
+      y = pv.y / TILE;
+    }
+    return Math.hypot(m.x - x, m.y - y) <= 7 + MOB_PROFILES[m.kind].radius;
+  }
+
+  private onMobFelled(m: MobState): void {
+    this.sfx('harvest', 0.5);
+    if (m.kind === 'boss') {
+      this.completeDelveRun();
+    } else {
+      this.delveKills++;
+      this.mobs.delete(m.id);
+    }
+  }
+
+  /** my 3rd knockdown: Exhaustion — out of the run; a host leaving ends it for all (v1) */
+  private exitDelveExhausted(): void {
+    this.delveExhausted = true;
+    if (this.isDelveHost) {
+      bus.emit('toast', t.toast.exhaustionDelveHost, 'bad');
+      if (this.delveRunId) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'hostleft' });
+      this.leaveDelve();
+    } else {
+      bus.emit('toast', t.toast.exhaustionDelveYou, 'bad');
+      if (this.delveRunId) {
+        this.backend.sendDungeon({ t: 'down', runId: this.delveRunId, name: this.me.name, out: true });
+        if (this.delveHitLanded) this.delveExhaustedRun = this.delveRunId;
+      }
+      this.leaveDelve();
+    }
+  }
+
+  /** a mob attack caught me — knock down (with a shove) and count toward Exhaustion */
+  private delveKnockdown(srcX: number, srcY: number): void {
+    this.beginKnockdown();
+    this.sfx('chop', 0.4);
+    this.cameras.main.shake(160, 0.004);
+    const ang = Phaser.Math.Angle.Between(srcX * TILE, srcY * TILE, this.player.x, this.player.y);
+    this.tweens.add({
+      targets: this.player,
+      x: this.player.x + Math.cos(ang) * TILE * 1.6,
+      y: this.player.y + Math.sin(ang) * TILE * 1.6,
+      duration: 200,
+      ease: 'quad.out',
+    });
+    this.delveKnockdowns++;
+    if (this.delveKnockdowns >= EXHAUSTION_KNOCKDOWNS) this.exitDelveExhausted();
+    else bus.emit('toast', t.toast.knockedInDelve(this.delveKnockdowns, EXHAUSTION_KNOCKDOWNS), 'bad');
+  }
+
+  /** alive player positions the host AI steers toward (tile units) */
+  private delveTargets(): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    if (!this.delveExhausted) out.push({ x: this.player.x / TILE, y: (this.player.y - 4) / TILE });
+    for (const pv of this.delvePeers.values()) out.push({ x: pv.x / TILE, y: pv.y / TILE });
+    return out;
+  }
+
+  /** the whole Delve frame: dark ambiance, movement, host sim, render, combat, netcode */
+  private updateDelve(time: number, delta: number): void {
+    const dt = delta / 1000;
+    const cam = this.cameras.main;
+    if (this.delveBackdrop) this.delveBackdrop.setPosition(cam.midPoint.x, cam.midPoint.y).setSize(cam.displayWidth + 8, cam.displayHeight + 8);
+    this.nightOverlay.setAlpha(0);
+    this.duskOverlay.setAlpha(0);
+    this.torchGlow
+      .setPosition(this.player.x, this.player.y - 8)
+      .setAlpha(this.heldItem === 'hand_torch' ? 0.5 : 0.22)
+      .setDepth(DELVE_DEPTH_FLOOR + 2);
+    positionHeld(this.heldSprite, this.player.x, this.player.y, this.lastDir);
+    this.heldSprite.setDepth(DELVE_DEPTH_ENTITY + this.player.y + 1);
+    this.playerShadow.setPosition(this.player.x, this.player.y - 1).setDepth(DELVE_DEPTH_ENTITY + this.player.y - 1);
+
+    const stunned = Date.now() < this.stunnedUntil;
+    if (!stunned && this.stunMarker) {
+      this.stunMarker.destroy();
+      this.stunMarker = null;
+    }
+    if (this.stunMarker) this.stunMarker.setPosition(this.player.x, this.player.y - AVATAR_H - 6).setDepth(999_999);
+
+    // movement (frozen while stunned, chatting, or Exhausted-out)
+    if (!this.chatFocused && !stunned && !this.delveExhausted) {
+      const left = this.keys.left.isDown || this.keys.a.isDown;
+      const right = this.keys.right.isDown || this.keys.d.isDown;
+      const up = this.keys.up.isDown || this.keys.w.isDown;
+      const down = this.keys.down.isDown || this.keys.s.isDown;
+      let vx = (right ? 1 : 0) - (left ? 1 : 0);
+      let vy = (down ? 1 : 0) - (up ? 1 : 0);
+      if (vx !== 0 && vy !== 0) {
+        vx *= Math.SQRT1_2;
+        vy *= Math.SQRT1_2;
+      }
+      const speed = PLAYER_SPEED * (Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1);
+      this.player.setVelocity(vx * speed, vy * speed);
+      const moving = vx !== 0 || vy !== 0;
+      if (moving) this.lastDir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'right' : 'left') : vy > 0 ? 'down' : 'up';
+      this.applyAnim(this.player, this.lastDir, moving);
+    } else {
+      this.player.setVelocity(0, 0);
+      this.applyAnim(this.player, this.lastDir, false);
+    }
+    this.player.setDepth(DELVE_DEPTH_ENTITY + this.player.y);
+
+    if (this.isDelveHost) this.simulateDelve(delta);
+    this.stepProjectiles(dt);
+    this.renderDelve(time);
+    if (!stunned && !this.delveExhausted) this.checkDelveHarm();
+
+    for (const pv of this.delvePeers.values()) {
+      pv.marker.setPosition(pv.x, pv.y).setDepth(DELVE_DEPTH_ENTITY + pv.y);
+      pv.label.setPosition(pv.x, pv.y - 16).setDepth(DELVE_DEPTH_ENTITY + pv.y + 1);
+    }
+
+    // netcode: my interior position, and (host) mob snapshots — both rate-capped
+    if (this.delveRunId && time - this.lastPosSent > 150) {
+      this.lastPosSent = time;
+      this.backend.sendDungeon({ t: 'pos', runId: this.delveRunId, name: this.me.name, x: this.player.x / TILE, y: (this.player.y - 4) / TILE });
+    }
+    if (this.isDelveHost && this.delveRunId && time - this.lastMobSnapAt > 150) {
+      this.lastMobSnapAt = time;
+      this.broadcastMobSnap();
+    }
+
+    // E: strike / leave (same cadence discipline as the World swing loop)
+    if (!this.chatFocused && !stunned) {
+      const ePressed = Phaser.Input.Keyboard.JustDown(this.keys.e);
+      if (ePressed || this.keys.e.isDown) {
+        const now = Date.now();
+        if (ePressed || now - this.lastSwingAt >= SWING_CADENCE_MS) {
+          const action = this.resolveEAction();
+          if (action?.swing) {
+            const cad = action.cadenceMs ?? SWING_CADENCE_MS;
+            if (now - this.lastSwingAt >= cad) {
+              this.lastSwingAt = now;
+              action.run();
+            }
+          } else if (action && ePressed) {
+            action.run();
+          }
+        }
+      }
+    }
+  }
+
+  /** host: advance every mob's reactive AI one frame and act on what they emit */
+  private simulateDelve(delta: number): void {
+    const targets = this.delveTargets();
+    // mobs treat cover props as walls too — so a Grasp Husk rounds a pillar
+    const ctx = { targets, isWall: (tx: number, ty: number) => isDelveBlocked(tx, ty), dt: delta, rng: Math.random };
+    for (const m of this.mobs.values()) {
+      if (m.st === 'dead') continue;
+      const ev = stepMob(m, ctx);
+      this.applyMobEvent(m, ev);
+    }
+  }
+
+  private applyMobEvent(m: MobState, ev: MobEvent): void {
+    if (ev.sfx === 'roar') this.sfx('roar', 0.3);
+    else if (ev.sfx === 'lunge') this.sfx('chop', 0.25);
+    else if (ev.sfx === 'spit') this.sfx('blip', 0.3);
+    if (ev.projectile) {
+      const p = ev.projectile;
+      this.projectiles.push({ id: `p${this.nextProjId++}`, x: p.x, y: p.y, vx: p.vx, vy: p.vy, r: p.r, life: 3000 });
+    }
+    void m;
+  }
+
+  private stepProjectiles(dt: number): void {
+    this.projectiles = this.projectiles.filter((p) => {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= dt * 1000;
+      // a Spit Husk's shot dies on a wall OR a cover prop — pillars are real cover
+      return p.life > 0 && !isDelveBlocked(Math.floor(p.x), Math.floor(p.y));
+    });
+  }
+
+  /** draw mobs (body, telegraph, HP bar) + projectiles from this.mobs / this.projectiles */
+  private renderDelve(time: number): void {
+    const seen = new Set<string>();
+    for (const m of this.mobs.values()) {
+      if (m.st === 'dead') continue;
+      seen.add(m.id);
+      const prof = MOB_PROFILES[m.kind];
+      const rpx = prof.radius * TILE;
+      const fh = MOB_FRAME[m.kind].h;
+      const barW = Math.max(rpx * 2, MOB_FRAME[m.kind].w * 0.8);
+      let v = this.mobViews.get(m.id);
+      if (!v) {
+        const sprite = this.add.sprite(0, 0, MOB_TEX[m.kind], 0).setOrigin(0.5, 0.78);
+        const shadow = this.add.image(0, 0, 'shadow').setDisplaySize(rpx * 2.6, rpx * 1.4).setAlpha(0.45);
+        const tele = this.add.graphics();
+        const bar = this.add.rectangle(0, 0, barW, 3, 0x66ff88).setOrigin(0, 0.5).setVisible(false);
+        v = { sprite, shadow, tele, bar };
+        this.mobViews.set(m.id, v);
+        this.delveObjects.push(sprite, shadow, tele, bar);
+      }
+      const px = m.x * TILE;
+      const py = m.y * TILE;
+      const d = DELVE_DEPTH_ENTITY + py;
+      v.shadow.setPosition(px, py + rpx * 0.5).setDepth(d - 1);
+      v.sprite.setPosition(px, py + rpx * 0.5).setDepth(d);
+      v.sprite.setFlipX(Math.cos(m.face) < -0.15); // face the way it's heading
+      // snap to the telegraph pose during a wind-up, else play the idle heave
+      const idleKey = `${MOB_TEX[m.kind]}-idle`;
+      if (m.st === 'windup' || m.st === 'aim') {
+        if (v.sprite.anims.isPlaying) v.sprite.anims.stop();
+        v.sprite.setFrame(2);
+      } else if (v.sprite.anims.currentAnim?.key !== idleKey || !v.sprite.anims.isPlaying) {
+        v.sprite.anims.play(idleKey, true);
+      }
+      // HP bar only once the mob has been hurt (keeps the room uncluttered)
+      const hurt = m.hp < m.maxHp;
+      v.bar
+        .setVisible(hurt)
+        .setPosition(px - barW / 2, py - fh * 0.55)
+        .setDepth(d + 1)
+        .setScale(Math.max(0, m.hp / m.maxHp), 1);
+      // ground telegraph reinforces the sprite's reared pose
+      v.tele.clear();
+      v.tele.setDepth(DELVE_DEPTH_FLOOR + 3);
+      if (m.st === 'windup') {
+        const warn = 0.35 + 0.25 * Math.sin(time / 55);
+        v.tele.lineStyle(3, 0xff3322, warn);
+        v.tele.lineBetween(px, py, m.ax * TILE, m.ay * TILE);
+        v.tele.fillStyle(0xff3322, warn * 0.5);
+        v.tele.fillCircle(m.ax * TILE, m.ay * TILE, prof.strikeR * TILE);
+      } else if (m.st === 'aim') {
+        const warn = 0.35 + 0.25 * Math.sin(time / 55);
+        v.tele.lineStyle(2, 0xffaa33, warn);
+        v.tele.lineBetween(px, py, m.ax * TILE, m.ay * TILE);
+      }
+    }
+    for (const [id, v] of this.mobViews) {
+      if (seen.has(id)) continue;
+      v.sprite.destroy();
+      v.shadow.destroy();
+      v.tele.destroy();
+      v.bar.destroy();
+      this.mobViews.delete(id);
+    }
+    const seenP = new Set<string>();
+    for (const p of this.projectiles) {
+      seenP.add(p.id);
+      let a = this.projViews.get(p.id);
+      if (!a) {
+        a = this.add.circle(0, 0, Math.max(3, p.r * TILE), 0xffcc44).setStrokeStyle(1, 0x3a2a08);
+        this.projViews.set(p.id, a);
+        this.delveObjects.push(a);
+      }
+      a.setPosition(p.x * TILE, p.y * TILE).setDepth(DELVE_DEPTH_PROJ);
+    }
+    for (const [id, a] of this.projViews) {
+      if (seenP.has(id)) continue;
+      a.destroy();
+      this.projViews.delete(id);
+    }
+  }
+
+  /** each client checks its OWN player against live danger — melee strike zones + projectiles */
+  private checkDelveHarm(): void {
+    const ptx = this.player.x / TILE;
+    const pty = (this.player.y - 4) / TILE;
+    for (const m of this.mobs.values()) {
+      if (m.st !== 'strike') continue;
+      const r = MOB_PROFILES[m.kind].strikeR;
+      if (Math.hypot(m.x - ptx, m.y - pty) <= r + 0.35) {
+        this.delveKnockdown(m.x, m.y);
+        return;
+      }
+    }
+    for (const p of this.projectiles) {
+      if (Math.hypot(p.x - ptx, p.y - pty) <= p.r + 0.35) {
+        p.life = -1;
+        this.delveKnockdown(p.x, p.y);
+        return;
+      }
+    }
+  }
+
+  /** host → peers: the live mob roster + projectiles (dead mobs drop off the wire) */
+  private broadcastMobSnap(): void {
+    if (!this.delveRunId) return;
+    const mobs: MobSnap[] = [];
+    for (const m of this.mobs.values()) {
+      if (m.st === 'dead') continue;
+      mobs.push({ id: m.id, kind: m.kind, x: m.x, y: m.y, hp: m.hp, maxHp: m.maxHp, st: m.st, ax: m.ax, ay: m.ay, phase: m.phase });
+    }
+    const projectiles: ProjSnap[] = this.projectiles.map((p) => ({ id: p.id, x: p.x, y: p.y }));
+    this.backend.sendDungeon({ t: 'snap', runId: this.delveRunId, mobs, projectiles });
+  }
+
+  /** guest: replace the rendered mob/projectile set from the host's authoritative snapshot */
+  private applyDelveSnap(msg: Extract<DungeonMsg, { t: 'snap' }>): void {
+    const alive = new Set<string>();
+    for (const s of msg.mobs) {
+      alive.add(s.id);
+      const kind = s.kind as MobKind;
+      let m = this.mobs.get(s.id);
+      if (!m) {
+        m = { id: s.id, kind, x: s.x, y: s.y, hp: s.hp, maxHp: s.maxHp, st: s.st as MobState['st'], t: 0, face: 0, ax: s.ax, ay: s.ay, phase: s.phase };
+        this.mobs.set(s.id, m);
+      } else {
+        m.x = s.x;
+        m.y = s.y;
+        m.hp = s.hp;
+        m.maxHp = s.maxHp;
+        m.st = s.st as MobState['st'];
+        m.ax = s.ax;
+        m.ay = s.ay;
+        m.phase = s.phase;
+      }
+      m.face = Math.atan2(s.ay - s.y, s.ax - s.x);
+    }
+    for (const id of [...this.mobs.keys()]) if (!alive.has(id)) this.mobs.delete(id);
+    this.projectiles = msg.projectiles.map((p) => ({ id: p.id, x: p.x, y: p.y, vx: 0, vy: 0, r: 0.8, life: 2000 }));
+  }
+
+  /** dispatch a peer-host-authority Delve message (ADR-0007) */
+  private onDungeonMsg(msg: DungeonMsg): void {
+    switch (msg.t) {
+      case 'start':
+        this.onDelveStart(msg);
+        break;
+      case 'snap':
+        if (this.inDelve && !this.isDelveHost && msg.runId === this.delveRunId) this.applyDelveSnap(msg);
+        break;
+      case 'end':
+        this.onDelveEnd(msg);
+        break;
+      case 'pos':
+        this.onDelvePos(msg);
+        break;
+      case 'hit':
+        if (this.inDelve && this.isDelveHost && msg.runId === this.delveRunId) this.applyDelveHit(msg.mobId, msg.tool as ToolId | undefined, msg.by);
+        break;
+      case 'down':
+        this.onDelveDown(msg);
+        break;
+      case 'join':
+        break; // the host learns positions via 'pos'; nothing to do on join itself
+    }
+  }
+
+  private onDelveEnd(msg: Extract<DungeonMsg, { t: 'end' }>): void {
+    const active = msg.runId === this.delveRunId && this.inDelve;
+    const exhausted = msg.runId === this.delveExhaustedRun;
+    if (!active && !exhausted) return;
+    if (msg.reason === 'victory' && msg.loot) {
+      this.grantDelveLootIfEligible(msg.loot, active ? this.delveHitLanded : true);
+    } else if (active) {
+      bus.emit('toast', msg.reason === 'hostleft' ? t.toast.hostLeftCollapse : t.toast.partyOverwhelmed, 'bad');
+    }
+    this.delveExhaustedRun = null;
+    if (active) this.leaveDelve();
+  }
+
+  private onDelvePos(msg: Extract<DungeonMsg, { t: 'pos' }>): void {
+    if (!this.inDelve || msg.runId !== this.delveRunId || msg.name === this.me.name) return;
+    const px = msg.x * TILE;
+    const py = msg.y * TILE + 4;
+    let pv = this.delvePeers.get(msg.name);
+    if (!pv) {
+      const marker = this.add.circle(px, py, 6, 0x8fd0ff).setStrokeStyle(2, 0x0a1a2a);
+      const label = this.add
+        .text(px, py - 16, msg.name, { fontSize: '8px', color: '#dff0ff', stroke: '#000', strokeThickness: 3 })
+        .setOrigin(0.5)
+        .setResolution(4);
+      pv = { marker, label, x: px, y: py };
+      this.delvePeers.set(msg.name, pv);
+      this.delveObjects.push(marker, label);
+    }
+    pv.x = px;
+    pv.y = py;
+  }
+
+  private onDelveDown(msg: Extract<DungeonMsg, { t: 'down' }>): void {
+    if (!this.isDelveHost || msg.runId !== this.delveRunId) return;
+    if (!msg.out) return;
+    const pv = this.delvePeers.get(msg.name);
+    if (pv) {
+      pv.marker.destroy();
+      pv.label.destroy();
+      this.delvePeers.delete(msg.name); // out of the run — no longer an AI target
+    }
+  }
+
   update(time: number, delta: number): void {
     if (!this.player) return;
     const dt = delta / 1000;
+
+    // the Delve is a self-contained mode: its own dark ambiance, movement,
+    // host mob sim, combat and camera — none of the World systems below run
+    if (this.inDelve) {
+      this.updateDelve(time, delta);
+      return;
+    }
 
     // atmosphere: day/night tint, light glows, fireflies, leaves
     const cam = this.cameras.main;
@@ -2229,6 +3270,8 @@ export class GameScene extends Phaser.Scene {
         } else if (this.slammedWave !== wave.index) {
           this.slamWave(wave);
         }
+        // the authored melee danger-ring (hot during the wind-up of slam waves)
+        this.updateMeleeRing(elapsed, wave, time);
 
         // scripted position: wave 0 leaps to the entrance (Ward slam), later
         // waves telegraph lunges to pre-determined spots
@@ -2317,7 +3360,7 @@ export class GameScene extends Phaser.Scene {
     if (this.buffUntil > 0 && Date.now() >= this.buffUntil) {
       this.buffUntil = 0;
       bus.emit('buff', 0);
-      bus.emit('toast', 'The warmth of the meal fades.', 'info');
+      bus.emit('toast', t.toast.mealFades, 'info');
     }
 
     if (this.chatFocused || stunned) {

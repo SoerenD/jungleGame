@@ -7,6 +7,7 @@
  * is no longer used for identity.
  */
 import type Phaser from 'phaser';
+import { getLang } from './i18n';
 import type { Appearance, Dir } from './backend/types';
 
 export const AVATAR_W = 16;
@@ -27,7 +28,7 @@ export interface Swatch {
 }
 
 /** curated palettes — 8 swatches per slot keep the World's pixel art coherent */
-export const PALETTES: Record<keyof Appearance, Swatch[]> = {
+const BASE_PALETTES: Record<keyof Appearance, Swatch[]> = {
   skin: [
     { name: 'Fair', hex: '#f2d3ae' },
     { name: 'Peach', hex: '#eab88a' },
@@ -69,6 +70,25 @@ export const PALETTES: Record<keyof Appearance, Swatch[]> = {
     { name: 'Sage', hex: '#8fae8a' },
   ],
 };
+
+/** German swatch names, same order per slot as BASE_PALETTES (hex is shared) */
+const PALETTE_NAMES_DE: Record<keyof Appearance, string[]> = {
+  skin: ['Hell', 'Pfirsich', 'Gebräunt', 'Bronze', 'Braun', 'Dunkel', 'Oliv', 'Asch'],
+  hair: ['Schwarz', 'Braun', 'Kastanie', 'Blond', 'Rotblond', 'Grau', 'Moos', 'Violett'],
+  shirt: ['Bernstein', 'Jade', 'Himmelblau', 'Rosé', 'Sand', 'Rost', 'Pflaume', 'Schiefer'],
+  pants: ['Walnuss', 'Anthrazit', 'Marineblau', 'Waldgrün', 'Khaki', 'Weinrot', 'Steingrau', 'Salbei'],
+};
+
+/** palettes in the session's language: German overlays the swatch names only */
+export const PALETTES: Record<keyof Appearance, Swatch[]> =
+  getLang() === 'de'
+    ? (Object.fromEntries(
+        (Object.entries(BASE_PALETTES) as [keyof Appearance, Swatch[]][]).map(([slot, swatches]) => [
+          slot,
+          swatches.map((s, i) => ({ hex: s.hex, name: PALETTE_NAMES_DE[slot][i] ?? s.name })),
+        ]),
+      ) as Record<keyof Appearance, Swatch[]>)
+    : BASE_PALETTES;
 
 export const DEFAULT_APPEARANCE: Appearance = { skin: 1, hair: 1, shirt: 1, pants: 0 };
 

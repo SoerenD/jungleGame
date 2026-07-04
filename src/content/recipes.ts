@@ -27,6 +27,10 @@ export const RECIPES: Recipe[] = [
   { id: 'ancient_pickaxe', output: 'ancient_pickaxe', count: 1, cost: { guardian_scale: 3, plank: 2, stone: 3 }, kind: 'tool' },
   { id: 'fishing_rod', output: 'fishing_rod', count: 1, cost: { guardian_scale: 2, plank: 2, fiber: 2 }, kind: 'tool' },
 
+  // Dungeons v1 (ADR-0007) — the Sword: the game's first pure-combat Tool,
+  // forged from Delve loot (rare Deep Core + common Husk Shards) plus planks.
+  { id: 'sword', output: 'sword', count: 1, cost: { deep_core: 1, husk_shard: 6, plank: 3, stone: 2 }, kind: 'tool' },
+
   // v2 — cheap, repeatable summon Offering (tier-1 resources only)
   { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },
 

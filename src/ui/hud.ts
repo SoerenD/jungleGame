@@ -1,11 +1,13 @@
-import { ITEMS, type ItemId, type StructureId } from '../content/items';
+import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { loadVolumes, type AudioChannel } from '../config';
+import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../content/guardian';
 import { itemIcon } from './icons';
-import { hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
+import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 import { asset } from '../paths';
+import { t, getLang, setLang, LANG_NAMES, zoneName, type Lang } from '../i18n';
 
 let meName = '';
 let inv: Inventory = {};
@@ -80,21 +82,22 @@ const SEAL_BAR_ORDER: SealResourceId[] = ['wood', 'stone', 'fiber', 'fruit'];
 
 export function initHud(name: string, muted: boolean): void {
   meName = name;
+  document.documentElement.lang = getLang(); // keep <html lang> in sync for a11y
   loadInvOrder();
   loadLoadout();
   const hud = document.createElement('div');
   hud.id = 'hud';
   hud.innerHTML = `
-    <div id="zone-label" data-testid="zone-label">Jungle World</div>
-    <div id="controls-help">WASD/arrows move &middot; E interact (hold to keep swinging) &middot; C craft &middot; I inventory &middot; T chat &middot; M mute &middot; wheel zoom</div>
-    <div id="quest-label" data-testid="quest-label" title="Ancient tablets read · torn map pieces (3 reveal a treasure ✕ on the minimap) · the Seal's progress">📜 0/? · 🗺 0/3</div>
+    <div id="zone-label" data-testid="zone-label">${zoneName('Jungle World')}</div>
+    <div id="controls-help">${t.controlsHelp}</div>
+    <div id="quest-label" data-testid="quest-label" title="${t.quest.title}">📜 0/? · 🗺 0/3</div>
     <div id="seal-panel" class="panel" data-testid="seal-panel">
-      <h3>⛩ The Seal</h3>
+      <h3>${t.seal.title}</h3>
       <div id="seal-bars"></div>
-      <div id="seal-hint">Stand close and press E to lay your Offerings.</div>
+      <div id="seal-hint">${t.seal.hint}</div>
     </div>
     <div id="fight-panel" data-testid="fight-panel">
-      <div id="fight-title">⚔ The Guardian</div>
+      <div id="fight-title">${t.fight.title}</div>
       <div id="fight-hpbar"><div id="fight-hpfill"></div></div>
       <div id="fight-roster"></div>
       <div id="fight-timer"></div>
@@ -103,47 +106,47 @@ export function initHud(name: string, muted: boolean): void {
     <div id="lore-panel" class="panel" data-testid="lore-panel">
       <h3 id="lore-title"></h3>
       <p id="lore-text"></p>
-      <button class="ui-btn" id="lore-close">Close</button>
+      <button class="ui-btn" id="lore-close">${t.crate.close}</button>
     </div>
     <div id="zone-banner" data-testid="zone-banner"></div>
     <div id="online" class="panel" data-testid="online-list"></div>
     <div id="journey-panel" class="panel" data-testid="journey-panel">
-      <h3>🌱 The Journey</h3>
+      <h3 id="journey-title">${t.panels.journey}</h3>
       <div id="journey-steps"></div>
     </div>
     <div id="toasts"></div>
-    <div id="place-hint">E place &middot; Esc cancel</div>
+    <div id="place-hint">${t.hint.place}</div>
     <div id="craft-panel" class="panel" data-testid="craft-panel">
-      <h3>Crafting</h3>
+      <h3>${t.panels.crafting}</h3>
       <div id="recipe-list"></div>
     </div>
     <div id="crate-panel" class="panel" data-testid="crate-panel">
-      <h3>📦 Supply Crate <span class="sub-note">shared with everyone</span></h3>
+      <h3>${t.crate.title} <span class="sub-note">${t.crate.shared}</span></h3>
       <div class="crate-cols">
-        <div><div class="col-title">Inside</div><div id="crate-contents"></div></div>
-        <div><div class="col-title">Your pack</div><div id="crate-pack"></div></div>
+        <div><div class="col-title">${t.crate.inside}</div><div id="crate-contents"></div></div>
+        <div><div class="col-title">${t.crate.yourPack}</div><div id="crate-pack"></div></div>
       </div>
-      <button class="ui-btn" id="crate-close">Close</button>
+      <button class="ui-btn" id="crate-close">${t.crate.close}</button>
     </div>
     <div id="sawmill-panel" class="panel" data-testid="sawmill-panel">
-      <h3>🪚 Sawmill</h3>
+      <h3>${t.sawmill.title}</h3>
       <div id="sawmill-status"></div>
       <div class="sawmill-btns">
-        <button class="ui-btn" id="sawmill-deposit" data-testid="sawmill-deposit">Deposit wood</button>
-        <button class="ui-btn" id="sawmill-collect" data-testid="sawmill-collect">Collect planks</button>
-        <button class="ui-btn" id="sawmill-close">Close</button>
+        <button class="ui-btn" id="sawmill-deposit" data-testid="sawmill-deposit">${t.sawmill.deposit}</button>
+        <button class="ui-btn" id="sawmill-collect" data-testid="sawmill-collect">${t.sawmill.collect}</button>
+        <button class="ui-btn" id="sawmill-close">${t.sawmill.close}</button>
       </div>
     </div>
     <div id="sign-panel" class="panel" data-testid="sign-panel">
-      <h3>🪧 Signpost</h3>
-      <input id="sign-input" data-testid="sign-input" maxlength="40" placeholder="Write a short line..." autocomplete="off" />
+      <h3>${t.sign.title}</h3>
+      <input id="sign-input" data-testid="sign-input" maxlength="40" placeholder="${t.sign.placeholder}" autocomplete="off" />
       <div class="sawmill-btns">
-        <button class="ui-btn" id="sign-ok" data-testid="sign-ok">Place</button>
-        <button class="ui-btn" id="sign-cancel">Cancel</button>
+        <button class="ui-btn" id="sign-ok" data-testid="sign-ok">${t.sign.place}</button>
+        <button class="ui-btn" id="sign-cancel">${t.sign.cancel}</button>
       </div>
     </div>
     <div id="inventory-panel" class="panel" data-testid="inventory-panel">
-      <h3>Inventory</h3>
+      <h3>${t.panels.inventory}</h3>
       <div id="inv-grid"></div>
       <div id="inv-detail">
         <div id="inv-detail-name"></div>
@@ -153,24 +156,31 @@ export function initHud(name: string, muted: boolean): void {
     </div>
     <div id="chat" data-testid="chat">
       <div id="chat-messages" class="panel" data-testid="chat-messages"></div>
-      <input id="chat-input" data-testid="chat-input" placeholder="Press T to chat..." maxlength="200" autocomplete="off" />
+      <input id="chat-input" data-testid="chat-input" placeholder="${t.chat.placeholder}" maxlength="200" autocomplete="off" />
     </div>
-    <canvas id="minimap" width="150" height="150" data-testid="minimap" title="Minimap — white: you, yellow: others"></canvas>
-    <div id="loadout-bar" data-testid="loadout-bar" title="Your Loadout — drag Tools here; press 1–3 to pick the one in your hand"></div>
+    <canvas id="minimap" width="150" height="150" data-testid="minimap" title="${t.inv.minimapTitle}"></canvas>
+    <div id="loadout-bar" data-testid="loadout-bar" title="${t.inv.loadoutBarTitle}"></div>
     <div id="settings-panel" class="panel" data-testid="settings-panel">
-      <h3>⚙ Audio Settings</h3>
+      <h3>${t.settings.title}</h3>
+      <div class="settings-section">${t.settings.language}</div>
+      <div class="settings-row">
+        <select id="settings-lang" data-testid="settings-lang" class="settings-lang">
+          ${(['en', 'de'] as Lang[]).map((l) => `<option value="${l}"${getLang() === l ? ' selected' : ''}>${LANG_NAMES[l]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="settings-section">${t.settings.audio}</div>
       <div id="settings-sliders"></div>
       <label class="settings-mute">
         <input type="checkbox" id="settings-mute" data-testid="settings-mute" ${muted ? 'checked' : ''} />
-        Mute all sound
+        ${t.settings.muteAll}
       </label>
-      <button class="ui-btn" id="settings-close">Close</button>
+      <button class="ui-btn" id="settings-close">${t.settings.close}</button>
     </div>
     <div id="bottom-bar">
-      <button class="ui-btn" id="btn-craft" data-testid="btn-craft">Craft [C]</button>
-      <button class="ui-btn" id="btn-inv" data-testid="btn-inventory">Inventory [I]</button>
-      <button class="ui-btn" id="btn-mute" data-testid="btn-mute">${muted ? '🔇 Muted' : '🔊 Sound'}</button>
-      <button class="ui-btn" id="btn-settings" data-testid="btn-settings" title="Audio settings">⚙</button>
+      <button class="ui-btn" id="btn-craft" data-testid="btn-craft">${t.bottomBar.craft}</button>
+      <button class="ui-btn" id="btn-inv" data-testid="btn-inventory">${t.bottomBar.inventory}</button>
+      <button class="ui-btn" id="btn-mute" data-testid="btn-mute">${muted ? t.bottomBar.muted : t.bottomBar.sound}</button>
+      <button class="ui-btn" id="btn-settings" data-testid="btn-settings" title="${t.settings.btnTitle}">⚙</button>
     </div>
   `;
   document.body.appendChild(hud);
@@ -186,6 +196,9 @@ export function initHud(name: string, muted: boolean): void {
   el('btn-settings').onclick = () => togglePanel('settings-panel');
   el('settings-close').onclick = () => el('settings-panel').classList.remove('open');
   el<HTMLInputElement>('settings-mute').onchange = () => bus.emit('toggle-mute');
+  // switching language persists the choice and reloads so every import-time
+  // string table (items, lore, this HUD…) rebuilds in the new language
+  el<HTMLSelectElement>('settings-lang').onchange = (e) => setLang((e.target as HTMLSelectElement).value as Lang);
   renderSettings();
 
   const input = el<HTMLInputElement>('chat-input');
@@ -227,6 +240,7 @@ export function initHud(name: string, muted: boolean): void {
     renderRecipes();
     renderLoadout();
     emitHeld();
+    renderJourney(); // Delve-quest steps tick off inventory (Scales, pickaxe, drops)
     if (openCrateId) renderCrate();
   });
   bus.on('chat', (msg: ChatMsg) => appendChat(msg));
@@ -237,12 +251,12 @@ export function initHud(name: string, muted: boolean): void {
   bus.on('zone', (zone: string) => setZone(zone));
   bus.on('presence', (names: string[]) => {
     el('online').innerHTML =
-      `<b>Online (${names.length})</b><br>` +
-      names.map((n) => `<span class="who">${n === meName ? n + ' (you)' : n}</span>`).join('<br>');
+      `<b>${t.online(names.length)}</b><br>` +
+      names.map((n) => `<span class="who">${n === meName ? n + t.youSuffix : n}</span>`).join('<br>');
   });
   bus.on('toast', (text: string, kind: 'info' | 'good' | 'bad' = 'info') => toast(text, kind));
   bus.on('mute', (m: boolean) => {
-    el('btn-mute').textContent = m ? '🔇 Muted' : '🔊 Sound';
+    el('btn-mute').textContent = m ? t.bottomBar.muted : t.bottomBar.sound;
     el<HTMLInputElement>('settings-mute').checked = m;
   });
   bus.on('place-mode', (on: boolean) => {
@@ -260,11 +274,13 @@ export function initHud(name: string, muted: boolean): void {
     treasureLoc = q.treasureLocation;
     quest = q;
     renderQuestLabel();
+    renderJourney(); // the 'shaft cleared' step ticks off quest.delveOpen
   });
   bus.on('seal', (s: SealState) => {
     seal = s;
     renderQuestLabel();
     renderSealBars();
+    renderJourney(); // the 'break the Seal' step ticks off seal.broken
   });
   bus.on('seal-near', (near: boolean) => {
     el('seal-panel').classList.toggle('open', near);
@@ -289,9 +305,9 @@ export function initHud(name: string, muted: boolean): void {
         // DORMANT (ADR-0004): the Guardian roams, unstruck — no roster, no HP
         // bar, no clock yet. Prompt the party to land the first strike.
         el('fight-panel').classList.add('dormant');
-        el('fight-title').textContent = '⚔ The Guardian stirs';
+        el('fight-title').textContent = t.fight.stirs;
         el('fight-roster').textContent = '';
-        el('fight-timer').textContent = 'Gather your party, then STRIKE to begin the fight!';
+        el('fight-timer').textContent = t.fight.gatherParty;
         return;
       }
       // ENGAGED: HP is fixed to the sealed roster; the countdown runs from
@@ -300,13 +316,12 @@ export function initHud(name: string, muted: boolean): void {
       el('fight-panel').classList.remove('dormant');
       setFightHp(f.hp, f.maxHp);
       (el('fight-hpbar') as HTMLElement).dataset.max = String(f.maxHp);
-      el('fight-roster').textContent =
-        `Warded party (${f.roster.length}): ${f.roster.join(', ')}`;
+      el('fight-roster').textContent = t.fight.wardedParty(f.roster.length, f.roster.join(', '));
       const tick = () => {
         const left = Math.max(0, engagedAt + f.awakeMs - Date.now());
         const m = Math.floor(left / 60000);
         const s = Math.floor((left % 60000) / 1000);
-        el('fight-timer').textContent = `slumbers again in ${m}:${String(s).padStart(2, '0')}`;
+        el('fight-timer').textContent = t.fight.slumbersIn(m, String(s).padStart(2, '0'));
       };
       tick();
       fightTimer = window.setInterval(tick, 250);
@@ -337,7 +352,7 @@ export function initHud(name: string, muted: boolean): void {
       }
       const m = Math.floor(left / 60000);
       const s = Math.floor((left % 60000) / 1000);
-      label.textContent = `💨 Swift +20% · ${m}:${String(s).padStart(2, '0')}`;
+      label.textContent = t.buff.swift(m, String(s).padStart(2, '0'));
     };
     tick();
     buffTimer = window.setInterval(tick, 500);
@@ -430,7 +445,7 @@ let sawmillOpenedAt = 0;
 let sawmillTimer: number | undefined;
 let sawmillRefreshAt = 0;
 
-function crateRow(id: ItemId, count: number, action: string, onClick: () => void): HTMLElement {
+function crateRow(id: ItemId, count: number, action: 'take' | 'put', onClick: () => void): HTMLElement {
   const row = document.createElement('div');
   row.className = 'inv-row';
   const label = document.createElement('span');
@@ -438,8 +453,8 @@ function crateRow(id: ItemId, count: number, action: string, onClick: () => void
   row.appendChild(label);
   const btn = document.createElement('button');
   btn.className = 'ui-btn';
-  btn.textContent = action;
-  btn.setAttribute('data-testid', `crate-${action.toLowerCase()}-${id}`);
+  btn.textContent = action === 'take' ? t.crate.take : t.crate.put;
+  btn.setAttribute('data-testid', `crate-${action}-${id}`);
   btn.onclick = onClick;
   row.appendChild(btn);
   return row;
@@ -451,16 +466,16 @@ function renderCrate(): void {
   const inside = el('crate-contents');
   inside.innerHTML = '';
   const contents = (Object.entries(crateContents).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
-  if (contents.length === 0) inside.innerHTML = '<div class="col-empty">empty</div>';
+  if (contents.length === 0) inside.innerHTML = `<div class="col-empty">${t.crate.empty}</div>`;
   for (const [item, n] of contents) {
-    inside.appendChild(crateRow(item, n, 'Take', () => bus.emit('crate-withdraw', id, item, n)));
+    inside.appendChild(crateRow(item, n, 'take', () => bus.emit('crate-withdraw', id, item, n)));
   }
   const pack = el('crate-pack');
   pack.innerHTML = '';
   const mine = (Object.entries(inv).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
-  if (mine.length === 0) pack.innerHTML = '<div class="col-empty">nothing to store</div>';
+  if (mine.length === 0) pack.innerHTML = `<div class="col-empty">${t.crate.nothingToStore}</div>`;
   for (const [item, n] of mine) {
-    pack.appendChild(crateRow(item, n, 'Put', () => bus.emit('crate-deposit', id, item, n)));
+    pack.appendChild(crateRow(item, n, 'put', () => bus.emit('crate-deposit', id, item, n)));
   }
 }
 
@@ -468,11 +483,8 @@ function renderSawmill(): void {
   if (!openSawmillId || !sawmill) return;
   const sinceOpen = Date.now() - sawmillOpenedAt;
   const next = sawmill.nextPlankMs === null ? null : Math.max(0, sawmill.nextPlankMs - sinceOpen);
-  const parts = [
-    `milling: ${sawmill.wood} wood`,
-    `ready: ${sawmill.ready} plank${sawmill.ready === 1 ? '' : 's'}`,
-  ];
-  if (next !== null) parts.push(`next plank in ${Math.ceil(next / 1000)}s`);
+  const parts = [t.sawmill.milling(sawmill.wood), t.sawmill.ready(sawmill.ready)];
+  if (next !== null) parts.push(t.sawmill.next(Math.ceil(next / 1000)));
   el('sawmill-status').textContent = parts.join(' · ');
   // when the countdown runs out, re-derive fresh state from the backend
   // (lazy timestamps — nothing ticks server-side)
@@ -551,10 +563,10 @@ function togglePanel(id: string): void {
 // ---------------------------------------------------------------- audio settings
 /** the four mixer channels, in display order (see config.ts AUDIO_CHANNELS) */
 const VOLUME_CHANNELS: { id: AudioChannel; label: string }[] = [
-  { id: 'master', label: '🔊 Master' },
-  { id: 'ambience', label: '🌴 Jungle ambience' },
-  { id: 'music', label: '🥁 Guardian drums' },
-  { id: 'sfx', label: '🪓 Sound effects' },
+  { id: 'master', label: t.volume.master },
+  { id: 'ambience', label: t.volume.ambience },
+  { id: 'music', label: t.volume.music },
+  { id: 'sfx', label: t.volume.sfx },
 ];
 
 /**
@@ -585,29 +597,47 @@ function renderSettings(): void {
 }
 
 /**
- * The Journey tracker: sequential objectives, ticked from play. It disappears
- * for good once the last step (the first Seal Offering) is done.
+ * The HUD objective tracker. It shows **The Journey** (onboarding) until that is
+ * done, then hands the panel over to **Into the Delve** — the post-onboarding
+ * quest that guides the Player to and into the first Dungeon (ADR-0007), ticking
+ * off Seal/Guardian/pickaxe/shaft/descent from state. When the Delve quest is
+ * also complete the panel disappears for good.
  */
-function renderJourney(): void {
-  const panel = el('journey-panel');
-  if (!journey || journeyComplete(journey)) {
-    panel.classList.remove('open');
-    return;
-  }
-  panel.classList.add('open');
+function renderTrackerRows(steps: { id: string; label: string }[], done: (i: number) => boolean): void {
   const box = el('journey-steps');
   box.innerHTML = '';
   let currentMarked = false;
-  for (const step of JOURNEY_STEPS) {
-    const done = !!journey.steps[step.id];
-    const current = !done && !currentMarked;
+  steps.forEach((step, i) => {
+    const isDone = done(i);
+    const current = !isDone && !currentMarked;
     if (current) currentMarked = true;
     const row = document.createElement('div');
-    row.className = 'journey-step' + (done ? ' done' : current ? ' current' : '');
+    row.className = 'journey-step' + (isDone ? ' done' : current ? ' current' : '');
     row.setAttribute('data-testid', `journey-${step.id}`);
-    row.textContent = `${done ? '✓' : current ? '▸' : '○'} ${step.label}`;
+    row.textContent = `${isDone ? '✓' : current ? '▸' : '○'} ${step.label}`;
     box.appendChild(row);
+  });
+}
+
+function renderJourney(): void {
+  const panel = el('journey-panel');
+  const title = el('journey-title');
+  // Phase 1 — onboarding: The Journey, until its last step (first Seal Offering)
+  if (journey && !journeyComplete(journey)) {
+    panel.classList.add('open');
+    title.textContent = t.panels.journey;
+    renderTrackerRows(JOURNEY_STEPS, (i) => !!journey!.steps[JOURNEY_STEPS[i].id]);
+    return;
   }
+  // Phase 2 — the road to the Delve, once The Journey is done
+  const prog = { seal, inventory: inv, quest };
+  if (journey && !delveQuestComplete(prog)) {
+    panel.classList.add('open');
+    title.textContent = t.panels.intoDelve;
+    renderTrackerRows(DELVE_QUEST_STEPS, (i) => DELVE_QUEST_STEPS[i].done(prog));
+    return;
+  }
+  panel.classList.remove('open'); // both quests done (or not joined yet)
 }
 
 /** 📜 read/total (derived from world data) · 🗺 pieces · ⛩ Seal progress */
@@ -615,10 +645,10 @@ function renderQuestLabel(): void {
   const parts: string[] = [];
   if (quest) {
     parts.push(`📜 ${quest.tabletsRead.length}/${quest.tabletsTotal}`);
-    parts.push(`🗺 ${Math.min(quest.mapPieces, 3)}/3${quest.mapPieces >= 3 ? ' — dig at the ✕!' : ''}`);
+    parts.push(`🗺 ${Math.min(quest.mapPieces, 3)}/3${quest.mapPieces >= 3 ? t.quest.digHint : ''}`);
   }
   if (seal) {
-    if (seal.broken) parts.push('⛩ open');
+    if (seal.broken) parts.push(t.quest.sealOpen);
     else {
       let done = 0;
       let total = 0;
@@ -649,21 +679,23 @@ function renderSealBars(): void {
     `;
     box.appendChild(row);
   }
-  el('seal-hint').textContent = seal.broken
-    ? 'The Seal lies broken. The arena stands open, forever.'
-    : 'Stand close and press E to lay your Offerings.';
+  el('seal-hint').textContent = seal.broken ? t.seal.broken : t.seal.hint;
 }
 
 function setFightHp(hp: number, max: number): void {
+  // the fill is a scale-invariant ratio; the readout numbers are cosmetically
+  // scaled up (the same factor the damage float uses, ADR-0006 §5)
+  const s = GUARDIAN_DISPLAY_SCALE;
   el('fight-hpfill').style.width = `${Math.max(0, (hp / max) * 100)}%`;
-  el('fight-title').textContent = `⚔ The Guardian · ${hp}/${max}`;
+  el('fight-title').textContent = t.fight.guardianHp(Math.max(0, hp) * s, max * s);
 }
 
 let bannerTimer: number | undefined;
 function setZone(zone: string): void {
-  el('zone-label').textContent = zone;
+  const label = zoneName(zone);
+  el('zone-label').textContent = label;
   const banner = el('zone-banner');
-  banner.textContent = zone;
+  banner.textContent = label;
   banner.style.opacity = '1';
   window.clearTimeout(bannerTimer);
   bannerTimer = window.setTimeout(() => (banner.style.opacity = '0'), 2200);
@@ -802,9 +834,9 @@ function renderLoadout(): void {
       icon.alt = ITEMS[id].name;
       icon.draggable = false;
       slot.appendChild(icon);
-      slot.title = `${ITEMS[id].name} — press ${i + 1} to hold it`;
+      slot.title = t.inv.slotHold(ITEMS[id].name, i + 1);
     } else {
-      slot.title = `Loadout slot ${i + 1} — drag a Tool here, press ${i + 1} to select`;
+      slot.title = t.inv.slotEmpty(i + 1);
     }
     // accept a Tool dragged from the inventory grid
     slot.addEventListener('dragover', (e) => {
@@ -928,8 +960,8 @@ function renderInvDetail(present: Map<ItemId, number>): void {
   const actions = el('inv-detail-actions');
   actions.innerHTML = '';
   if (!invSelected) {
-    name.textContent = present.size === 0 ? 'Empty — go harvest something! (E)' : '';
-    desc.textContent = present.size === 0 ? '' : 'Click an item for details · drag to arrange your pack.';
+    name.textContent = present.size === 0 ? t.inv.emptyGo : '';
+    desc.textContent = present.size === 0 ? '' : t.inv.clickHint;
     return;
   }
   const def = ITEMS[invSelected];
@@ -938,7 +970,7 @@ function renderInvDetail(present: Map<ItemId, number>): void {
   if (def.kind === 'structure' || def.kind === 'food') {
     const btn = document.createElement('button');
     btn.className = 'ui-btn';
-    btn.textContent = def.kind === 'structure' ? 'Place' : 'Eat';
+    btn.textContent = def.kind === 'structure' ? t.inv.place : t.inv.eat;
     btn.setAttribute('data-testid', `${def.kind === 'structure' ? 'place' : 'eat'}-${invSelected}`);
     const id = invSelected;
     btn.onclick = () => invUse(id);
@@ -952,9 +984,7 @@ function ingChip(id: ItemId, count: number, have: number, tool = false): HTMLEle
   const chip = document.createElement('span');
   chip.className = 'recipe-ing' + (tool ? ' recipe-tool' : '') + (ok ? '' : ' lack');
   const name = ITEMS[id]?.name ?? id;
-  chip.title = tool
-    ? `needs ${name} in your pack (not consumed) — you have ${have}`
-    : `${name} — need ${count}, you have ${have}`;
+  chip.title = tool ? t.recipe.ingToolTip(name, have) : t.recipe.ingTip(name, count, have);
   const img = document.createElement('img');
   img.className = 'recipe-ing-icon';
   img.src = itemIcon(id);
@@ -994,7 +1024,7 @@ function renderRecipes(): void {
     if (r.requiresTool) {
       const have = inv[r.requiresTool] ?? 0;
       if (have <= 0) craftable = false;
-      costText.push(`needs ${ITEMS[r.requiresTool].name}`);
+      costText.push(t.recipe.needsTool(ITEMS[r.requiresTool].name));
       cost.appendChild(ingChip(r.requiresTool, 1, have, true));
     }
 
@@ -1002,7 +1032,10 @@ function renderRecipes(): void {
     card.className = 'recipe-card' + (craftable ? '' : ' uncraftable');
     card.setAttribute('data-testid', `recipe-${r.id}`);
     const countText = r.count > 1 ? ` ×${r.count}` : '';
-    card.title = `${def.name}${countText} (${r.kind})\n${def.desc}\nCost: ${costText.join(', ')}`;
+    // weapons that can strike the Guardian get a combat stat line (ADR-0006 §6)
+    const statLine = WEAPON_COMBAT[r.output as ToolId] ? `\n${weaponStatLine(r.output as ToolId, t.weapon)}` : '';
+    const kindLabel = r.kind === 'tool' ? t.recipe.kindTool : r.kind === 'structure' ? t.recipe.kindStructure : t.recipe.kindConsumable;
+    card.title = t.recipe.tooltip(`${def.name}${countText}`, kindLabel, def.desc, costText.join(', '), statLine);
 
     const out = document.createElement('div');
     out.className = 'recipe-out';
