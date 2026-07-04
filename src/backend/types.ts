@@ -145,6 +145,13 @@ export interface FightState {
   maxHp: number;
   /** Players who landed ≥1 hit — each receives the full drop set on victory */
   participants: string[];
+  /**
+   * Set once the whole roster is Exhausted (the arena has emptied): the server
+   * timestamp at which the Guardian re-slumbers, unbeaten. null while any roster
+   * member can still fight. Lets a wiped fight end promptly instead of running
+   * the full awake window (ADR-0004 wipe).
+   */
+  emptySlumberAt: number | null;
 }
 
 export interface WorldSnapshot {

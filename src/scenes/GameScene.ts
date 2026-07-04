@@ -296,6 +296,8 @@ export class GameScene extends Phaser.Scene {
   private eyeOpenShown = false;
   private stunnedUntil = 0;
   private stunMarker: Phaser.GameObjects.Text | null = null;
+  /** melee-ring shove cooldown: one push per contact so the tween can't restack (no stun) */
+  private meleeRingShoveUntil = 0;
   private fightMusic: Phaser.Sound.BaseSound | null = null;
   /** v5: the Ward — a fresh barrier slammed across the entrance for the fight */
   private wardParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
@@ -1100,9 +1102,10 @@ export class GameScene extends Phaser.Scene {
   /**
    * The authored melee danger-ring (ADR-0006 §7): while it is hot (the wind-up
    * slice of a stationary slam wave) it glows around the Guardian's footprint
-   * and knocks down — with a knockback shove off the body — any melee attacker
-   * camping inside it. A Bow user at range stays clear. Pure schedule + position;
-   * the Guardian never reacts.
+   * and shoves — a knockback off the body, but NO stun — any melee attacker
+   * camping inside it. The push is the whole tax: it interrupts camping without
+   * the 5 s knockdown (nor an Exhaustion count). A Bow user at range stays clear.
+   * Pure schedule + position; the Guardian never reacts.
    */
   private updateMeleeRing(elapsed: number, wave: WaveInfo, time: number): void {
     const ring = meleeRingWindow(wave);
@@ -1131,8 +1134,10 @@ export class GameScene extends Phaser.Scene {
     }
     const pulse = 0.2 + 0.12 * Math.sin(time / 55);
     for (const r of this.meleeRingRects) r.setFillStyle(0xff5a2f, pulse);
-    // adjudicate the local Player: caught if standing in the hot ring
-    if (Date.now() < this.stunnedUntil) return;
+    // the Player standing in the hot ring gets shoved off the body — no stun,
+    // no knockdown report. Gate on a short cooldown so the tween can't restack
+    // while it plays; still frozen out if a slam tile has them stunned.
+    if (Date.now() < this.stunnedUntil || Date.now() < this.meleeRingShoveUntil) return;
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
     if (!inMeleeRing(ptx - a.x, pty - a.y, centre)) return;
@@ -1140,7 +1145,7 @@ export class GameScene extends Phaser.Scene {
     const cx = (a.x + centre.ax + 0.5) * TILE;
     const cy = (a.y + centre.ay + 0.5) * TILE;
     const ang = Phaser.Math.Angle.Between(cx, cy, this.player.x, this.player.y);
-    this.beginKnockdown();
+    this.meleeRingShoveUntil = Date.now() + 260;
     this.sfx('chop', 0.4);
     this.cameras.main.shake(160, 0.004);
     this.tweens.add({
@@ -1150,7 +1155,6 @@ export class GameScene extends Phaser.Scene {
       duration: 220,
       ease: 'quad.out',
     });
-    void this.backend.reportKnockdown(ptx, pty).then((res) => this.resolveKnockdown(res));
   }
 
   private guardianAction(): EAction | null {

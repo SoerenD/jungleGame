@@ -113,15 +113,16 @@ export const DEV_DUNGEON = params.has('dungeon');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006
- * §5) cuts this ~¼ (750 → 560) so a competent group finishes ~25% sooner and
- * rarely grinds deep into the fury phase; GUARDIAN_AWAKE_MS is unchanged. These
- * are BASE (pre-display-scale) units — on-screen HP and damage are multiplied by
- * GUARDIAN_DISPLAY_SCALE alike, so the cut lands at hits-to-kill ≈ 75% of v5.
- * A 3-party faces 1680, an 8-party 4480, a lone summoner 560 — per-person
- * tension roughly constant, no minimum-roster floor. ?fight (DEV_FIGHT) keeps a
- * trivial fixed pool via DEV_FIGHT_HP, independent of roster size.
+ * §5) cut this ~¼ (750 → 560); this pass trims a further 1/3 (560 → 373) so a
+ * competent group finishes sooner and rarely grinds deep into the fury phase;
+ * GUARDIAN_AWAKE_MS is unchanged. These are BASE (pre-display-scale) units —
+ * on-screen HP and damage are multiplied by GUARDIAN_DISPLAY_SCALE alike, so the
+ * cut lands directly at hits-to-kill. A 3-party faces 1119, an 8-party 2984, a
+ * lone summoner 373 — per-person tension roughly constant, no minimum-roster
+ * floor. ?fight (DEV_FIGHT) keeps a trivial fixed pool via DEV_FIGHT_HP,
+ * independent of roster size.
  */
-export const HP_PER_HEAD = 560;
+export const HP_PER_HEAD = 373;
 /** ?fight: a tiny fixed Guardian pool so a summon can be won or lost solo, fast */
 export const DEV_FIGHT_HP = 30;
 /** awake window: how long the Guardian stays dangerous AFTER the first strike (engagedAt) */
@@ -135,6 +136,12 @@ export const DORMANT_TIMEOUT_MS = import.meta.env.DEV ? 30_000 : 90_000;
 export const KNOCKDOWN_STUN_MS = 5_000;
 /** knockdowns within one fight before Exhaustion (wake at spawn) */
 export const EXHAUSTION_KNOCKDOWNS = 3;
+/**
+ * Empty-arena grace (ADR-0004 wipe): once the WHOLE roster is Exhausted no one
+ * can damage the Guardian, so instead of grinding out the full awake window it
+ * re-slumbers this soon after the arena empties — unbeaten, totem spent.
+ */
+export const ARENA_EMPTY_SLUMBER_MS = 5_000;
 /** every participant with ≥1 hit receives this many Guardian Scales */
 export const GUARDIAN_SCALE_DROP = 3;
 

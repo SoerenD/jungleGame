@@ -1,5 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
 import {
+  ARENA_EMPTY_SLUMBER_MS,
   DEV_FIGHT,
   DEV_FIGHT_HP,
   DORMANT_TIMEOUT_MS,
@@ -540,6 +541,7 @@ export class SupabaseBackend implements Backend {
       hp: f.hp ?? 0,
       maxHp: f.maxHp ?? 0,
       participants: f.participants ?? [],
+      emptySlumberAt: f.emptySlumberAt ?? null,
     };
   }
 
@@ -827,12 +829,20 @@ export class SupabaseBackend implements Backend {
       p_tile: TILE,
       p_awake_ms: GUARDIAN_AWAKE_MS,
       p_dormant_ms: DORMANT_TIMEOUT_MS,
+      p_empty_ms: ARENA_EMPTY_SLUMBER_MS,
     });
     void tx;
     void ty;
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOT_IN_DANGER' };
     if (res.exhausted) {
       this.pushChat(t.system.sender, t.system.exhaustionCollapse(this.me ?? '', res.atHammock));
+    }
+    // the RPC returns emptySlumberAt when this knockdown emptied the arena (whole
+    // roster Exhausted): re-anchor the local slumber timer so the wiped fight ends
+    // ~5s later instead of running the full awake window (ADR-0004 wipe)
+    if (res.emptySlumberAt != null && this.fightState && this.fightState.emptySlumberAt == null) {
+      this.fightState = { ...this.fightState, emptySlumberAt: res.emptySlumberAt as number };
+      this.scheduleSlumberCheck();
     }
     return { ok: true, knockdowns: res.knockdowns, exhausted: res.exhausted, wake: res.wake, atHammock: res.atHammock };
   }
@@ -854,7 +864,10 @@ export class SupabaseBackend implements Backend {
     this.clearSlumberCheck();
     const f = this.fightState;
     if (!f) return;
-    const deadline = f.engagedAt === null ? f.summonedAt + DORMANT_TIMEOUT_MS : f.engagedAt + GUARDIAN_AWAKE_MS;
+    let deadline = f.engagedAt === null ? f.summonedAt + DORMANT_TIMEOUT_MS : f.engagedAt + GUARDIAN_AWAKE_MS;
+    // once the arena has emptied (whole roster Exhausted — ADR-0004 wipe) the
+    // fight ends sooner; fire the reconcile then instead of at the awake window
+    if (f.emptySlumberAt !== null) deadline = Math.min(deadline, f.emptySlumberAt);
     this.slumberTimer = window.setTimeout(() => {
       this.slumberTimer = null;
       void this.rpc<any>('jw_guardian_reconcile', { p_awake_ms: GUARDIAN_AWAKE_MS, p_dormant_ms: DORMANT_TIMEOUT_MS }).then((res) => {

@@ -1,4 +1,5 @@
 import {
+  ARENA_EMPTY_SLUMBER_MS,
   DEV_FIGHT,
   DEV_FIGHT_HP,
   DORMANT_TIMEOUT_MS,
@@ -129,6 +130,8 @@ interface DbFight {
   knockdowns: Record<string, number>;
   /** wave index of each Player's last counted knockdown (dedupes re-reports) */
   lastKnockdownWave: Record<string, number>;
+  /** set when the whole roster Exhausts: the timestamp the arena re-slumbers, else null */
+  emptySlumberAt: number | null;
 }
 
 interface Db {
@@ -474,6 +477,7 @@ export class MockBackend implements Backend {
       hp: f.hp,
       maxHp: f.maxHp,
       participants: [...f.participants],
+      emptySlumberAt: f.emptySlumberAt,
     };
   }
 
@@ -908,7 +912,10 @@ export class MockBackend implements Backend {
       this.emit('guardianSlumber');
       return;
     }
-    if (now >= f.engagedAt + GUARDIAN_AWAKE_MS && f.hp > 0) {
+    // engaged: re-slumber unbeaten at the awake-window deadline OR early once the
+    // arena has emptied (whole roster Exhausted — ADR-0004 wipe), whichever first
+    const emptied = f.emptySlumberAt !== null && now >= f.emptySlumberAt;
+    if (f.hp > 0 && (emptied || now >= f.engagedAt + GUARDIAN_AWAKE_MS)) {
       this.db.world!.fight = null; // HP resets by discarding the fight
       this.saveNow();
       this.pushChat({
@@ -928,8 +935,10 @@ export class MockBackend implements Backend {
     }
     const f = this.db.world!.fight;
     if (!f) return;
-    // dormant → the 90s grace deadline; engaged → the awake-window deadline
-    const deadline = f.engagedAt === null ? f.summonedAt + DORMANT_TIMEOUT_MS : f.engagedAt + GUARDIAN_AWAKE_MS;
+    // dormant → the 90s grace deadline; engaged → the awake-window deadline, or
+    // sooner if the arena has emptied (whole roster Exhausted — ADR-0004 wipe)
+    let deadline = f.engagedAt === null ? f.summonedAt + DORMANT_TIMEOUT_MS : f.engagedAt + GUARDIAN_AWAKE_MS;
+    if (f.emptySlumberAt !== null) deadline = Math.min(deadline, f.emptySlumberAt);
     this.slumberTimer = window.setTimeout(() => {
       this.slumberTimer = null;
       this.reconcileGuardian();
@@ -955,6 +964,7 @@ export class MockBackend implements Backend {
       participants: [],
       knockdowns: {},
       lastKnockdownWave: {},
+      emptySlumberAt: null,
     };
     this.db.world!.fight = fight;
     this.saveNow();
@@ -1110,6 +1120,13 @@ export class MockBackend implements Backend {
         text: t.system.exhaustionCollapse(me, atHammock),
         ts: Date.now(),
       });
+      // arena empty? if the WHOLE roster is now Exhausted, no one is left to
+      // fight — schedule an early re-slumber instead of grinding the awake window
+      const wiped = f.roster.every((n) => (f.knockdowns[n] ?? 0) >= EXHAUSTION_KNOCKDOWNS);
+      if (wiped && f.emptySlumberAt === null) {
+        f.emptySlumberAt = Date.now() + ARENA_EMPTY_SLUMBER_MS;
+        this.scheduleSlumberCheck();
+      }
     }
     this.saveSoon();
     return { ok: true, knockdowns, exhausted, wake, atHammock };
