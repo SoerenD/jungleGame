@@ -2527,16 +2527,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Top-left placement anchor for `item` from the tile the Player faces.
-   * The stored footprint still anchors top-left and grows +x/+y (ADR-0008),
-   * but for AIMING we centre the block on the faced tile so it lands where
-   * you point instead of always spilling down-right. A 1×1 Prop shifts by 0,
-   * so props are unchanged; only Buildings recentre.
+   * Top-left placement anchor for `item`, positioned so the whole footprint
+   * sits DIRECTLY AHEAD of the Player in the faced direction — adjacent to the
+   * Player, centred on the perpendicular axis, never on the Player's own tile.
+   * The stored footprint still anchors top-left and grows +x/+y (ADR-0008);
+   * this only decides WHERE that top-left lands. A 1×1 Prop reduces to the
+   * single tile the Player faces (unchanged from the old facingTile flow).
    */
   private footprintAnchor(item: StructureId): { tx: number; ty: number } {
-    const { tx, ty } = this.facingTile();
+    const px = Math.floor(this.player.x / TILE);
+    const py = Math.floor((this.player.y - 4) / TILE);
     const { w, h } = footprint(item);
-    return { tx: tx - Math.floor(w / 2), ty: ty - Math.floor(h / 2) };
+    const offX = Math.floor((w - 1) / 2); // centre the width across the Player when facing up/down
+    const offY = Math.floor((h - 1) / 2); // centre the height when facing left/right
+    switch (this.lastDir) {
+      case 'up':    return { tx: px - offX, ty: py - h };
+      case 'down':  return { tx: px - offX, ty: py + 1 };
+      case 'left':  return { tx: px - w,    ty: py - offY };
+      case 'right': return { tx: px + 1,    ty: py - offY };
+      default:      return { tx: px - offX, ty: py + 1 };
+    }
   }
 
   /**
@@ -2713,11 +2723,30 @@ export class GameScene extends Phaser.Scene {
     this.placeAtTile(item, tx, ty);
   }
 
-  /** pick the most helpful "can't build" message: name the blocking Node if any */
+  /**
+   * Pick the most helpful "can't build" message by finding the FIRST offending
+   * footprint tile and naming its actual reason — a bush/tree, an existing
+   * Structure, or unbuildable ground — instead of one catch-all string.
+   */
   private toastPlaceRefused(item: StructureId, tx: number, ty: number): void {
-    const node = this.blockingNodeName(item, tx, ty);
-    if (node) bus.emit('toast', t.toast.blockedByNode(node), 'bad');
-    else bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
+    const { w, h } = footprint(item);
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const reason = this.tileBlockReason(item, tx + dx, ty + dy);
+        if (!reason) continue;
+        if (reason === 'node') {
+          const node = this.blockingNodeName(item, tx, ty);
+          bus.emit('toast', node ? t.toast.blockedByNode(node) : t.toast.cantBuildTile, 'bad');
+        } else if (reason === 'structure') {
+          bus.emit('toast', t.toast.alreadyBuiltHere, 'bad');
+        } else {
+          // 'terrain' or 'oob'
+          bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
+        }
+        return;
+      }
+    }
+    bus.emit('toast', t.toast.cantBuildTile, 'bad');
   }
 
   private doPlace(item: StructureId, tx: number, ty: number, text?: string): void {

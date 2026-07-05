@@ -16,10 +16,10 @@ Considered Options), we generalize the structure model itself.
    rule *"first placement on a tile wins"* becomes *"first placement on the **footprint** wins."*
    Collision bodies span the whole footprint. The stored anchor is the footprint's **top-left** tile
    and it grows **+x/+y** — the persisted/DB/server model. **Aiming is separate from storage:** the
-   *facing* placement flow centres the footprint on the tile the Player faces (`footprintAnchor`
-   shifts the faced tile by `-⌊w/2⌋,-⌊h/2⌋` before handing a top-left anchor to the server), so a
-   Building lands where you point instead of spilling down-right. A 1×1 Prop shifts by 0 — unchanged.
-   Drag-to-place (no live ghost) keeps the cursor tile as the top-left corner.
+   *facing* placement flow (`footprintAnchor`) positions the whole footprint **directly ahead of the
+   Player in the faced direction** — adjacent, centred on the perpendicular axis, never on the
+   Player's own tile — instead of spilling down-right. A 1×1 Prop reduces to the single faced tile
+   (unchanged). Drag-to-place (no live ghost) keeps the cursor tile as the top-left corner.
 3. **Free dismantle, no ownership.** **Any** Player may dismantle **any** Structure (matching the
    lock-free crate), reclaiming its **full** crafting cost **to the dismantler**; server-ordered.
    Structures are **no longer permanent** — a misplacement is undoable.
