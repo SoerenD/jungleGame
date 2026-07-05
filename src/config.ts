@@ -114,6 +114,11 @@ export const DEV_FIGHT = params.has('fight');
 // ?dungeon = bypass the Delve gate and drop at the mine-shaft entrance for
 // playtesting (ADR-0007); no Ancient Pickaxe required, the shaft reads as open.
 export const DEV_DUNGEON = params.has('dungeon');
+// ?deep = drop STRAIGHT into the Deep (Stage 2, ADR-0011) for playtesting — a
+// fresh solo Deep run, skipping Stage 1 + the boss-door. Implies the shaft is
+// open too, so leaving the Deep lands you at a usable World entrance. Use
+// ?dungeon for Stage 1.
+export const DEV_DEEP = params.has('deep');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006

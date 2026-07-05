@@ -23,6 +23,7 @@ import type {
 import { hintRetired, journeyComplete, type HintId } from '../content/journey';
 import {
   DAY_CYCLE_MS,
+  DEV_DEEP,
   DEV_DUNGEON,
   EXHAUSTION_KNOCKDOWNS,
   FOG_CHUNK,
@@ -337,8 +338,10 @@ export class GameScene extends Phaser.Scene {
   /** world-tile + pixel position of the sealed mine-shaft entrance */
   private delveEntrance = { x: 0, y: 0, tx: 0, ty: 0 };
   private delveEntranceSprite: Phaser.GameObjects.Container | null = null;
-  /** ?dungeon: treat the shaft as open regardless of the persisted flag */
-  private delveForceOpen = DEV_DUNGEON;
+  /** ?dungeon / ?deep: treat the shaft as open regardless of the persisted flag */
+  private delveForceOpen = DEV_DUNGEON || DEV_DEEP;
+  /** ?deep: drop straight into the Deep on the first frame (dev playtest) */
+  private pendingDeepEntry = DEV_DEEP;
   private rubbleHits = 0;
   /** captured World colliders, disabled while inside the Delve */
   private worldColliders: Phaser.Physics.Arcade.Collider[] = [];
@@ -778,6 +781,65 @@ export class GameScene extends Phaser.Scene {
             this.inventory = inv;
             bus.emit('inventory', inv);
           }
+        },
+        // ADR-0011 Deep playtest handles (dev only) — drive the chained Stages
+        delve: {
+          stage: () => this.delveStage,
+          inDelve: () => this.inDelve,
+          doorOpen: () => this.deepDoorOpen,
+          mobs: () =>
+            [...this.mobs.values()].map((m) => ({
+              id: m.id, kind: m.kind, hp: m.hp, maxHp: m.maxHp, st: m.st, erupt: !!m.erupt,
+              x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10,
+            })),
+          enterStage1: () => this.enterDelve(),
+          enterDeep: () => this.enterDeepDirect(),
+          descend: () => this.descendToDeep(),
+          /** force the Forgeborn's next eruption to charge now (demo AC6) */
+          erupt: () => {
+            for (const m of this.mobs.values()) {
+              if (m.kind === 'forgeborn') { m.eruptCd = 0; return true; }
+            }
+            return false;
+          },
+          /** fell one mob by id as a lethal host-adjudicated hit (drives the real loot/door/complete path) */
+          fell: (id: string) => {
+            const m = this.mobs.get(id);
+            if (!m || m.st === 'dead') return false;
+            this.delveHitLanded = true;
+            this.delveParticipants.add(this.me.name);
+            m.hp = 0;
+            m.st = 'dead';
+            this.onMobFelled(m);
+            return true;
+          },
+          /** fell every Husk (leaves the boss) — bank kills for shard loot */
+          fellHusks: () => {
+            let n = 0;
+            for (const m of [...this.mobs.values()]) {
+              if (isBossKind(m.kind) || m.st === 'dead') continue;
+              this.delveHitLanded = true;
+              this.delveParticipants.add(this.me.name);
+              m.hp = 0;
+              m.st = 'dead';
+              this.onMobFelled(m);
+              n++;
+            }
+            return n;
+          },
+          /** fell the current Stage boss (opens the door in Stage 1 / completes the Deep) */
+          fellBoss: () => {
+            for (const m of [...this.mobs.values()]) {
+              if (!isBossKind(m.kind) || m.st === 'dead') continue;
+              this.delveHitLanded = true;
+              this.delveParticipants.add(this.me.name);
+              m.hp = 0;
+              m.st = 'dead';
+              this.onMobFelled(m);
+              return true;
+            }
+            return false;
+          },
         },
       };
     }
@@ -3084,6 +3146,27 @@ export class GameScene extends Phaser.Scene {
     bus.emit('toast', roster.length > 1 ? t.toast.descendIntoDeep(roster.length - 1) : t.toast.descendIntoDeepAlone, 'info');
   }
 
+  /**
+   * ?deep dev shortcut: start a fresh SOLO Deep run as host, skipping Stage 1 and
+   * the boss-door. Identical to hosting a Stage-1 run, but at Stage 2 — so the
+   * magma interior, Cinder/Ember Husks and the Forgeborn come up straight away.
+   */
+  private enterDeepDirect(): void {
+    if (this.inDelve) return;
+    this.delveStage = 2;
+    const me = this.me.name;
+    const roster = [me];
+    const runId = `${me}:${Date.now()}:deep`;
+    this.isDelveHost = true;
+    this.delveHostName = me;
+    this.delveRoster = roster;
+    this.delveHeadcount = 1;
+    this.backend.sendDungeon({ t: 'start', runId, host: me, heads: 1, roster, stage: 2 });
+    this.spawnDelveMobs();
+    this.beginDelve(runId);
+    bus.emit('toast', t.toast.descendIntoDeepAlone, 'info');
+  }
+
   /** host: build the authoritative mob roster (HP lives ONLY here — never the DB) */
   private spawnDelveMobs(): void {
     const S = this.stageDef();
@@ -3972,6 +4055,13 @@ export class GameScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     if (!this.player) return;
     const dt = delta / 1000;
+
+    // ?deep dev flag: drop straight into the Deep on the first frame (once)
+    if (this.pendingDeepEntry) {
+      this.pendingDeepEntry = false;
+      this.enterDeepDirect();
+      return;
+    }
 
     // the Delve is a self-contained mode: its own dark ambiance, movement,
     // host mob sim, combat and camera — none of the World systems below run
