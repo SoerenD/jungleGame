@@ -2550,6 +2550,35 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * Forgiving placement anchor: start from where the Player is aiming
+   * (footprintAnchor); if that footprint is blocked, snap to the NEAREST valid
+   * footprint within a small radius so a Building "just works" near clutter or
+   * a shoreline instead of demanding pixel-perfect aim. Only Buildings snap —
+   * a 1×1 Prop stays exactly on the faced tile (precise decor placement).
+   * `snapped` lets the ghost show it moved.
+   */
+  private bestAnchorNear(item: StructureId): { tx: number; ty: number; snapped: boolean } {
+    const base = this.footprintAnchor(item);
+    if (!isBuilding(item) || this.canPlaceLocal(item, base.tx, base.ty)) {
+      return { ...base, snapped: false };
+    }
+    const R = 3; // a few tiles — stays within the Player's reach
+    let best: { tx: number; ty: number } | null = null;
+    let bestD = Infinity;
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = base.tx + dx;
+        const ty = base.ty + dy;
+        if (!this.canPlaceLocal(item, tx, ty)) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = { tx, ty }; }
+      }
+    }
+    return best ? { ...best, snapped: true } : { ...base, snapped: false };
+  }
+
+  /**
    * Why a single tile refuses `item`, or null if it's clear. Shared by the
    * whole-footprint check and the per-tile placement overlay so the ghost's
    * red cells always match what the server would reject.
@@ -2653,7 +2682,7 @@ export class GameScene extends Phaser.Scene {
 
   private confirmPlace(): void {
     if (!this.placing) return;
-    const { tx, ty } = this.footprintAnchor(this.placing);
+    const { tx, ty } = this.bestAnchorNear(this.placing);
     this.placeAtTile(this.placing, tx, ty);
   }
 
@@ -3960,10 +3989,11 @@ export class GameScene extends Phaser.Scene {
       this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined);
     }
 
-    // placement ghost — centred over the whole footprint (ADR-0008), aimed at
-    // the faced tile via footprintAnchor so the preview matches confirmPlace
+    // placement ghost — centred over the whole footprint (ADR-0008). Uses
+    // bestAnchorNear so the preview shows the SAME spot confirmPlace will use,
+    // including a snap to the nearest valid footprint for Buildings.
     if (this.placing && this.ghost) {
-      const { tx, ty } = this.footprintAnchor(this.placing);
+      const { tx, ty } = this.bestAnchorNear(this.placing);
       const { w, h } = footprint(this.placing);
       this.ghost.setPosition((tx + w / 2) * TILE, (ty + h) * TILE);
       this.ghost.setTint(this.canPlaceLocal(this.placing, tx, ty) ? 0x88ff88 : 0xff6666);

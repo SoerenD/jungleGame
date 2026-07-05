@@ -20,6 +20,9 @@ Considered Options), we generalize the structure model itself.
    Player in the faced direction** — adjacent, centred on the perpendicular axis, never on the
    Player's own tile — instead of spilling down-right. A 1×1 Prop reduces to the single faced tile
    (unchanged). Drag-to-place (no live ghost) keeps the cursor tile as the top-left corner.
+   **Forgiving snap:** if a Building's aimed footprint is blocked, `bestAnchorNear` snaps the ghost
+   to the nearest valid footprint within ~3 tiles, so building near clutter or a shoreline "just
+   works" without pixel-perfect aim; Props do not snap (precise decor placement).
 3. **Free dismantle, no ownership.** **Any** Player may dismantle **any** Structure (matching the
    lock-free crate), reclaiming its **full** crafting cost **to the dismantler**; server-ordered.
    Structures are **no longer permanent** — a misplacement is undoable.
