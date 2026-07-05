@@ -75,6 +75,13 @@ export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   // cadence, and unlike every other weapon it strikes Husks, the Deep Guardian,
   // AND the Guardian. Crafted from Delve loot; plugs straight into this table.
   sword: { min: 3, max: 5, critChance: 0.14, critMult: 1.9, attackMs: 480 },
+  // The Forgebrand (ADR-0011): the Deep's PURE-COMBAT reward — a molten
+  // two-hander and a true SIDEGRADE to the Sword, not an upgrade. It trades the
+  // Sword's tempo for weight: a SLOWER cadence (640 vs 480 ms) and a heavier,
+  // higher per-hit band (4–6 vs 3–5) with a punchier crit, tuned so its net DPS
+  // ~9.4 ≈ the Sword's ~9.4 — the axe-vs-pickaxe "same DPS, opposite feel" at the
+  // top melee tier. Like the Sword it strikes Husks, both bosses, and the Guardian.
+  forgebrand: { min: 4, max: 6, critChance: 0.2, critMult: 2.0, attackMs: 640 },
 };
 
 /** the combat profile of the in-hand Tool (bare hands / non-combat → BARE_HANDS) */

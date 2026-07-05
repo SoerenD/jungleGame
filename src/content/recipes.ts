@@ -37,6 +37,10 @@ export const RECIPES: Recipe[] = [
   // Dungeons v1 (ADR-0007) — the Sword: the game's first pure-combat Tool,
   // forged from Delve loot (rare Deep Core + common Husk Shards) plus planks.
   { id: 'sword', output: 'sword', count: 1, cost: { deep_core: 1, husk_shard: 6, plank: 3, stone: 2 }, kind: 'tool' },
+  // ADR-0011 — the Forgebrand: the Deep's pure-combat sidegrade, forged from Deep
+  // loot (rare Forge Core + common Cinder Shards) plus planks + stone. An
+  // INDEPENDENT craft — it does NOT consume the Sword (they coexist as feel-choices).
+  { id: 'forgebrand', output: 'forgebrand', count: 1, cost: { forge_core: 1, cinder_shard: 6, plank: 3, stone: 2 }, kind: 'tool' },
 
   // v2 — cheap, repeatable summon Offering (tier-1 resources only)
   { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },

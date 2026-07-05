@@ -13,9 +13,12 @@ export type ResourceId =
   | 'fish'
   // v3 — refined at the Sawmill; lives in the Inventory like any Resource
   | 'plank'
-  // Dungeons v1 (ADR-0007) — Delve drops that craft the Sword
+  // Dungeons v1 (ADR-0007) — Stage-1 Delve drops that craft the Sword
   | 'husk_shard'
-  | 'deep_core';
+  | 'deep_core'
+  // ADR-0011 — the Deep (Stage 2) drops that forge the Forgebrand
+  | 'cinder_shard'
+  | 'forge_core';
 export type ToolId =
   | 'axe'
   | 'pickaxe'
@@ -28,7 +31,9 @@ export type ToolId =
   | 'bow'
   | 'hand_torch'
   // Dungeons v1 (ADR-0007) — the first pure-combat Tool: no harvest use
-  | 'sword';
+  | 'sword'
+  // ADR-0011 — the Deep's reward: a pure-combat molten two-hander (sidegrade)
+  | 'forgebrand';
 export type StructureId =
   | 'campfire'
   | 'torch'
@@ -107,6 +112,8 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   plank: { name: 'Plank', kind: 'resource', desc: 'Wood refined at a Sawmill. Tier 2 builds on refined wood.' },
   husk_shard: { name: 'Husk Shard', kind: 'resource', desc: 'Stone-and-clay shrapnel from a felled Husk in the Delve. Common — the farm of a Dungeon run.' },
   deep_core: { name: 'Deep Core', kind: 'resource', desc: 'The molten heart of the Deep Guardian, granted to everyone who fought it. Rare — forges the Sword.' },
+  cinder_shard: { name: 'Cinder Shard', kind: 'resource', desc: 'Molten shrapnel from a felled Cinder or Ember Husk in the Deep. Common — the farm of a Deep run.' },
+  forge_core: { name: 'Forge Core', kind: 'resource', desc: 'The white-hot heart of the Forgeborn, granted to everyone who descended and fought it. Rare — forges the Forgebrand.' },
 
   axe: { name: 'Axe', kind: 'tool', desc: 'Chops trees twice as fast.' },
   pickaxe: { name: 'Pickaxe', kind: 'tool', desc: 'Breaks rocks twice as fast.' },
@@ -118,6 +125,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   bow: { name: 'Bow', kind: 'tool', desc: 'Looses arrows at the Guardian from range in an Eye Window — safe but lower DPS than melee, no ammo. Craftable before the first fight.' },
   hand_torch: { name: 'Hand Torch', kind: 'tool', desc: 'Hold it to light your way with a warm orange glow at night. Distinct from the placed Torch.' },
   sword: { name: 'Sword', kind: 'tool', desc: 'The Delve’s reward: a pure-combat blade — it grants no gathering bonus and unlocks no Node, but strikes Husks, the Deep Guardian, and the Guardian with the game’s heaviest melee band.' },
+  forgebrand: { name: 'Forgebrand', kind: 'tool', desc: 'The Deep’s reward: a pure-combat molten two-hander — no gathering bonus, no Node. It swings slower than the Sword but lands a heavier per-hit band (net damage on par), and strikes Husks, both bosses, and the Guardian alike.' },
 
   summon_totem: { name: 'Summoning Totem', kind: 'consumable', desc: 'An Offering for the arena altar — wakes the Guardian. Consumed on summon.' },
   cooked_fish: { name: 'Cooked Fish', kind: 'food', desc: 'Warm and hearty. Eating it quickens your step for a while.' },
@@ -170,6 +178,8 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   plank: { name: 'Brett', desc: 'Holz, im Sägewerk veredelt. Stufe-2-Bauten brauchen veredeltes Holz.' },
   husk_shard: { name: 'Hüllensplitter', desc: 'Stein-und-Ton-Splitter einer gefallenen Hülle im Schacht. Häufig — die Ausbeute eines Schacht-Zugs.' },
   deep_core: { name: 'Tiefenkern', desc: 'Das glühende Herz des Tiefenwächters, verliehen an alle, die gegen ihn kämpften. Selten — schmiedet das Schwert.' },
+  cinder_shard: { name: 'Glutsplitter', desc: 'Glühender Splitter einer gefallenen Glut- oder Aschehülle in der Tiefe. Häufig — die Ausbeute eines Tiefen-Zugs.' },
+  forge_core: { name: 'Schmiedekern', desc: 'Das weißglühende Herz des Schmiedegeborenen, verliehen an alle, die hinabstiegen und gegen ihn kämpften. Selten — schmiedet den Schmiedebrand.' },
 
   axe: { name: 'Axt', desc: 'Fällt Bäume doppelt so schnell.' },
   pickaxe: { name: 'Spitzhacke', desc: 'Bricht Felsen doppelt so schnell.' },
@@ -181,6 +191,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   bow: { name: 'Bogen', desc: 'Verschießt Pfeile aus der Ferne auf den Wächter in einem Augenfenster — sicher, aber geringere DPS als Nahkampf, keine Munition. Vor dem ersten Kampf herstellbar.' },
   hand_torch: { name: 'Handfackel', desc: 'Halte sie, um deinen Weg nachts mit warmem orangem Schein zu erleuchten. Nicht zu verwechseln mit der platzierten Fackel.' },
   sword: { name: 'Schwert', desc: 'Der Lohn des Schachts: eine reine Kampfklinge — sie gibt keinen Ernte-Bonus und schaltet keinen Knotenpunkt frei, trifft aber Hüllen, den Tiefenwächter und den Wächter mit dem schwersten Nahkampfband des Spiels.' },
+  forgebrand: { name: 'Schmiedebrand', desc: 'Der Lohn der Tiefe: ein reiner Kampf-Zweihänder aus Magma — kein Ernte-Bonus, kein Knotenpunkt. Er schwingt langsamer als das Schwert, landet aber ein schwereres Schadensband (unterm Strich gleichauf), und trifft Hüllen, beide Bosse und den Wächter.' },
 
   summon_totem: { name: 'Beschwörungstotem', desc: 'Eine Opfergabe für den Arena-Altar — weckt den Wächter. Beim Beschwören verbraucht.' },
   cooked_fish: { name: 'Gebratener Fisch', desc: 'Warm und herzhaft. Ihn zu essen beschleunigt deinen Schritt für eine Weile.' },
