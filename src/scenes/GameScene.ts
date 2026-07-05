@@ -2385,18 +2385,21 @@ export class GameScene extends Phaser.Scene {
 
   private addStructure(s: Structure): void {
     if (this.structureIds.has(s.id)) return;
-    // defensive: a saved structure whose type is no longer known (e.g. the
-    // retired fence or hut_wall) is skipped instead of crashing — future-proofs removals
-    const def = ITEMS[s.type];
-    if (!def) return;
-    // ADR-0008 footprint: a Building spans w×h tiles anchored at (tx,ty) toward
-    // +x/+y; a Prop is 1×1. The sprite centres over the footprint, feet at its
-    // bottom edge, so it depth-sorts like every other object.
-    const { w, h } = footprint(s.type);
     this.structureIds.add(s.id);
+    // ADR-0008 footprint: a Building spans w×h tiles anchored at (tx,ty) toward
+    // +x/+y; a Prop is 1×1. RESERVE those tiles first, unconditionally — even a
+    // type we can no longer render (the retired fence/hut_wall) still claims its
+    // tiles on the server (structure_tiles). Skipping the reservation makes the
+    // client think that ground is free: the ghost shows green and the snap aims
+    // there, but the server rejects it (OCCUPIED). Reserve, then render.
+    const { w, h } = footprint(s.type);
     for (let dy = 0; dy < h; dy++) {
       for (let dx = 0; dx < w; dx++) this.structuresByTile.set(`${s.tx + dx},${s.ty + dy}`, s);
     }
+    // only a known type gets sprites/collision/glow; an unknown one is
+    // reserved-but-invisible (future-proofs removals without crashing).
+    const def = ITEMS[s.type];
+    if (!def) return;
     const key = `st_${s.type}`;
     const x = (s.tx + w / 2) * TILE;
     const baseY = (s.ty + h) * TILE;
@@ -2656,11 +2659,15 @@ export class GameScene extends Phaser.Scene {
     }
     const now = Date.now();
     const mine = s.placedBy === this.me.name;
+    // a retired/unknown type (e.g. hut_wall) has no ITEMS entry — dismantling it
+    // is exactly how a Player clears the invisible old build blocking their tiles,
+    // so fall back to its raw id for the label instead of crashing on .name
+    const sName = ITEMS[s.type]?.name ?? s.type;
     // speed bump: dismantling ANOTHER Player's Building asks for a second press
     if (isBuilding(s.type) && !mine) {
       if (!this.dismantleArmed || this.dismantleArmed.id !== s.id || now > this.dismantleArmed.until) {
         this.dismantleArmed = { id: s.id, until: now + 3000 };
-        bus.emit('toast', t.toast.dismantleConfirm(s.placedBy, ITEMS[s.type].name), 'info');
+        bus.emit('toast', t.toast.dismantleConfirm(s.placedBy, sName), 'info');
         return;
       }
     }
@@ -2673,7 +2680,7 @@ export class GameScene extends Phaser.Scene {
       const gained = Object.entries(res.refund)
         .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
         .join('  ');
-      bus.emit('toast', gained ? t.toast.dismantled(ITEMS[s.type].name, gained) : t.toast.dismantledBare(ITEMS[s.type].name), 'good');
+      bus.emit('toast', gained ? t.toast.dismantled(sName, gained) : t.toast.dismantledBare(sName), 'good');
       // the server-ordered `structureRemoved` event tears down the visuals for
       // everyone (incl. us); remove locally too in case we beat the echo
       this.removeStructure(s.id);

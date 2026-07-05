@@ -522,17 +522,19 @@ export class SupabaseBackend implements Backend {
       return { id: sn.id, type: sn.type, tx: sn.tx, ty: sn.ty, hp: t.maxHp, harvestedAt: null };
     });
 
-    const structures: Structure[] = ((structR.data ?? []) as any[])
-      .filter((s) => ITEMS[s.type as ItemId])
-      .map((s) => ({
-        id: s.id,
-        type: s.type,
-        tx: s.tx,
-        ty: s.ty,
-        placedBy: s.placed_by,
-        placedAt: s.placed_at,
-        ...(s.text != null ? { text: s.text } : {}),
-      }));
+    // Keep EVERY row — including a retired/unknown type (e.g. hut_wall): it still
+    // claims its tiles server-side (structure_tiles), so the client must know
+    // about it or placement lies (ghost green, server says OCCUPIED). GameScene
+    // reserves its tiles and skips rendering; dismantle removes it by id.
+    const structures: Structure[] = ((structR.data ?? []) as any[]).map((s) => ({
+      id: s.id,
+      type: s.type,
+      tx: s.tx,
+      ty: s.ty,
+      placedBy: s.placed_by,
+      placedAt: s.placed_at,
+      ...(s.text != null ? { text: s.text } : {}),
+    }));
     // keep the id→Structure mirror in sync so a dismantle knows the type/footprint
     this.structures = new Map(structures.map((s) => [s.id, s]));
 
