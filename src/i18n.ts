@@ -72,6 +72,7 @@ const ZONE_DE: Record<string, string> = {
   'Hidden Grove': 'Verborgener Hain',
   'Deep Jungle': 'Tiefer Dschungel',
   'The Delve': 'Der Schacht',
+  'The Deep': 'Die Tiefe',
   'Jungle World': 'Dschungelwelt',
   'Ancient Tablet': 'Uralte Steintafel',
   // frontier zones (ADR-0009)
@@ -337,12 +338,27 @@ const en = {
     knockedInDelve: (n: number, max: number) => `Knocked down in the Delve! (${n}/${max})`,
     partyOverwhelmed: 'The party is overwhelmed — the Delve resets. No loot.',
     mealFades: 'The warmth of the meal fades.',
+    // ADR-0011 — the Deep (Stage 2)
+    deepDoorOpens:
+      'A hidden door grinds open in the far wall — press E there to descend into the Deep, or leave with your Stage-1 loot.',
+    descendIntoDeep: (n: number) => `You descend into the Deep with ${n} other${n === 1 ? '' : 's'}...`,
+    descendIntoDeepAlone: 'You descend alone into the Deep...',
+    followIntoDeep: (host: string) => `You follow ${host} into the Deep...`,
+    forgebornFalls: (parts: string) => `The Forgeborn falls! ${parts}`,
+    deepClearedNoHit: 'The Deep is cleared — but you landed no hit, so no loot.',
+    deepHostLeftCollapse: 'The host left — the Deep collapses around you. No Deep loot (your Stage-1 haul is safe).',
+    deepPartyOverwhelmed: 'The party is overwhelmed — the Deep resets. No Deep loot (your Stage-1 haul is safe).',
+    exhaustionDeepHost: 'Exhaustion takes the host — the Deep collapses. (No host migration in v1.)',
+    exhaustionDeepYou:
+      'Exhaustion takes you — out of the Deep. Any hits you landed still count if the party wins.',
+    knockedInDeep: (n: number, max: number) => `Knocked down in the Deep! (${n}/${max})`,
   },
 
   delve: {
     descend: 'The Delve · press E to descend',
     sealed: 'Sealed rubble · an Ancient Pickaxe could clear it',
     leave: '⇱ leave',
+    descendDeep: 'A door to the Deep · press E to descend',
   },
 
   // shared-world chat narration broadcast by the backend as "🌿 Jungle"
@@ -634,12 +650,27 @@ const de: Strings = {
     knockedInDelve: (n, max) => `Im Schacht niedergeschlagen! (${n}/${max})`,
     partyOverwhelmed: 'Die Gruppe ist überwältigt — der Schacht setzt sich zurück. Keine Beute.',
     mealFades: 'Die Wärme der Mahlzeit verfliegt.',
+    // ADR-0011 — die Tiefe (Stufe 2)
+    deepDoorOpens:
+      'Eine verborgene Tür knirscht in der fernen Wand auf — drücke dort E, um in die Tiefe hinabzusteigen, oder geh mit deiner Stufe-1-Beute.',
+    descendIntoDeep: (n) => `Du steigst mit ${n} ${n === 1 ? 'weiteren' : 'weiteren'} in die Tiefe hinab...`,
+    descendIntoDeepAlone: 'Du steigst allein in die Tiefe hinab...',
+    followIntoDeep: (host) => `Du folgst ${host} in die Tiefe...`,
+    forgebornFalls: (parts) => `Der Schmiedegeborene fällt! ${parts}`,
+    deepClearedNoHit: 'Die Tiefe ist bezwungen — doch du hast keinen Treffer gelandet, also keine Beute.',
+    deepHostLeftCollapse: 'Der Host ist gegangen — die Tiefe stürzt um dich herum ein. Keine Tiefen-Beute (deine Stufe-1-Ausbeute ist sicher).',
+    deepPartyOverwhelmed: 'Die Gruppe ist überwältigt — die Tiefe setzt sich zurück. Keine Tiefen-Beute (deine Stufe-1-Ausbeute ist sicher).',
+    exhaustionDeepHost: 'Erschöpfung übermannt den Host — die Tiefe stürzt ein. (Kein Host-Wechsel in v1.)',
+    exhaustionDeepYou:
+      'Erschöpfung übermannt dich — raus aus der Tiefe. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
+    knockedInDeep: (n, max) => `In der Tiefe niedergeschlagen! (${n}/${max})`,
   },
 
   delve: {
     descend: 'Der Schacht · drücke E zum Hinabsteigen',
     sealed: 'Versiegeltes Geröll · eine Uralte Spitzhacke könnte es räumen',
     leave: '⇱ verlassen',
+    descendDeep: 'Eine Tür zur Tiefe · drücke E zum Hinabsteigen',
   },
 
   system: {

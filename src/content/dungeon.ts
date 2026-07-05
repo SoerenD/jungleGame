@@ -541,8 +541,9 @@ export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerH
     ax: spawn.x,
     ay: spawn.y,
     phase: 0,
-    // the Forgeborn's first eruption fires one cooldown into the fight
-    eruptCd: P.eruptEveryMs ?? 0,
+    // the Forgeborn's FIRST eruption comes early (teaches the mechanic); later ones
+    // respect the full eruptEveryMs cooldown (shortened by fury)
+    eruptCd: P.eruptEveryMs ? Math.round(P.eruptEveryMs * 0.5) : 0,
   };
 }
 
