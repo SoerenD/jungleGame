@@ -19,13 +19,20 @@ export const MOB_TEX: Record<MobKind, string> = {
   grasp: 'husk-grasp',
   spit: 'husk-spit',
   boss: 'deep-guardian',
+  // the Deep (Stage 2, ADR-0011) — molten reskins of the same silhouettes
+  cinder: 'husk-cinder',
+  ember: 'husk-ember',
+  forgeborn: 'forgeborn',
 };
 
-/** per-mob sheet frame size (px). Boss is far bigger — a boss silhouette. */
+/** per-mob sheet frame size (px). Bosses are far bigger — a boss silhouette. */
 export const MOB_FRAME: Record<MobKind, { w: number; h: number }> = {
   grasp: { w: 20, h: 22 },
   spit: { w: 20, h: 24 },
   boss: { w: 46, h: 50 },
+  cinder: { w: 20, h: 22 },
+  ember: { w: 20, h: 24 },
+  forgeborn: { w: 48, h: 52 },
 };
 
 type Ctx = CanvasRenderingContext2D;
@@ -49,8 +56,7 @@ const GRASP = {
   glowHot: '#ff8c2a',
   glowEdge: '#c43a12',
 };
-function drawGrasp(ctx: Ctx, ox: number, f: number): void {
-  const P = GRASP;
+function drawGrasp(ctx: Ctx, ox: number, f: number, P: typeof GRASP = GRASP): void {
   const oy = f === 0 ? 0 : -1; // idleB/telegraph heave the mass up; feet stay
   const tel = f === 2;
   const Y = (v: number) => v + oy;
@@ -119,8 +125,7 @@ const SPIT = {
   sacBright: '#39e467',
   sacCore: '#b6ffcf',
 };
-function drawSpit(ctx: Ctx, ox: number, f: number): void {
-  const P = SPIT;
+function drawSpit(ctx: Ctx, ox: number, f: number, P: typeof SPIT = SPIT): void {
   const oy = f === 0 ? 0 : f === 1 ? -1 : -2; // telegraph rears the sac up 2px
   const swell = f === 0 ? 0 : f === 1 ? 1 : 2; // sac inhale / bulge
   const tel = f === 2;
@@ -185,8 +190,7 @@ const BOSS = {
   coreBloom: '#ff8a2a',
   corona: '#7e1dfb',
 };
-function drawBoss(ctx: Ctx, ox: number, f: number): void {
-  const P = BOSS;
+function drawBoss(ctx: Ctx, ox: number, f: number, P: typeof BOSS = BOSS): void {
   const oy = f === 0 ? 0 : f === 1 ? -1 : -3; // telegraph rears the whole colossus
   const tel = f === 2;
   const aL = tel ? 3 : 0; // arms/shoulders lift extra on the wind-up
@@ -265,10 +269,53 @@ function drawBoss(ctx: Ctx, ox: number, f: number): void {
   }
 }
 
+// -------------------------------------------------------- the Deep: molten reskins
+// Same silhouettes/geometry (drawGrasp/drawSpit/drawBoss), swapped to a molten
+// cinder-and-basalt palette so they read instantly as the Deep's harder kin
+// (ADR-0011): charred rock bodies, hotter orange cores, no violet.
+const CINDER: typeof GRASP = {
+  outline: '#1a0f0a',
+  shadow: '#3a201a',
+  base: '#5a2f22', // molten-rock red-brown
+  highlight: '#7a4030',
+  rim: '#a85a3a',
+  moss: '#8a3a20', // charred crust on the top faces
+  glowCore: '#ffe08a',
+  glowHot: '#ff8c2a',
+  glowEdge: '#ff4a12',
+};
+const EMBER: typeof SPIT = {
+  outline: '#241410',
+  shadow: '#3a2018',
+  base: '#4a2a22',
+  highlight: '#6a3a2a',
+  sacShadow: '#5a1a08',
+  sacBody: '#e0561f', // a blazing ember throat-sac instead of acid
+  sacBright: '#ff9a4d',
+  sacCore: '#ffe0a0',
+};
+const FORGEBORN: typeof BOSS = {
+  outline: '#0a0806',
+  shadow: '#1c130e',
+  base: '#2e1d14', // dark basalt-brown colossus
+  highlight: '#45291b',
+  rim: '#7a4a2a',
+  crackRoot: '#5a1405',
+  crackMid: '#e0431a',
+  crackHot: '#ff8c2a',
+  crackWhite: '#ffe0a0',
+  coreCenter: '#fff0c0',
+  coreBloom: '#ff8c2a',
+  corona: '#ff5a1e', // molten-orange corona, not violet
+};
+
 const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
   grasp: drawGrasp,
   spit: drawSpit,
   boss: drawBoss,
+  cinder: (c, ox, f) => drawGrasp(c, ox, f, CINDER),
+  ember: (c, ox, f) => drawSpit(c, ox, f, EMBER),
+  forgeborn: (c, ox, f) => drawBoss(c, ox, f, FORGEBORN),
 };
 
 /** draw one mob frame at an x-offset — exported so it can be rasterized/previewed

@@ -16,12 +16,15 @@ import type { ResourceId, ToolId } from './items';
 import { rollGuardianDamage } from './guardian';
 
 // ------------------------------------------------------------- loot
-/** the common Husk drop (the farm loop) and the rare boss drop — new ResourceIds */
+/** Stage-1 loot: the common Husk drop (the farm loop) and the rare boss drop */
 export const HUSK_SHARD: ResourceId = 'husk_shard';
 export const DEEP_CORE: ResourceId = 'deep_core';
+/** the Deep's loot (ADR-0011): common Cinder/Ember Husk drop + rare Forgeborn drop */
+export const CINDER_SHARD: ResourceId = 'cinder_shard';
+export const FORGE_CORE: ResourceId = 'forge_core';
 /** husk shards awarded per participant at run completion (one per Husk felled) */
 export const SHARD_PER_KILL = 1;
-/** deep cores the boss grants each participant on a completed run */
+/** the rare boss Resource each participant is granted on a completed run */
 export const DEEP_CORE_DROP = 1;
 
 // ------------------------------------------------------------- interior layout
@@ -108,7 +111,13 @@ export type PropKind =
   | 'rubble_pile'
   | 'mine_rail'
   | 'bone_pile'
-  | 'glyph_stone';
+  | 'glyph_stone'
+  // the Deep (Stage 2, ADR-0011) — molten dressing: basalt pillars (cover),
+  // ember braziers (light), lava-crack floor veins + slag piles (floor decor)
+  | 'basalt_pillar'
+  | 'ember_brazier'
+  | 'lava_vein'
+  | 'slag_pile';
 
 export interface DelveProp {
   kind: PropKind;
@@ -131,6 +140,10 @@ export const PROP_BLOCKS: Record<PropKind, boolean> = {
   mine_rail: false,
   bone_pile: false,
   glyph_stone: false,
+  basalt_pillar: true, // cover for Ember Husk volleys (not for the eruption)
+  ember_brazier: true,
+  lava_vein: false,
+  slag_pile: false,
 };
 
 /** glow pool a prop kind casts (tint, glow-image scale, alpha, flicker), if any */
@@ -140,6 +153,10 @@ export const PROP_LIGHT: Partial<Record<PropKind, { color: number; scale: number
   crystal_amber: { color: 0xf0b45a, scale: 1.9, alpha: 0.3, flicker: false },
   crystal_teal: { color: 0x2fb4a6, scale: 1.9, alpha: 0.3, flicker: false },
   glyph_stone: { color: 0x7d6bd8, scale: 1.5, alpha: 0.24, flicker: false },
+  // the Deep's molten glow
+  ember_brazier: { color: 0xff7a2a, scale: 2.9, alpha: 0.4, flicker: true },
+  lava_vein: { color: 0xff5a1e, scale: 1.7, alpha: 0.3, flicker: false },
+  basalt_pillar: { color: 0xff5a1e, scale: 1.5, alpha: 0.16, flicker: false },
 };
 
 /** standalone light pools not tied to a prop (the boss's own violet ambient) */
@@ -224,8 +241,20 @@ export function isDelveBlocked(tx: number, ty: number): boolean {
 }
 
 // ------------------------------------------------------------- mobs & scaling
-export type HuskKind = 'grasp' | 'spit';
-export type MobKind = HuskKind | 'boss';
+// Stage 1 (the Delve) Husks: grasp (melee) + spit (ranged). The Deep (Stage 2,
+// ADR-0011) adds cinder (melee) + ember (ranged) — the SAME state machine,
+// molten-reskinned and tuned slightly harder. Bosses: the Deep Guardian ('boss',
+// Stage 1) and the Forgeborn ('forgeborn', Stage 2, + its signature eruption).
+export type HuskKind = 'grasp' | 'spit' | 'cinder' | 'ember';
+export type MobKind = HuskKind | 'boss' | 'forgeborn';
+
+/** which kinds are the ranged kiters (start in 'kite', run stepRanged) */
+const RANGED_KINDS = new Set<MobKind>(['spit', 'ember']);
+/** which kinds are the scaled reactive bosses (per-head HP, run stepBoss) */
+const BOSS_KINDS = new Set<MobKind>(['boss', 'forgeborn']);
+export function isBossKind(kind: MobKind): boolean {
+  return BOSS_KINDS.has(kind);
+}
 
 /** static per-kind combat/AI profile (tile units; ms; tiles/second) */
 export interface MobProfile {
@@ -254,6 +283,18 @@ export interface MobProfile {
   projSpeed: number;
   /** knockdown radius of a projectile (tiles) */
   projR: number;
+  // --- the Forgeborn's signature "eruption" (ADR-0011): an oversized,
+  // long-telegraphed, RADIUS-based strike centred on the boss, escaped by
+  // sprinting to the room's edges. Reuses the windup→strike machine (not a new
+  // engine, not line-of-sight). Undefined on every other kind → no eruption.
+  /** eruption knockdown radius (tiles) — big, so only the room's edges are safe */
+  eruptR?: number;
+  /** eruption wind-up (long, clearly telegraphed) */
+  eruptTelegraphMs?: number;
+  /** how long the eruption zone stays live */
+  eruptStrikeMs?: number;
+  /** base cooldown between eruptions (shortened by fury); first fires after it too */
+  eruptEveryMs?: number;
 }
 
 /**
@@ -319,6 +360,70 @@ export const MOB_PROFILES: Record<MobKind, MobProfile> = {
     fireRange: 9,
     projSpeed: 4.5,
     projR: 0.7,
+  },
+  // ---- the Deep (Stage 2, ADR-0011): reskin + slightly-harder retune of the
+  // exact same state machines. Per-mob danger stays readable (knockdown-only);
+  // only count + boss HP scale (see planDeepSpawns / DEEP.bossHpPerHead).
+  // Cinder Husk — molten melee chaser: a touch faster + tankier than the Grasp
+  // Husk, with a marginally tighter wind-up. Still a long, readable telegraph.
+  cinder: {
+    hp: 10,
+    radius: 0.46,
+    speed: 2.8,
+    aggro: 6.5,
+    reach: 1.5,
+    telegraphMs: 1000,
+    strikeMs: 190,
+    lungeSpeed: 6.4,
+    strikeR: 0.8,
+    cooldownMs: 1800,
+    kiteMin: 0,
+    fireRange: 0,
+    projSpeed: 0,
+    projR: 0,
+  },
+  // Ember Husk — molten ranged kiter: faster shot, slightly shorter cooldown +
+  // longer reach than the Spit Husk, but still side-steppable and long-telegraphed.
+  ember: {
+    hp: 7,
+    radius: 0.44,
+    speed: 2.4,
+    aggro: 8.5,
+    reach: 0,
+    telegraphMs: 1050,
+    strikeMs: 0,
+    lungeSpeed: 0,
+    strikeR: 0,
+    cooldownMs: 2500,
+    kiteMin: 4.5,
+    fireRange: 7.5,
+    projSpeed: 5.0,
+    projR: 0.5,
+  },
+  // the Forgeborn — the Deep's boss: a harder Deep-Guardian profile (more HP/head
+  // via DEEP.bossHpPerHead, tighter fury, aggressive ranged-leaning rhythm) PLUS
+  // its signature eruption (erupt* fields). Reuses stepBoss — no new engine.
+  forgeborn: {
+    hp: 90, // per head — see DEEP.bossHpPerHead
+    radius: 1.45,
+    speed: 2.45,
+    aggro: 15,
+    reach: 2.1,
+    telegraphMs: 1050,
+    strikeMs: 240,
+    lungeSpeed: 5.9,
+    strikeR: 1.25,
+    cooldownMs: 1900,
+    kiteMin: 0,
+    fireRange: 9.5,
+    projSpeed: 5.0,
+    projR: 0.75,
+    // the eruption: a ~6-tile radius blast with a long 2.2s wind-up. In the Deep's
+    // big boss room (edges ≥9 tiles from centre) sprinting to a wall is always safe.
+    eruptR: 6.0,
+    eruptTelegraphMs: 2200,
+    eruptStrikeMs: 520,
+    eruptEveryMs: 8000,
   },
 };
 
@@ -414,10 +519,15 @@ export interface MobState {
   ay: number;
   /** boss fury phase 0..2 (0 for Husks) */
   phase: number;
+  /** Forgeborn only: an eruption wind-up/strike is in progress (drives the big zone) */
+  erupt?: boolean;
+  /** Forgeborn only: ms until the next eruption may fire (counts down while chasing) */
+  eruptCd?: number;
 }
 
-export function createMob(id: string, spawn: MobSpawn, heads: number): MobState {
-  const maxHp = spawn.kind === 'boss' ? bossHp(heads) : MOB_PROFILES[spawn.kind].hp;
+export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerHead = BOSS_HP_PER_HEAD): MobState {
+  const P = MOB_PROFILES[spawn.kind];
+  const maxHp = isBossKind(spawn.kind) ? bossHpPerHead * delveHeads(heads) : P.hp;
   return {
     id,
     kind: spawn.kind,
@@ -425,12 +535,14 @@ export function createMob(id: string, spawn: MobSpawn, heads: number): MobState 
     y: spawn.y,
     hp: maxHp,
     maxHp,
-    st: spawn.kind === 'spit' ? 'kite' : 'chase',
+    st: RANGED_KINDS.has(spawn.kind) ? 'kite' : 'chase',
     t: 0,
     face: 0,
     ax: spawn.x,
     ay: spawn.y,
     phase: 0,
+    // the Forgeborn's first eruption fires one cooldown into the fight
+    eruptCd: P.eruptEveryMs ?? 0,
   };
 }
 
@@ -505,16 +617,17 @@ export function stepMob(m: MobState, ctx: MobCtx): MobEvent {
   const range = engaged ? P.aggro * 1.5 : P.aggro;
   const near = nearest0 && nearest0.d <= range ? nearest0 : null;
 
-  if (m.kind === 'boss') m.phase = bossPhaseForHp(m.hp / m.maxHp);
+  const isBoss = isBossKind(m.kind);
+  if (isBoss) m.phase = bossPhaseForHp(m.hp / m.maxHp);
   // fury ramp: telegraph/cooldown shorten and volleys widen with the phase.
   // Kept gentle (0.85/0.72, not 0.8/0.62) so the boss's phase 3 stays frantic
   // but still readable/dodgeable for a lone fighter.
-  const fury = m.kind === 'boss' ? [1, 0.85, 0.72][m.phase] : 1;
+  const fury = isBoss ? [1, 0.85, 0.72][m.phase] : 1;
 
   if (!near && (m.st === 'chase' || m.st === 'kite')) return {}; // inert until a player nears
 
-  if (m.kind === 'spit') return stepRanged(m, ctx, P, near, fury);
-  if (m.kind === 'boss') return stepBoss(m, ctx, P, near, fury);
+  if (RANGED_KINDS.has(m.kind)) return stepRanged(m, ctx, P, near, fury);
+  if (isBoss) return stepBoss(m, ctx, P, near, fury);
   return stepMelee(m, ctx, P, near, 1);
 }
 
@@ -543,13 +656,27 @@ function stepMelee(
       moveToward(m, near.x, near.y, P.speed, ctx);
       return {};
     }
-    case 'windup':
-      if (m.t >= P.telegraphMs * fury) {
+    case 'windup': {
+      // the Forgeborn's eruption uses a much longer, fury-independent wind-up (it
+      // reads as an authored, room-wide "get to the wall" threat, not a quick lunge)
+      const tele = m.erupt ? P.eruptTelegraphMs ?? P.telegraphMs : P.telegraphMs * fury;
+      if (m.t >= tele) {
         m.st = 'strike';
         m.t = 0;
       }
       return {}; // the host renders the telegraph from st==='windup' + (ax,ay)
+    }
     case 'strike':
+      if (m.erupt) {
+        // eruption: the boss does NOT lunge — it blasts a big radius centred where
+        // it stood at the wind-up (m.ax,m.ay). Escaped by reaching the room's edges.
+        if (m.t >= (P.eruptStrikeMs ?? P.strikeMs)) {
+          m.st = 'recover';
+          m.t = 0;
+          m.erupt = false;
+        }
+        return { strike: { x: m.ax, y: m.ay, r: P.eruptR ?? P.strikeR } };
+      }
       moveToward(m, m.ax, m.ay, P.lungeSpeed, ctx);
       if (m.t >= P.strikeMs) {
         m.st = 'recover';
@@ -631,6 +758,22 @@ function stepBoss(
 ): MobEvent {
   if (m.st === 'chase' && near) {
     m.face = Math.atan2(near.y - m.y, near.x - m.x);
+    // ERUPTION (the Forgeborn's signature move, ADR-0011): its cooldown ticks down
+    // while it's engaged; when ready it plants where it stands and blasts a big
+    // radius around itself (a long, room-wide wind-up handled in stepMelee), coming
+    // sooner each fury phase. Takes priority over a lunge/volley this frame.
+    if (P.eruptEveryMs) {
+      m.eruptCd = (m.eruptCd ?? 0) - ctx.dt;
+      if (m.eruptCd <= 0) {
+        m.ax = m.x;
+        m.ay = m.y;
+        m.erupt = true;
+        m.st = 'windup';
+        m.t = 0;
+        m.eruptCd = P.eruptEveryMs * fury; // fury<1 → more frequent later
+        return { sfx: 'roar' };
+      }
+    }
     // ranged when the player is far or on a coin-flip each approach; else lunge
     if (near.d > P.reach && (near.d > P.fireRange * 0.6 || ctx.rng() < 0.5)) {
       m.ax = near.x;
@@ -687,3 +830,258 @@ export function applyMobHit(m: MobState, tool: ToolId | undefined, rng: () => nu
   if (dead) m.st = 'dead';
   return { damage, crit, dead };
 }
+
+// =========================================================== the Deep (Stage 2)
+/**
+ * The Deep — the Delve's second Stage (ADR-0011): a molten forge-depth entered by
+ * pressing interact at the boss-door that opens when the Deep Guardian falls. It
+ * is an ordinary ADR-0007 instance like Stage 1 — one fixed authored interior,
+ * scaled Husks, one boss — only reskinned cinder-and-basalt and tuned slightly
+ * harder, ending at the Forgeborn. All of this is pure, node-importable data:
+ * positions in TILE units, no browser globals, no ../config (exactly like Stage 1).
+ */
+export const DEEP_W = 84;
+export const DEEP_H = 24;
+
+/**
+ * The Deep's rooms (west→east), mirroring Stage 1's flow: a SAFE entry chamber →
+ * three Husk rooms → the Forgeborn's boss room (E). Room E is deliberately huge
+ * (22×20) so its edges sit ≥9 tiles from the boss's centre — always a safe wall to
+ * sprint to when the eruption (radius ~6) charges (ADR-0011 §6).
+ */
+export const DEEP_ROOMS: Rect[] = [
+  { x: 2, y: 9, w: 8, h: 7 }, //  A — safe entry        x2..9   y9..15
+  { x: 15, y: 4, w: 11, h: 16 }, // B — Cinder/Ember 1  x15..25 y4..19
+  { x: 31, y: 7, w: 10, h: 10 }, // C — Cinder/Ember 2  x31..40 y7..16
+  { x: 45, y: 4, w: 11, h: 15 }, // D — Cinder/Ember 3  x45..55 y4..18
+  { x: 60, y: 2, w: 22, h: 20 }, // E — Forgeborn room   x60..81 y2..21
+];
+
+/** 2-tile-tall corridors joining consecutive rooms along the y11..12 spine */
+export const DEEP_CORRIDORS: Rect[] = [
+  { x: 10, y: 11, w: 5, h: 2 }, // A↔B (the long safe-entry buffer)
+  { x: 26, y: 11, w: 5, h: 2 }, // B↔C
+  { x: 41, y: 11, w: 4, h: 2 }, // C↔D
+  { x: 56, y: 11, w: 4, h: 2 }, // D↔E
+];
+
+/** where the descending party lands (Deep entry room A); its own EXIT is this tile */
+export const DEEP_ENTRY = { tx: 5, ty: 12 };
+/** the Forgeborn's spawn — centre of the big boss room E (safe edges all around) */
+export const DEEP_BOSS_SPAWN = { x: 70, y: 11 };
+
+/** carve any wall grid from room+corridor rectangles (shared shape with Stage 1) */
+function carveGrid(w: number, h: number, rects: Rect[]): Uint8Array {
+  const g = new Uint8Array(w * h).fill(1);
+  for (const r of rects) {
+    for (let y = r.y; y < r.y + r.h; y++) {
+      for (let x = r.x; x < r.x + r.w; x++) {
+        if (x >= 0 && y >= 0 && x < w && y < h) g[y * w + x] = 0;
+      }
+    }
+  }
+  return g;
+}
+
+const DEEP_WALLS = carveGrid(DEEP_W, DEEP_H, [...DEEP_ROOMS, ...DEEP_CORRIDORS]);
+
+export function isDeepWall(tx: number, ty: number): boolean {
+  if (tx < 0 || ty < 0 || tx >= DEEP_W || ty >= DEEP_H) return true;
+  return DEEP_WALLS[ty * DEEP_W + tx] === 1;
+}
+
+/** the Deep's authored molten dressing (basalt pillars = cover, ember braziers =
+ *  light, lava veins + slag piles = floor decor). Room E kept open with only edge
+ *  pillars so escape lanes to the walls stay clear for the eruption. */
+function buildDeepProps(): DelveProp[] {
+  const p: DelveProp[] = [];
+  const add = (kind: PropKind, tx: number, ty: number) => p.push({ kind, tx, ty });
+  // Room A — safe entry, kept clear; a brazier frames the mouth
+  add('ember_brazier', 3, 10);
+  add('slag_pile', 2, 14);
+  add('slag_pile', 8, 9);
+  add('lava_vein', 12, 11); // A↔B breadcrumb
+  add('lava_vein', 13, 12);
+  // Room B — first Husk room: cover pillars off the spine, braziers flanking
+  add('basalt_pillar', 20, 8);
+  add('basalt_pillar', 22, 15);
+  add('ember_brazier', 18, 6);
+  add('ember_brazier', 24, 17);
+  add('lava_vein', 21, 11);
+  add('slag_pile', 16, 5);
+  add('slag_pile', 25, 18);
+  // Room C — deeper: a colonnade breaks Ember sightlines
+  add('basalt_pillar', 35, 9);
+  add('basalt_pillar', 37, 14);
+  add('ember_brazier', 33, 8);
+  add('lava_vein', 39, 12);
+  add('slag_pile', 32, 15);
+  add('lava_vein', 29, 11); // B↔C breadcrumb
+  // Room D — last Husk room before the boss: staggered pillars
+  add('basalt_pillar', 48, 7);
+  add('basalt_pillar', 52, 11);
+  add('basalt_pillar', 49, 15);
+  add('ember_brazier', 47, 6);
+  add('ember_brazier', 54, 16);
+  add('slag_pile', 46, 5);
+  add('lava_vein', 43, 11); // C↔D breadcrumb
+  // Room E — the Forgeborn's arena: only EDGE pillars + rim braziers; the wide
+  // centre stays open so players can always sprint out of an eruption
+  add('basalt_pillar', 62, 4);
+  add('basalt_pillar', 79, 4);
+  add('basalt_pillar', 62, 19);
+  add('basalt_pillar', 79, 19);
+  add('ember_brazier', 61, 3);
+  add('ember_brazier', 80, 3);
+  add('ember_brazier', 61, 20);
+  add('ember_brazier', 80, 20);
+  add('lava_vein', 66, 6);
+  add('lava_vein', 74, 17);
+  add('slag_pile', 64, 21);
+  add('slag_pile', 77, 2);
+  return p;
+}
+
+export const DEEP_PROPS: DelveProp[] = buildDeepProps();
+
+const BLOCKED_DEEP_TILES = new Set<number>(
+  DEEP_PROPS.filter((p) => PROP_BLOCKS[p.kind]).map((p) => p.ty * DEEP_W + p.tx),
+);
+
+export function isDeepBlocked(tx: number, ty: number): boolean {
+  if (isDeepWall(tx, ty)) return true;
+  return BLOCKED_DEEP_TILES.has(ty * DEEP_W + tx);
+}
+
+/** the Deep's molten ambient light pools (the Forgeborn's arena glows hottest) */
+export const DEEP_LIGHTS: { tx: number; ty: number; color: number; scale: number; alpha: number }[] = [
+  { tx: 70, ty: 11, color: 0xff7a2a, scale: 5.4, alpha: 0.32 }, // Forgeborn arena
+  { tx: 20, ty: 11, color: 0xff5a1e, scale: 3.2, alpha: 0.2 },
+  { tx: 50, ty: 11, color: 0xff5a1e, scale: 3.2, alpha: 0.2 },
+];
+
+/**
+ * The Deep's scaling — the SAME per-head philosophy as Stage 1, tuned slightly
+ * harder (ADR-0011 §4): a touch more Husks per descender and a heavier boss. Count
+ * scales; per-mob danger stays flat (knockdown-only).
+ */
+const CINDER_PER_HEAD = 1.8;
+const EMBER_PER_HEAD = 1.1;
+const FORGEBORN_HP_PER_HEAD = 90;
+
+const CINDER_ANCHORS = [
+  { x: 20, y: 7 }, // B
+  { x: 36, y: 10 }, // C
+  { x: 50, y: 7 }, // D
+  { x: 22, y: 16 }, // B
+  { x: 52, y: 15 }, // D
+  { x: 49, y: 11 }, // D
+  { x: 34, y: 13 }, // C
+];
+const EMBER_ANCHORS = [
+  { x: 19, y: 11 }, // B
+  { x: 53, y: 10 }, // D
+  { x: 38, y: 12 }, // C
+  { x: 47, y: 7 }, // D
+];
+
+/**
+ * The Deep's spawn plan — mirrors planDelveSpawns but with Cinder/Ember Husks, the
+ * Deep's anchors, its slightly-harder coefficients, and the Forgeborn. Scaled to
+ * the DESCENDING headcount by the host at descent (never simulated during Stage 1).
+ */
+export function planDeepSpawns(heads: number, rng: () => number): MobSpawn[] {
+  const n = delveHeads(heads);
+  const out: MobSpawn[] = [];
+  const place = (kind: HuskKind, count: number, anchors: { x: number; y: number }[]) => {
+    for (let i = 0; i < count; i++) {
+      const a = anchors[i % anchors.length];
+      let x = a.x + Math.round(rng() * 2 - 1);
+      let y = a.y + Math.round(rng() * 2 - 1);
+      if (isDeepBlocked(Math.floor(x), Math.floor(y))) {
+        x = a.x;
+        y = a.y;
+      }
+      out.push({ kind, x: x + 0.5, y: y + 0.5 });
+    }
+  };
+  place('cinder', Math.min(14, Math.max(3, Math.round(CINDER_PER_HEAD * n))), CINDER_ANCHORS);
+  place('ember', Math.min(7, Math.max(2, Math.round(EMBER_PER_HEAD * n))), EMBER_ANCHORS);
+  out.push({ kind: 'forgeborn', x: DEEP_BOSS_SPAWN.x + 0.5, y: DEEP_BOSS_SPAWN.y + 0.5 });
+  return out;
+}
+
+// =========================================================== Stage bundles
+/**
+ * Everything the host/scene needs to build and run ONE Stage as an ADR-0007
+ * instance, so both Stages flow through a single code path (ADR-0011): the fixed
+ * interior (walls/props/lights/entry), the scaled spawn plan, per-head boss HP,
+ * its loot ids, the zone name, and (Stage 1 only) the interior tile where the
+ * boss-death door opens. Pure data — the scene multiplies TILE at the render edge.
+ */
+export interface StageDef {
+  stage: 1 | 2;
+  w: number;
+  h: number;
+  rooms: Rect[];
+  corridors: Rect[];
+  entry: { tx: number; ty: number };
+  props: DelveProp[];
+  lights: { tx: number; ty: number; color: number; scale: number; alpha: number }[];
+  /** floor look: the mine→ruins ramp (Stage 1) or a uniform magma palette (the Deep) */
+  palette: 'mine' | 'magma';
+  /** Stage 1 only: rooms/corridors at x ≥ this wear the cooler "ruins" floor */
+  ruinsFromX: number;
+  isWall(tx: number, ty: number): boolean;
+  isBlocked(tx: number, ty: number): boolean;
+  planSpawns(heads: number, rng: () => number): MobSpawn[];
+  bossHpPerHead: number;
+  /** the zone banner shown on entry/descent (English id; i18n translates it) */
+  zone: string;
+  /** the run's participation loot: common (per Husk felled) + rare (on the boss) */
+  loot: { common: ResourceId; rare: ResourceId };
+  /** Stage 1 only: interior tile where the hidden boss-door opens (leads to the Deep) */
+  door?: { tx: number; ty: number };
+}
+
+const STAGE_1: StageDef = {
+  stage: 1,
+  w: DELVE_W,
+  h: DELVE_H,
+  rooms: DELVE_ROOMS,
+  corridors: DELVE_CORRIDORS,
+  entry: DELVE_ENTRY,
+  props: DELVE_PROPS,
+  lights: DELVE_LIGHTS,
+  palette: 'mine',
+  ruinsFromX: RUINS_FROM_X,
+  isWall: isDelveWall,
+  isBlocked: isDelveBlocked,
+  planSpawns: planDelveSpawns,
+  bossHpPerHead: BOSS_HP_PER_HEAD,
+  zone: 'The Delve',
+  loot: { common: HUSK_SHARD, rare: DEEP_CORE },
+  door: { tx: 63, ty: 15 }, // in the Deep Guardian's room E, clear of the boss + props
+};
+
+const STAGE_2: StageDef = {
+  stage: 2,
+  w: DEEP_W,
+  h: DEEP_H,
+  rooms: DEEP_ROOMS,
+  corridors: DEEP_CORRIDORS,
+  entry: DEEP_ENTRY,
+  props: DEEP_PROPS,
+  lights: DEEP_LIGHTS,
+  palette: 'magma',
+  ruinsFromX: DEEP_W, // never — the whole Deep is molten (palette handles the look)
+  isWall: isDeepWall,
+  isBlocked: isDeepBlocked,
+  planSpawns: planDeepSpawns,
+  bossHpPerHead: FORGEBORN_HP_PER_HEAD,
+  zone: 'The Deep',
+  loot: { common: CINDER_SHARD, rare: FORGE_CORE },
+};
+
+export type Stage = 1 | 2;
+export const STAGES: Record<Stage, StageDef> = { 1: STAGE_1, 2: STAGE_2 };

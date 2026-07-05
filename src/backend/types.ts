@@ -294,6 +294,8 @@ export interface MobSnap {
   ax: number;
   ay: number;
   phase: number;
+  /** the Forgeborn's oversized radius-strike is live (ADR-0011) — peers render/adjudicate the big zone */
+  erupt?: boolean;
 }
 export interface ProjSnap {
   id: string;
@@ -307,11 +309,18 @@ export interface ProjSnap {
  * `start`/`snap`/`end`; peers emit `join`/`pos`/`hit`/`down`. In single-player
  * (MockBackend) nothing is on the wire — the lone player IS the host and drives
  * the run locally. `runId` scopes every message to one instance.
+ *
+ * ADR-0011 (chained Stages): `start` carries a `stage` marker (1 = the Delve, 2 =
+ * the Deep). A descent is just a fresh `start` with `stage: 2` and a new `runId`,
+ * accepted by at-the-door party-mates (the relaxed join-guard). `end` gains
+ * `stagecleared`: a Stage-1 boss fell — pay that run's loot and open the door, but
+ * DO NOT tear the instance down (the party lingers to descend or leave). Only
+ * `victory` (the Forgeborn) ends the whole descent.
  */
 export type DungeonMsg =
-  | { t: 'start'; runId: string; host: string; heads: number; roster: string[] }
+  | { t: 'start'; runId: string; host: string; heads: number; roster: string[]; stage?: 1 | 2 }
   | { t: 'snap'; runId: string; mobs: MobSnap[]; projectiles: ProjSnap[] }
-  | { t: 'end'; runId: string; reason: 'victory' | 'wipe' | 'hostleft'; loot?: Inventory }
+  | { t: 'end'; runId: string; reason: 'victory' | 'wipe' | 'hostleft' | 'stagecleared'; loot?: Inventory }
   | { t: 'join'; runId: string; name: string }
   | { t: 'pos'; runId: string; name: string; x: number; y: number }
   | { t: 'hit'; runId: string; mobId: string; by: string; tool?: ItemId }

@@ -20,6 +20,10 @@ export const PROP_TEX: Record<PropKind, string> = {
   mine_rail: 'dp-rail',
   bone_pile: 'dp-bone',
   glyph_stone: 'dp-glyph',
+  basalt_pillar: 'dp-basalt',
+  ember_brazier: 'dp-ember-brazier',
+  lava_vein: 'dp-lava-vein',
+  slag_pile: 'dp-slag',
 };
 
 export const PROP_SIZE: Record<PropKind, { w: number; h: number }> = {
@@ -33,6 +37,10 @@ export const PROP_SIZE: Record<PropKind, { w: number; h: number }> = {
   mine_rail: { w: 16, h: 16 },
   bone_pile: { w: 14, h: 10 },
   glyph_stone: { w: 16, h: 18 },
+  basalt_pillar: { w: 16, h: 22 },
+  ember_brazier: { w: 14, h: 16 },
+  lava_vein: { w: 16, h: 16 },
+  slag_pile: { w: 16, h: 10 },
 };
 
 /** flat floor decor (drawn at floor depth, centred on the tile) vs upright props
@@ -48,6 +56,10 @@ export const PROP_FLAT: Record<PropKind, boolean> = {
   mine_rail: true,
   bone_pile: true,
   glyph_stone: false,
+  basalt_pillar: false,
+  ember_brazier: false,
+  lava_vein: true,
+  slag_pile: true,
 };
 
 type Ctx = CanvasRenderingContext2D;
@@ -165,6 +177,64 @@ function drawGlyph(ctx: Ctx): void {
   R(ctx, 6, 7, 1, 1, '#b49aff'); // hot node
 }
 
+// -------------------------------------------------------- the Deep (molten props)
+function drawBasaltPillar(ctx: Ctx): void {
+  R(ctx, 2, 20, 12, 2, '#140f0d'); // base slab
+  R(ctx, 3, 4, 10, 18, '#241a16'); // body
+  R(ctx, 3, 4, 2, 18, '#3a2a22'); // left-lit facet
+  R(ctx, 11, 4, 2, 18, '#140f0d'); // right shade facet
+  R(ctx, 4, 0, 8, 5, '#3a2a22'); // capital
+  R(ctx, 4, 0, 8, 1, '#6a4a3a'); // capital rim
+  R(ctx, 3, 4, 1, 18, '#6a4a3a'); // lit rim edge
+  // molten veins bleeding up the shaft (the one emissive feature)
+  R(ctx, 7, 5, 1, 14, '#ff6a1e');
+  R(ctx, 6, 10, 2, 1, '#ff6a1e');
+  R(ctx, 8, 14, 2, 1, '#ffb060');
+  R(ctx, 7, 7, 1, 4, '#ffd27a');
+  R(ctx, 5, 16, 1, 1, '#ff8c2a');
+  R(ctx, 9, 12, 1, 1, '#ff8c2a');
+}
+
+function drawEmberBrazier(ctx: Ctx): void {
+  R(ctx, 3, 11, 2, 5, '#2a2422'); // legs
+  R(ctx, 9, 11, 2, 5, '#2a2422');
+  R(ctx, 6, 13, 2, 3, '#2a2422');
+  R(ctx, 1, 7, 12, 4, '#4a3a30'); // bowl
+  R(ctx, 1, 10, 12, 1, '#241a16'); // under-shade
+  R(ctx, 1, 7, 12, 1, '#6a4a3a'); // bowl rim-light
+  R(ctx, 2, 5, 10, 2, '#c43a12'); // ember bed
+  R(ctx, 4, 2, 6, 3, '#ff6a1e'); // flames
+  R(ctx, 5, 0, 4, 2, '#ff9a4d');
+  R(ctx, 6, 0, 2, 1, '#ffd27a'); // hot tip
+  R(ctx, 6, 4, 2, 1, '#ffe0a0'); // hot core
+}
+
+function drawLavaVein(ctx: Ctx): void {
+  // a branching crack of glowing lava set into the basalt floor
+  R(ctx, 2, 7, 12, 2, '#1a120c'); // crack channel
+  R(ctx, 4, 4, 2, 8, '#1a120c');
+  R(ctx, 9, 8, 3, 5, '#1a120c');
+  R(ctx, 3, 8, 10, 1, '#ff5a1e'); // glowing seam
+  R(ctx, 5, 5, 1, 6, '#ff5a1e');
+  R(ctx, 10, 9, 1, 3, '#ff5a1e');
+  R(ctx, 6, 8, 4, 1, '#ffb060'); // hot centre
+  R(ctx, 5, 7, 1, 1, '#ffd27a');
+  R(ctx, 11, 9, 1, 1, '#ffd27a');
+}
+
+function drawSlagPile(ctx: Ctx): void {
+  R(ctx, 2, 4, 3, 3, '#2a201a'); // chunks
+  R(ctx, 5, 6, 4, 2, '#1a120c');
+  R(ctx, 9, 3, 3, 4, '#2a201a');
+  R(ctx, 12, 5, 2, 3, '#1a120c');
+  R(ctx, 2, 4, 2, 1, '#4a3428'); // highlights
+  R(ctx, 9, 3, 2, 1, '#4a3428');
+  R(ctx, 4, 6, 1, 1, '#ff6a1e'); // ember glints in the cooling slag
+  R(ctx, 10, 5, 1, 1, '#ff8c2a');
+  R(ctx, 7, 7, 1, 1, '#ff6a1e');
+  R(ctx, 3, 8, 8, 1, '#241a16'); // shade base
+}
+
 const DRAW: Record<PropKind, (ctx: Ctx) => void> = {
   support_beam: drawBeam,
   obsidian_pillar: drawPillar,
@@ -176,6 +246,10 @@ const DRAW: Record<PropKind, (ctx: Ctx) => void> = {
   mine_rail: drawRail,
   bone_pile: drawBone,
   glyph_stone: drawGlyph,
+  basalt_pillar: drawBasaltPillar,
+  ember_brazier: drawEmberBrazier,
+  lava_vein: drawLavaVein,
+  slag_pile: drawSlagPile,
 };
 
 /** draw one prop (exported so it can be rasterized/previewed outside the browser) */
