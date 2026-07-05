@@ -279,6 +279,8 @@ export class GameScene extends Phaser.Scene {
   private chatFocused = false;
   private placing: StructureId | null = null;
   private ghost: Phaser.GameObjects.Image | null = null;
+  /** per-tile green/red footprint overlay while placing — shows WHICH tile blocks */
+  private ghostCells: Phaser.GameObjects.Graphics | null = null;
   private lastPosSent = 0;
   private lastSwingAt = 0;
   private currentZone = '';
@@ -2383,6 +2385,8 @@ export class GameScene extends Phaser.Scene {
     this.ghost?.destroy();
     this.ghost = this.objImage(0, 0, `st_${item}`);
     this.ghost?.setAlpha(0.6).setDepth(99999);
+    this.ghostCells?.destroy();
+    this.ghostCells = this.add.graphics().setDepth(99998);
     bus.emit('place-mode', true);
     bus.emit('toast', t.toast.placing(ITEMS[item].name), 'info');
   }
@@ -2391,6 +2395,8 @@ export class GameScene extends Phaser.Scene {
     this.placing = null;
     this.ghost?.destroy();
     this.ghost = null;
+    this.ghostCells?.destroy();
+    this.ghostCells = null;
     bus.emit('place-mode', false);
   }
 
@@ -2404,24 +2410,45 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
+  /**
+   * Why a single tile refuses `item`, or null if it's clear. Shared by the
+   * whole-footprint check and the per-tile placement overlay so the ghost's
+   * red cells always match what the server would reject.
+   */
+  private tileBlockReason(item: StructureId, fx: number, fy: number): 'oob' | 'structure' | 'node' | 'terrain' | null {
+    if (fx < 0 || fy < 0 || fx >= MAP_W || fy >= MAP_H) return 'oob';
+    if (this.structuresByTile.has(`${fx},${fy}`)) return 'structure';
+    if (this.nodesByTile.has(`${fx},${fy}`)) return 'node';
+    const b = this.world.blocked[fy * MAP_W + fx];
+    const onWater = !!ITEMS[item].onWater;
+    if (onWater ? b !== 1 : b !== 0) return 'terrain';
+    return null;
+  }
+
   private canPlaceLocal(item: StructureId, tx: number, ty: number): boolean {
     // ADR-0008: a Building claims its whole footprint — EVERY tile must be free,
     // in-bounds, and the right terrain, or the placement is refused (first on the
     // footprint wins). A 1×1 Prop reduces to the old single-tile check.
     const { w, h } = footprint(item);
-    const onWater = !!ITEMS[item].onWater;
     for (let dy = 0; dy < h; dy++) {
       for (let dx = 0; dx < w; dx++) {
-        const fx = tx + dx;
-        const fy = ty + dy;
-        if (fx < 0 || fy < 0 || fx >= MAP_W || fy >= MAP_H) return false;
-        if (this.structuresByTile.has(`${fx},${fy}`)) return false;
-        if (this.nodesByTile.has(`${fx},${fy}`)) return false;
-        const b = this.world.blocked[fy * MAP_W + fx];
-        if (onWater ? b !== 1 : b !== 0) return false;
+        if (this.tileBlockReason(item, tx + dx, ty + dy) !== null) return false;
       }
     }
     return true;
+  }
+
+  /** the type name of the first Resource Node inside `item`'s footprint at (tx,ty), or null */
+  private blockingNodeName(item: StructureId, tx: number, ty: number): string | null {
+    const { w, h } = footprint(item);
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const id = this.nodesByTile.get(`${tx + dx},${ty + dy}`);
+        const view = id ? this.nodes.get(id) : undefined;
+        if (view) return NODE_TYPES[view.state.type].name;
+      }
+    }
+    return null;
   }
 
   /** the nearest placed Structure whose footprint sits within reach of the Player */
@@ -2550,10 +2577,17 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if (!this.canPlaceLocal(item, tx, ty)) {
-      bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
+      this.toastPlaceRefused(item, tx, ty);
       return;
     }
     this.placeAtTile(item, tx, ty);
+  }
+
+  /** pick the most helpful "can't build" message: name the blocking Node if any */
+  private toastPlaceRefused(item: StructureId, tx: number, ty: number): void {
+    const node = this.blockingNodeName(item, tx, ty);
+    if (node) bus.emit('toast', t.toast.blockedByNode(node), 'bad');
+    else bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
   }
 
   private doPlace(item: StructureId, tx: number, ty: number, text?: string): void {
@@ -2570,7 +2604,7 @@ export class GameScene extends Phaser.Scene {
       } else if (result.reason === 'OCCUPIED') {
         bus.emit('toast', t.toast.alreadyBuiltHere, 'bad');
       } else if (result.reason === 'INVALID') {
-        bus.emit('toast', ITEMS[item].onWater ? t.toast.bridgesOnWater : t.toast.cantBuildTile, 'bad');
+        this.toastPlaceRefused(item, tx, ty);
       } else {
         this.exitPlaceMode();
       }
@@ -3762,6 +3796,22 @@ export class GameScene extends Phaser.Scene {
       const { w, h } = footprint(this.placing);
       this.ghost.setPosition((tx + w / 2) * TILE, (ty + h) * TILE);
       this.ghost.setTint(this.canPlaceLocal(this.placing, tx, ty) ? 0x88ff88 : 0xff6666);
+      // per-tile overlay: paint each footprint cell green (clear) or red (blocked)
+      // so the exact bush/tile that refuses the build is visible, not just a hunch
+      if (this.ghostCells) {
+        this.ghostCells.clear();
+        for (let dy = 0; dy < h; dy++) {
+          for (let dx = 0; dx < w; dx++) {
+            const clear = this.tileBlockReason(this.placing, tx + dx, ty + dy) === null;
+            this.ghostCells.fillStyle(clear ? 0x33dd55 : 0xdd3333, 0.35);
+            this.ghostCells.lineStyle(1, clear ? 0x33dd55 : 0xdd3333, 0.9);
+            const px = (tx + dx) * TILE;
+            const py = (ty + dy) * TILE;
+            this.ghostCells.fillRect(px, py, TILE, TILE);
+            this.ghostCells.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
+          }
+        }
+      }
     }
 
     // X dismantles the nearest Structure (never while placing/fishing/in the Delve)
