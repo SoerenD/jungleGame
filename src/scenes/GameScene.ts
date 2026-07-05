@@ -2411,6 +2411,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * Top-left placement anchor for `item` from the tile the Player faces.
+   * The stored footprint still anchors top-left and grows +x/+y (ADR-0008),
+   * but for AIMING we centre the block on the faced tile so it lands where
+   * you point instead of always spilling down-right. A 1×1 Prop shifts by 0,
+   * so props are unchanged; only Buildings recentre.
+   */
+  private footprintAnchor(item: StructureId): { tx: number; ty: number } {
+    const { tx, ty } = this.facingTile();
+    const { w, h } = footprint(item);
+    return { tx: tx - Math.floor(w / 2), ty: ty - Math.floor(h / 2) };
+  }
+
+  /**
    * Why a single tile refuses `item`, or null if it's clear. Shared by the
    * whole-footprint check and the per-tile placement overlay so the ghost's
    * red cells always match what the server would reject.
@@ -2514,7 +2527,7 @@ export class GameScene extends Phaser.Scene {
 
   private confirmPlace(): void {
     if (!this.placing) return;
-    const { tx, ty } = this.facingTile();
+    const { tx, ty } = this.footprintAnchor(this.placing);
     this.placeAtTile(this.placing, tx, ty);
   }
 
@@ -3790,9 +3803,10 @@ export class GameScene extends Phaser.Scene {
       this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined);
     }
 
-    // placement ghost — centred over the whole footprint (ADR-0008)
+    // placement ghost — centred over the whole footprint (ADR-0008), aimed at
+    // the faced tile via footprintAnchor so the preview matches confirmPlace
     if (this.placing && this.ghost) {
-      const { tx, ty } = this.facingTile();
+      const { tx, ty } = this.footprintAnchor(this.placing);
       const { w, h } = footprint(this.placing);
       this.ghost.setPosition((tx + w / 2) * TILE, (ty + h) * TILE);
       this.ghost.setTint(this.canPlaceLocal(this.placing, tx, ty) ? 0x88ff88 : 0xff6666);

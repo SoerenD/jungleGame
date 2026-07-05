@@ -14,7 +14,12 @@ Considered Options), we generalize the structure model itself.
    campfire). Footprints are data-driven so **future Buildings drop in without engine changes**.
 2. **Footprint-claim.** Placement requires **every** footprint tile free and unclaimed; the conflict
    rule *"first placement on a tile wins"* becomes *"first placement on the **footprint** wins."*
-   Collision bodies span the whole footprint.
+   Collision bodies span the whole footprint. The stored anchor is the footprint's **top-left** tile
+   and it grows **+x/+y** — the persisted/DB/server model. **Aiming is separate from storage:** the
+   *facing* placement flow centres the footprint on the tile the Player faces (`footprintAnchor`
+   shifts the faced tile by `-⌊w/2⌋,-⌊h/2⌋` before handing a top-left anchor to the server), so a
+   Building lands where you point instead of spilling down-right. A 1×1 Prop shifts by 0 — unchanged.
+   Drag-to-place (no live ghost) keeps the cursor tile as the top-left corner.
 3. **Free dismantle, no ownership.** **Any** Player may dismantle **any** Structure (matching the
    lock-free crate), reclaiming its **full** crafting cost **to the dismantler**; server-ordered.
    Structures are **no longer permanent** — a misplacement is undoable.
@@ -50,3 +55,6 @@ Considered Options), we generalize the structure model itself.
   building and rebuilding.
 - **CONTEXT revised:** Structure term (Building/Prop), the conflict rule (footprint-claim), and
   "no longer permanent."
+- **Placement feedback:** the ghost paints each footprint tile green (clear) / red (blocked) and a
+  refused build names the blocking Resource Node — a multi-tile footprint over small bush/stump nodes
+  otherwise reads as "open ground won't build" (see the placement-feedback change).
