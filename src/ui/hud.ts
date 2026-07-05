@@ -16,6 +16,8 @@ let quest: QuestState | null = null;
 let seal: SealState | null = null;
 let journey: JourneyState | null = null;
 let placingNow = false;
+/** the open craft tab, mapped to the recipe kind — defaults to Tools & Weapons (B4) */
+let craftTab: 'tool' | 'structure' | 'consumable' = 'tool';
 let fightTimer: number | undefined;
 let buffTimer: number | undefined;
 /** fog-of-war layer for the minimap: 1px per chunk, rebuilt on fog events */
@@ -118,6 +120,11 @@ export function initHud(name: string, muted: boolean): void {
     <div id="place-hint">${t.hint.place}</div>
     <div id="craft-panel" class="panel" data-testid="craft-panel">
       <h3>${t.panels.crafting}</h3>
+      <div id="craft-tabs" data-testid="craft-tabs">
+        <button class="craft-tab" data-tab="tool" data-testid="craft-tab-tool">${t.recipe.tabTool}</button>
+        <button class="craft-tab" data-tab="structure" data-testid="craft-tab-structure">${t.recipe.tabStructure}</button>
+        <button class="craft-tab" data-tab="consumable" data-testid="craft-tab-consumable">${t.recipe.tabConsumable}</button>
+      </div>
       <div id="recipe-list"></div>
     </div>
     <div id="crate-panel" class="panel" data-testid="crate-panel">
@@ -192,6 +199,10 @@ export function initHud(name: string, muted: boolean): void {
 
   el('btn-craft').onclick = () => togglePanel('craft-panel');
   el('btn-inv').onclick = () => togglePanel('inventory-panel');
+  // craft-panel tabs (B4): click switches the visible recipe kind
+  for (const tabBtn of Array.from(document.querySelectorAll<HTMLElement>('#craft-tabs .craft-tab'))) {
+    tabBtn.onclick = () => setCraftTab(tabBtn.dataset.tab as typeof craftTab);
+  }
   el('btn-mute').onclick = () => bus.emit('toggle-mute');
   el('btn-settings').onclick = () => togglePanel('settings-panel');
   el('settings-close').onclick = () => el('settings-panel').classList.remove('open');
@@ -998,15 +1009,40 @@ function ingChip(id: ItemId, count: number, have: number, tool = false): HTMLEle
   return chip;
 }
 
+/** switch the open craft tab (B4) and re-render; highlights the active tab */
+function setCraftTab(tab: 'tool' | 'structure' | 'consumable'): void {
+  craftTab = tab;
+  renderRecipes();
+}
+
+/** is a recipe craftable right now with the current inventory? */
+function recipeCraftable(r: (typeof RECIPES)[number]): boolean {
+  if (r.requiresTool && (inv[r.requiresTool] ?? 0) <= 0) return false;
+  for (const [res, count] of Object.entries(r.cost)) {
+    if ((inv[res as ItemId] ?? 0) < (count as number)) return false;
+  }
+  return true;
+}
+
 /**
  * The crafting menu is image-driven: every recipe is a card showing the output
  * sprite and its ingredient icons (with count badges). The whole card crafts on
- * click; names and full costs live in the hover tooltip.
+ * click; names and full costs live in the hover tooltip. Recipes are split into
+ * three tabs by `kind` (B4), craftable-first within the open tab.
  */
 function renderRecipes(): void {
   const box = el('recipe-list');
   box.innerHTML = '';
-  for (const r of RECIPES) {
+  // reflect the active tab on the buttons
+  for (const tabBtn of Array.from(document.querySelectorAll<HTMLElement>('#craft-tabs .craft-tab'))) {
+    tabBtn.classList.toggle('active', tabBtn.dataset.tab === craftTab);
+  }
+  // this tab's recipes, craftable ones sorted ahead of the rest (stable order)
+  const recipes = RECIPES.map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.kind === craftTab)
+    .sort((a, b) => Number(recipeCraftable(b.r)) - Number(recipeCraftable(a.r)) || a.i - b.i)
+    .map(({ r }) => r);
+  for (const r of recipes) {
     const def = ITEMS[r.output];
     let craftable = true;
     const costText: string[] = [];

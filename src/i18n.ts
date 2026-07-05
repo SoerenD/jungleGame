@@ -74,6 +74,12 @@ const ZONE_DE: Record<string, string> = {
   'The Delve': 'Der Schacht',
   'Jungle World': 'Dschungelwelt',
   'Ancient Tablet': 'Uralte Steintafel',
+  // frontier zones (ADR-0009)
+  'Highland Crags': 'Hochland-Klippen',
+  'Highland Crags Summit': 'Gipfel der Hochland-Klippen',
+  'Overgrown Temple': 'Überwucherter Tempel',
+  'Mangrove Coast': 'Mangrovenküste',
+  'The Cavern Mouth': 'Der Höhlenschlund',
 };
 
 /** translate a zone id for display; internal comparisons keep the English id */
@@ -85,7 +91,7 @@ export function zoneName(en: string): string {
 
 const en = {
   controlsHelp:
-    'WASD/arrows move · E interact (hold to keep swinging) · C craft · I inventory · T chat · M mute · wheel zoom',
+    'WASD/arrows move · E interact / left-click attack (hold to keep swinging) · X dismantle · C craft · I inventory · T chat · M mute · wheel zoom',
   online: (n: number) => `Online (${n})`,
   youSuffix: ' (you)',
   builtBy: (who: string, item: string) => `${who} built a ${item}`,
@@ -196,6 +202,10 @@ const en = {
     kindTool: 'tool',
     kindStructure: 'structure',
     kindConsumable: 'consumable',
+    // craft-panel tabs (mapped to the recipe kind)
+    tabTool: 'Tools & Weapons',
+    tabStructure: 'Buildings & Props',
+    tabConsumable: 'Consumables',
     ingToolTip: (name: string, have: number) => `needs ${name} in your pack (not consumed) — you have ${have}`,
     ingTip: (name: string, count: number, have: number) => `${name} — need ${count}, you have ${have}`,
   },
@@ -292,6 +302,10 @@ const en = {
     placed: (name: string) => `${name} placed!`,
     hammockSet: 'Your Hammock is set — Exhaustion and login bring you here.',
     alreadyBuiltHere: 'Someone already built here — first placement wins. Item kept.',
+    dismantled: (name: string, gained: string) => `${name} dismantled — ${gained}`,
+    dismantledBare: (name: string) => `${name} dismantled.`,
+    dismantleConfirm: (who: string, name: string) => `Press X again to dismantle ${who}'s ${name} (full refund to you).`,
+    vistaRevealed: (zone: string) => `From the ${zone} vista the surrounding lands come into view.`,
     shaftSealed: 'The shaft is sealed by rubble — an Ancient Pickaxe could break it.',
     rubbleCollapses: 'The rubble collapses — the Delve lies open!',
     descendWithOthers: (n: number) => `You descend into the Delve with ${n} other${n === 1 ? '' : 's'}...`,
@@ -358,7 +372,7 @@ type Strings = typeof en;
 
 const de: Strings = {
   controlsHelp:
-    'WASD/Pfeile bewegen · E interagieren (halten zum Weiterschlagen) · C herstellen · I Inventar · T Chat · M stumm · Rad zoomen',
+    'WASD/Pfeile bewegen · E interagieren / Linksklick angreifen (halten zum Weiterschlagen) · X abbauen · C herstellen · I Inventar · T Chat · M stumm · Rad zoomen',
   online: (n) => `Online (${n})`,
   youSuffix: ' (du)',
   builtBy: (who, item) => `${who} hat ${item} gebaut`,
@@ -467,6 +481,9 @@ const de: Strings = {
     kindTool: 'Werkzeug',
     kindStructure: 'Bauwerk',
     kindConsumable: 'Verbrauchsgut',
+    tabTool: 'Werkzeuge & Waffen',
+    tabStructure: 'Gebäude & Deko',
+    tabConsumable: 'Verbrauchsgüter',
     ingToolTip: (name, have) => `benötigt ${name} im Rucksack (wird nicht verbraucht) — du hast ${have}`,
     ingTip: (name, count, have) => `${name} — benötigt ${count}, du hast ${have}`,
   },
@@ -563,6 +580,10 @@ const de: Strings = {
     placed: (name) => `${name} platziert!`,
     hammockSet: 'Deine Hängematte steht — Erschöpfung und Anmeldung bringen dich hierher.',
     alreadyBuiltHere: 'Hier hat schon jemand gebaut — die erste Platzierung gewinnt. Item behalten.',
+    dismantled: (name, gained) => `${name} abgebaut — ${gained}`,
+    dismantledBare: (name) => `${name} abgebaut.`,
+    dismantleConfirm: (who, name) => `Drücke erneut X, um ${who}s ${name} abzubauen (volle Erstattung an dich).`,
+    vistaRevealed: (zone) => `Vom Aussichtspunkt ${zone} kommt das umliegende Land in Sicht.`,
     shaftSealed: 'Der Schacht ist von Geröll versiegelt — eine Uralte Spitzhacke könnte es aufbrechen.',
     rubbleCollapses: 'Das Geröll bricht zusammen — der Schacht liegt offen!',
     descendWithOthers: (n) => `Du steigst mit ${n} ${n === 1 ? 'anderen' : 'anderen'} in den Schacht hinab...`,

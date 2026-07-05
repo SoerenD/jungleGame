@@ -90,14 +90,14 @@ import {
   type MobKind,
   type MobState,
 } from '../content/dungeon';
-import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
+import { footprint, isBuilding, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
 import { MOB_FRAME, MOB_TEX } from '../mobSprites';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import { showIntro } from '../ui/intro';
-import { t } from '../i18n';
+import { t, zoneName } from '../i18n';
 
 type OkJoin = Extract<JoinResult, { ok: true }>;
 
@@ -118,6 +118,21 @@ interface WorldData {
   guardianAltar: { tx: number; ty: number };
   sealGate: { tx: number; ty: number }[];
   welcomeStone: { tx: number; ty: number };
+  /** faux-elevation regions (ADR-0009) — omitted on pre-frontier maps */
+  elevation?: { regions: ElevationRegion[] };
+}
+
+/** a faux-elevation terrace (ADR-0009): plateau + cliff faces + ramp + a fog-lifting vista */
+interface ElevationRegion {
+  name: string;
+  /** terrace level (1 = first plateau, 2 = a plateau stacked on it, …); defaults to 1 */
+  level?: number;
+  bounds: { x: number; y: number; w: number; h: number };
+  plateau: [number, number][];
+  faces: [number, number][];
+  ramp: [number, number][];
+  vista: { tx: number; ty: number };
+  vistaChunkRadius: number;
 }
 
 interface FishingCast {
@@ -239,6 +254,10 @@ const DELVE_DEPTH_FLOOR = 900_010;
 const DELVE_DEPTH_ENTITY = 950_000; // + y (px) so player/mobs y-sort together
 const DELVE_DEPTH_PROJ = 970_000;
 
+/** an entity on a plateau adds this to its depth so it sorts above ANY base entity
+ *  (bigger than the whole map's y-range, so overlaps at the cliff edge sort right) */
+const ELEV_DEPTH_BONUS = MAP_H * TILE;
+
 export class GameScene extends Phaser.Scene {
   private backend!: Backend;
   private me!: OkJoin;
@@ -251,6 +270,8 @@ export class GameScene extends Phaser.Scene {
   private nodeHoverLabel: Phaser.GameObjects.Text | null = null;
   private structuresByTile = new Map<string, Structure>();
   private structureIds = new Set<string>();
+  /** per-structure display + collision objects, kept so a dismantle can tear them down */
+  private structureViews = new Map<string, { objects: Phaser.GameObjects.GameObject[]; bodies: Phaser.GameObjects.Rectangle[]; glowImg: Phaser.GameObjects.Image | null }>();
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   private remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
@@ -373,6 +394,10 @@ export class GameScene extends Phaser.Scene {
   private explored = new Set<number>();
   private readonly fogChunksW = Math.ceil(MAP_W / FOG_CHUNK);
   private readonly fogChunksH = Math.ceil(MAP_H / FOG_CHUNK);
+  // ---- faux-elevation (ADR-0009): each raised tile → its terrace level (1, 2, …)
+  private highGround = new Map<string, number>();
+  private vistaRegions: ElevationRegion[] = [];
+  private vistaLifted = new Set<string>();
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
@@ -385,7 +410,12 @@ export class GameScene extends Phaser.Scene {
     e: Phaser.Input.Keyboard.Key;
     enter: Phaser.Input.Keyboard.Key;
     esc: Phaser.Input.Keyboard.Key;
+    dismantle: Phaser.Input.Keyboard.Key;
   };
+  /** id of a Building someone else placed, armed for a confirming second X-press */
+  private dismantleArmed: { id: string; until: number } | null = null;
+  /** whether the alt-fire mouse button (LMB) is currently held over the canvas (B1) */
+  private lmbDown = false;
 
   constructor() {
     super('GameScene');
@@ -589,6 +619,20 @@ export class GameScene extends Phaser.Scene {
     this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
       cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 1 / 1.15 : 1.15), 1.25, 5));
     });
+    // B1: the left mouse button is alternative fire for the held-E swing loop
+    // (harvest + combat) — held-to-repeat at weapon cadence. These fire only for
+    // pointers over the Phaser canvas, so a click on the DOM HUD/craft panel is
+    // never a swing; the swing gate in update() further restricts it to
+    // `swing: true` actions (one-shot interactions stay E-only).
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
+      if (p.leftButtonDown()) this.lmbDown = true;
+    });
+    this.input.on('pointerup', (p: Phaser.Input.Pointer) => {
+      if (!p.leftButtonDown()) this.lmbDown = false;
+    });
+    // releasing outside the canvas, or losing the pointer, must also drop the hold
+    this.input.on('pointerupoutside', () => (this.lmbDown = false));
+    this.input.on('gameout', () => (this.lmbDown = false));
 
     // animated water: repaint the water tile inside the shared canvas tileset
     const tilesTex = this.textures.get(TILESET.key);
@@ -620,6 +664,7 @@ export class GameScene extends Phaser.Scene {
       e: kb.addKey('E'),
       enter: kb.addKey('ENTER'),
       esc: kb.addKey('ESC'),
+      dismantle: kb.addKey('X'),
     };
 
     this.inventory = { ...this.me.inventory };
@@ -695,6 +740,8 @@ export class GameScene extends Phaser.Scene {
       })
       .setDepth(894_000);
 
+    this.buildElevation();
+    this.buildWaterfall();
     this.initFog();
     this.wireDragPlace();
     this.buildDelveEntrance();
@@ -735,6 +782,7 @@ export class GameScene extends Phaser.Scene {
       this.addStructure(s);
       if (s.placedBy !== this.me.name) bus.emit('toast', t.builtBy(s.placedBy, ITEMS[s.type].name), 'info');
     });
+    this.backend.on('structureRemoved', (id: string) => this.removeStructure(id));
     this.backend.on('crateChanged', (crateId: string, contents: Inventory) => {
       bus.emit('crate-changed', crateId, contents);
     });
@@ -1556,6 +1604,182 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ------------------------------------------------------------ faux-elevation (ADR-0009)
+
+  /**
+   * The reusable elevation primitive (faux-3D, ADR-0009): for each raised region
+   * draw a base shadow, tall drawn CLIFF FACES hung below every front-facing edge
+   * (real height, not a flat band), and a landmark on the peak so occlusion sells
+   * the raise; record the plateau tiles so entities on top get the depth bump.
+   */
+  private buildElevation(): void {
+    const regions = this.world.elevation?.regions ?? [];
+    // pass 1: record each tile's terrace level (higher wins) and grass over the top
+    for (const r of regions) {
+      const lvl = r.level ?? 1;
+      for (const [tx, ty] of r.plateau) {
+        const key = `${tx},${ty}`;
+        if (lvl > (this.highGround.get(key) ?? 0)) this.highGround.set(key, lvl);
+        // a GRASSY terrace, not a stone court — this is what stops it reading as an
+        // arena. Purely visual (walkability is unchanged); no map regen.
+        const g = (tx * 7 + ty * 13) % 6;
+        this.groundLayer.putTileAt(g === 0 ? 10 : g === 1 ? 11 : 1, tx, ty);
+      }
+    }
+    const levelAt = (tx: number, ty: number) => this.highGround.get(`${tx},${ty}`) ?? 0;
+    const maxLevel = regions.reduce((m, r) => Math.max(m, r.level ?? 1), 1);
+    // pass 2: per terrace — base shadow, cliff faces on drops, summit stones, vista
+    for (const r of regions) {
+      const lvl = r.level ?? 1;
+      const cx = (r.bounds.x + r.bounds.w / 2) * TILE;
+      const cy = (r.bounds.y + r.bounds.h) * TILE;
+      const shadow = this.add.image(cx, cy + 2, 'shadow');
+      shadow.setDisplaySize(r.bounds.w * TILE * 1.15, r.bounds.h * TILE * 0.7);
+      shadow.setAlpha(0.34);
+      shadow.setDepth(-4); // above the ground/decor layers, below world objects
+      // tall cliff faces only where the south neighbour is walkable AND lower (a real
+      // drop): the front edge of each terrace — never over its own top or a side wall
+      for (const [tx, ty] of r.faces) {
+        if (this.world.blocked[(ty + 1) * MAP_W + tx] === 2) continue; // south is cliff — no drop
+        if (levelAt(tx, ty + 1) >= lvl) continue; // south is same/higher terrain — no drop
+        this.drawCliffFace((tx + 0.5) * TILE, (ty + 1) * TILE);
+      }
+      // a ring of standing stones on the SUMMIT (highest terrace) — a highland cairn,
+      // clearly decorative, not harvestable. The depth bump puts a Player up top
+      // behind-and-above them, and that occlusion is what reads as height.
+      if (lvl === maxLevel) {
+        for (const [dx, dy] of [[0, 0], [-2, -1], [2, -1], [-1, 1], [1, 1]] as [number, number][]) {
+          const stx = r.vista.tx + dx;
+          const sty = r.vista.ty + dy;
+          if (levelAt(stx, sty) < lvl) continue; // keep them on the summit top
+          const sx = (stx + 0.5) * TILE;
+          const sy = (sty + 1) * TILE;
+          const mark = this.objImage(sx, sy, 'ruin_pillar');
+          if (mark) {
+            mark.setScale(dx === 0 && dy === 0 ? 1 : 0.8);
+            mark.setDepth(sy + lvl * ELEV_DEPTH_BONUS);
+            this.addShadow(sx, sy - 1, 13).setDepth(lvl * ELEV_DEPTH_BONUS + 1);
+          }
+        }
+      }
+      this.vistaRegions.push(r);
+    }
+  }
+
+  /** a tall drawn cliff face hung DOWN from a raised edge at screen-y `topY`;
+   *  sorts at the drop line so anything to its south (in front) draws over it */
+  private drawCliffFace(px: number, topY: number): void {
+    const face = this.add.image(px, topY, 'cliff_face');
+    face.setOrigin(0.5, 0);
+    face.setDepth(topY);
+  }
+
+  /**
+   * The northern cliff range gets drawn faces; the Thundering Falls itself is a
+   * side-on animated waterfall (user-supplied `user-falls.png`, frames 0-3). The
+   * source river above the crest is painted over with the band's stone tile so the
+   * falls appear to burst straight out of the cliff, then two scaled columns of the
+   * animation fill the drop from the lip down to the plunge pool, with rising mist.
+   * NOTE: the falls sheet's provenance is unconfirmed — see assetConfig / CREDITS.md.
+   */
+  private buildWaterfall(): void {
+    const band = 6;
+    const cliffBottomY = band * TILE;
+    // the authored water column (generate-map fillRect 96,0,9,22): the waterfall
+    // ART covers this stretch, so skip the procedural cliff faces across it (+margin)
+    const colX0 = 96;
+    const colW = 9;
+    const midX = (colX0 + colW / 2) * TILE;
+    const skipLo = colX0 - 3;
+    const skipHi = colX0 + colW + 3;
+    for (let tx = 0; tx < MAP_W; tx++) {
+      if (tx >= skipLo && tx < skipHi) continue; // the waterfall art frames this stretch
+      const above = this.world.blocked[(band - 1) * MAP_W + tx];
+      const at = this.world.blocked[band * MAP_W + tx];
+      if (above === 2 && at !== 2) this.drawCliffFace((tx + 0.5) * TILE, cliffBottomY);
+    }
+    // the source river above the crest is hidden: paint the band's stone tile
+    // (index 6) over the water column so the falls burst straight out of the cliff.
+    for (let ty = 0; ty < band; ty++) {
+      for (let tx = colX0; tx < colX0 + colW; tx++) {
+        this.groundLayer.putTileAt(6, tx, ty)?.setCollision(true);
+      }
+    }
+    // the falls: the user-supplied side-on animation (user-falls.png). The sheet
+    // is a 6×2 grid of 96×193 cells; frames 0-3 are the four phases of a full
+    // crest→pool drop. Two columns, scaled to fill the 9-wide water column from
+    // the cliff lip down to the plunge pool (~ty24).
+    const T2 = TILE * 2; // the drop reaches the pool in `rows` two-tile steps
+    const rows = 9;
+    const dropTop = band * TILE; // crest at the cliff lip
+    const dropBottom = dropTop + rows * T2; // reaches the plunge pool
+    if (!this.anims.exists('waterfall')) {
+      this.anims.create({ key: 'waterfall', frames: this.anims.generateFrameNumbers('waterfall_anim', { frames: [0, 1, 2, 3] }), frameRate: 8, repeat: -1 });
+    }
+    for (const [i, dx] of [-36, 36].entries()) {
+      const sp = this.add.sprite(midX + dx, (dropTop + dropBottom) / 2, 'waterfall_anim', 0);
+      sp.setDisplaySize(108, dropBottom - dropTop);
+      sp.setDepth(dropBottom - 14); // over terrain, under entities near the pool
+      sp.play({ key: 'waterfall', startFrame: (i * 2) % 4 }); // stagger the two columns
+    }
+    // rising mist at the plunge pool
+    this.add
+      .particles(midX, band * TILE + rows * T2 - T2, 'glow', {
+        tint: 0xdff2ff, blendMode: 'ADD', scale: { start: 0.14, end: 0 }, alpha: { start: 0.4, end: 0 },
+        speed: { min: 8, max: 26 }, angle: { min: 245, max: 295 }, lifespan: 900, frequency: 80, quantity: 1,
+      })
+      .setDepth(band * TILE + rows * T2 + 1);
+  }
+
+  /** depth added to an entity on a raised terrace — level × bonus (0 at the base),
+   *  so a Player on the summit sorts above one on the terrace above one at the base */
+  private elevationBonus(x: number, y: number): number {
+    if (this.highGround.size === 0) return 0;
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor((y - 4) / TILE);
+    return (this.highGround.get(`${tx},${ty}`) ?? 0) * ELEV_DEPTH_BONUS;
+  }
+
+  /** reaching a plateau top lifts fog-of-war around its vista, once (ADR-0009) */
+  private checkVista(): void {
+    if (this.vistaRegions.length === 0) return;
+    const ptx = Math.floor(this.player.x / TILE);
+    const pty = Math.floor((this.player.y - 4) / TILE);
+    const here = this.highGround.get(`${ptx},${pty}`) ?? 0;
+    for (const r of this.vistaRegions) {
+      if (this.vistaLifted.has(r.name)) continue;
+      if (here < (r.level ?? 1)) continue; // must be up on THIS terrace (or higher)
+      this.vistaLifted.add(r.name);
+      this.liftVistaFog(r);
+      bus.emit('toast', t.toast.vistaRevealed(zoneName(r.name)), 'good');
+      this.sfx('blip', 0.5);
+    }
+  }
+
+  private liftVistaFog(r: ElevationRegion): void {
+    const cx = Math.floor(r.vista.tx / FOG_CHUNK);
+    const cy = Math.floor(r.vista.ty / FOG_CHUNK);
+    const rad = r.vistaChunkRadius;
+    const fresh: number[] = [];
+    for (let dy = -rad; dy <= rad; dy++) {
+      for (let dx = -rad; dx <= rad; dx++) {
+        if (dx * dx + dy * dy > rad * rad + 1) continue;
+        const ccx = cx + dx;
+        const ccy = cy + dy;
+        if (ccx < 0 || ccy < 0 || ccx >= this.fogChunksW || ccy >= this.fogChunksH) continue;
+        const idx = ccy * this.fogChunksW + ccx;
+        if (this.explored.has(idx)) continue;
+        this.explored.add(idx);
+        this.eraseFogChunk(idx);
+        fresh.push(idx);
+      }
+    }
+    if (fresh.length) {
+      void this.backend.markExplored(fresh);
+      bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
+    }
+  }
+
   /** 0 = noon, 1 = midnight — derived from the real clock, no tick state */
   private nightness(): number {
     if (FORCE_NIGHT) return 1;
@@ -2045,16 +2269,30 @@ export class GameScene extends Phaser.Scene {
   private addStructure(s: Structure): void {
     if (this.structureIds.has(s.id)) return;
     // defensive: a saved structure whose type is no longer known (e.g. the
-    // retired fence) is skipped instead of crashing — future-proofs removals
+    // retired fence or hut_wall) is skipped instead of crashing — future-proofs removals
     const def = ITEMS[s.type];
     if (!def) return;
+    // ADR-0008 footprint: a Building spans w×h tiles anchored at (tx,ty) toward
+    // +x/+y; a Prop is 1×1. The sprite centres over the footprint, feet at its
+    // bottom edge, so it depth-sorts like every other object.
+    const { w, h } = footprint(s.type);
     this.structureIds.add(s.id);
-    this.structuresByTile.set(`${s.tx},${s.ty}`, s);
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) this.structuresByTile.set(`${s.tx + dx},${s.ty + dy}`, s);
+    }
     const key = `st_${s.type}`;
-    const x = (s.tx + 0.5) * TILE;
-    const baseY = (s.ty + 1) * TILE;
+    const x = (s.tx + w / 2) * TILE;
+    const baseY = (s.ty + h) * TILE;
     const img = this.objImage(x, baseY, key);
-    if (!img) return;
+    if (!img) {
+      // no art loaded, but the claim still stands — record an empty view so the
+      // footprint frees correctly on dismantle
+      this.structureViews.set(s.id, { objects: [], bodies: [], glowImg: null });
+      return;
+    }
+    const objects: Phaser.GameObjects.GameObject[] = [img];
+    const bodies: Phaser.GameObjects.Rectangle[] = [];
+    let glowImg: Phaser.GameObjects.Image | null = null;
     if (s.type === 'bridge' || s.type === 'obsidian_path') {
       img.setDepth(-2); // floor
     } else {
@@ -2073,10 +2311,14 @@ export class GameScene extends Phaser.Scene {
       // ~1/3 the previous on-screen size — a small readable line, not a banner
       label.setScale(0.34);
       label.setDepth(baseY + 1);
+      objects.push(label);
     }
     if (def.blocks) {
-      this.addBlockerBody(s.tx, s.ty);
-      this.addShadow(x, baseY - 1, s.type === 'hut_wall' ? 17 : 15);
+      // collision spans every footprint tile
+      for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) bodies.push(this.addBlockerBody(s.tx + dx, s.ty + dy));
+      }
+      objects.push(this.addShadow(x, baseY - 1, Math.max(15, w * TILE - 2)));
     }
     if (s.type === 'bridge') {
       this.groundLayer.getTileAt(s.tx, s.ty)?.setCollision(false, false, false, false);
@@ -2089,15 +2331,49 @@ export class GameScene extends Phaser.Scene {
       brazier: { scale: 2.8, base: 0.8 },
     }[s.type as string];
     if (glowDef) {
-      const glow = this.add
+      glowImg = this.add
         .image(x, baseY - 8, 'glow')
         .setBlendMode(Phaser.BlendModes.ADD)
         .setTint(s.type === 'golden_idol' ? 0xffe27a : 0xffab52)
         .setScale(glowDef.scale)
         .setAlpha(0)
         .setDepth(890_001);
-      this.glows.push({ img: glow, base: glowDef.base, x, y: baseY });
+      this.glows.push({ img: glowImg, base: glowDef.base, x, y: baseY });
     }
+    this.structureViews.set(s.id, { objects, bodies, glowImg });
+  }
+
+  /**
+   * Tear down a dismantled Structure locally (server-ordered via the
+   * `structureRemoved` event, ADR-0008): destroy its sprites + collision bodies
+   * and free every footprint tile it claimed.
+   */
+  private removeStructure(id: string): void {
+    if (!this.structureIds.has(id)) return;
+    // find the Structure record (any of its footprint tiles points to it)
+    let s: Structure | null = null;
+    for (const st of this.structuresByTile.values()) {
+      if (st.id === id) { s = st; break; }
+    }
+    const view = this.structureViews.get(id);
+    if (view) {
+      for (const o of view.objects) o.destroy();
+      for (const b of view.bodies) b.destroy();
+      if (view.glowImg) this.glows = this.glows.filter((g) => g.img !== view.glowImg);
+      this.structureViews.delete(id);
+    }
+    if (s) {
+      const { w, h } = footprint(s.type);
+      for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) {
+          const k = `${s.tx + dx},${s.ty + dy}`;
+          if (this.structuresByTile.get(k)?.id === id) this.structuresByTile.delete(k);
+        }
+      }
+      // a dismantled bridge restores the water tile's collision underfoot
+      if (s.type === 'bridge') this.groundLayer.getTileAt(s.tx, s.ty)?.setCollision(true, true, true, true);
+    }
+    this.structureIds.delete(id);
   }
 
   private enterPlaceMode(item: StructureId): void {
@@ -2129,11 +2405,84 @@ export class GameScene extends Phaser.Scene {
   }
 
   private canPlaceLocal(item: StructureId, tx: number, ty: number): boolean {
-    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return false;
-    if (this.structuresByTile.has(`${tx},${ty}`)) return false;
-    if (this.nodesByTile.has(`${tx},${ty}`)) return false;
-    const b = this.world.blocked[ty * MAP_W + tx];
-    return ITEMS[item].onWater ? b === 1 : b === 0;
+    // ADR-0008: a Building claims its whole footprint — EVERY tile must be free,
+    // in-bounds, and the right terrain, or the placement is refused (first on the
+    // footprint wins). A 1×1 Prop reduces to the old single-tile check.
+    const { w, h } = footprint(item);
+    const onWater = !!ITEMS[item].onWater;
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const fx = tx + dx;
+        const fy = ty + dy;
+        if (fx < 0 || fy < 0 || fx >= MAP_W || fy >= MAP_H) return false;
+        if (this.structuresByTile.has(`${fx},${fy}`)) return false;
+        if (this.nodesByTile.has(`${fx},${fy}`)) return false;
+        const b = this.world.blocked[fy * MAP_W + fx];
+        if (onWater ? b !== 1 : b !== 0) return false;
+      }
+    }
+    return true;
+  }
+
+  /** the nearest placed Structure whose footprint sits within reach of the Player */
+  private nearestStructure(): Structure | null {
+    const ptx = Math.floor(this.player.x / TILE);
+    const pty = Math.floor((this.player.y - 4) / TILE);
+    let best: Structure | null = null;
+    let bestDist = 3.2; // tiles — a touch beyond the facing tile
+    const seen = new Set<string>();
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const s = this.structuresByTile.get(`${ptx + dx},${pty + dy}`);
+        if (!s || seen.has(s.id)) continue;
+        seen.add(s.id);
+        const { w, h } = footprint(s.type);
+        // distance to the footprint centre
+        const d = Math.hypot(ptx + 0.5 - (s.tx + w / 2), pty + 0.5 - (s.ty + h / 2));
+        if (d < bestDist) {
+          bestDist = d;
+          best = s;
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * X near a Structure dismantles it (ADR-0008): any Player may remove any
+   * Structure for the dismantler's FULL refund, server-ordered, no ownership.
+   * Friction only: a Building someone else placed needs a confirming second X.
+   */
+  private dismantleFacing(): void {
+    const s = this.nearestStructure();
+    if (!s) {
+      this.dismantleArmed = null;
+      return;
+    }
+    const now = Date.now();
+    const mine = s.placedBy === this.me.name;
+    // speed bump: dismantling ANOTHER Player's Building asks for a second press
+    if (isBuilding(s.type) && !mine) {
+      if (!this.dismantleArmed || this.dismantleArmed.id !== s.id || now > this.dismantleArmed.until) {
+        this.dismantleArmed = { id: s.id, until: now + 3000 };
+        bus.emit('toast', t.toast.dismantleConfirm(s.placedBy, ITEMS[s.type].name), 'info');
+        return;
+      }
+    }
+    this.dismantleArmed = null;
+    void this.backend.dismantleStructure(s.id).then((res) => {
+      if (!res.ok) return;
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      this.sfx('place', 0.5);
+      const gained = Object.entries(res.refund)
+        .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
+        .join('  ');
+      bus.emit('toast', gained ? t.toast.dismantled(ITEMS[s.type].name, gained) : t.toast.dismantledBare(ITEMS[s.type].name), 'good');
+      // the server-ordered `structureRemoved` event tears down the visuals for
+      // everyone (incl. us); remove locally too in case we beat the echo
+      this.removeStructure(s.id);
+    });
   }
 
   private confirmPlace(): void {
@@ -2353,6 +2702,7 @@ export class GameScene extends Phaser.Scene {
       if (nearMon) this.tickJourney('visit_seal');
     }
     this.updateFog();
+    this.checkVista();
     this.updateHints();
   }
 
@@ -2365,12 +2715,13 @@ export class GameScene extends Phaser.Scene {
     return this.delveForceOpen || !!this.quest?.delveOpen;
   }
 
-  /** the sealed mine-shaft entrance in the World, a few tiles south of the arena */
+  /** the sealed mine-shaft entrance in the World — in the frontier Cavern Mouth */
   private buildDelveEntrance(): void {
-    // the sealed mine shaft sits in the South Quarry — a rocky dig, fitting for a
-    // mine, and a trek from the Ruins where the Ancient Pickaxe is earned
-    const tx = 48;
-    const ty = 128;
+    // the sealed mine shaft sits in the frontier's Cavern Mouth zone (ADR-0009) —
+    // a rocky dig deep in the far south-west, a real trek from the Ruins where the
+    // Ancient Pickaxe (its key) is earned. Room here for future dungeon entrances.
+    const tx = 56;
+    const ty = 260;
     const x = (tx + 0.5) * TILE;
     const y = (ty + 0.5) * TILE;
     this.delveEntrance = { x, y, tx, ty };
@@ -3205,6 +3556,9 @@ export class GameScene extends Phaser.Scene {
       .setPosition(this.player.x, this.player.y - 8)
       .setAlpha(this.heldItem === 'hand_torch' ? 0.1 + night * 0.35 : 0);
     positionHeld(this.heldSprite, this.player.x, this.player.y, this.lastDir);
+    // keep the in-hand item with the Player when they climb a plateau (ADR-0009)
+    const heldBump = this.elevationBonus(this.player.x, this.player.y);
+    if (heldBump) this.heldSprite.setDepth(this.heldSprite.depth + heldBump);
     this.playerShadow.setPosition(this.player.x, this.player.y - 1);
     for (let i = 0; i < this.glows.length; i++) {
       const g = this.glows[i];
@@ -3226,11 +3580,14 @@ export class GameScene extends Phaser.Scene {
       const k = Math.min(1, dt * 12);
       r.sprite.x += (r.targetX - r.sprite.x) * k;
       r.sprite.y += (r.targetY - r.sprite.y) * k;
-      r.sprite.setDepth(r.sprite.y);
+      // elevation depth bump: a peer up on a plateau sorts above the base (ADR-0009)
+      const rBump = this.elevationBonus(r.sprite.x, r.sprite.y);
+      r.sprite.setDepth(r.sprite.y + rBump);
       r.shadow.setPosition(r.sprite.x, r.sprite.y - 1);
       r.label.setPosition(r.sprite.x, r.sprite.y - AVATAR_H - 2);
-      r.label.setDepth(r.sprite.y + 1);
+      r.label.setDepth(r.sprite.y + 1 + rBump);
       positionHeld(r.heldSprite, r.sprite.x, r.sprite.y, r.dir);
+      if (rBump) r.heldSprite.setDepth(r.heldSprite.depth + rBump);
       r.torchGlow
         .setPosition(r.sprite.x, r.sprite.y - 8)
         .setAlpha(r.held === 'hand_torch' ? 0.1 + night * 0.35 : 0);
@@ -3391,18 +3748,25 @@ export class GameScene extends Phaser.Scene {
       if (this.fishing) this.cancelFishing('You step away — the line goes slack.');
     }
     this.applyAnim(this.player, this.lastDir, moving);
-    this.player.setDepth(this.player.y);
+    // elevation depth bump: on a plateau the Player draws above base entities (ADR-0009)
+    this.player.setDepth(this.player.y + this.elevationBonus(this.player.x, this.player.y));
 
     if (time - this.lastPosSent > 100) {
       this.lastPosSent = time;
       this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined);
     }
 
-    // placement ghost
+    // placement ghost — centred over the whole footprint (ADR-0008)
     if (this.placing && this.ghost) {
       const { tx, ty } = this.facingTile();
-      this.ghost.setPosition((tx + 0.5) * TILE, (ty + 1) * TILE);
+      const { w, h } = footprint(this.placing);
+      this.ghost.setPosition((tx + w / 2) * TILE, (ty + h) * TILE);
       this.ghost.setTint(this.canPlaceLocal(this.placing, tx, ty) ? 0x88ff88 : 0xff6666);
+    }
+
+    // X dismantles the nearest Structure (never while placing/fishing/in the Delve)
+    if (!this.placing && !this.fishing && !this.inDelve && Phaser.Input.Keyboard.JustDown(this.keys.dismantle)) {
+      this.dismantleFacing();
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.keys.esc) && this.placing) {
@@ -3415,11 +3779,14 @@ export class GameScene extends Phaser.Scene {
     // auto-repeat while held, and taps are capped at the same cadence
     // (mashing is never faster than holding)
     const ePressed = Phaser.Input.Keyboard.JustDown(this.keys.e);
+    // B1: LMB (held over the canvas, not while typing) is alternative fire, but
+    // ONLY for swing:true actions — one-shot interactions stay E-only below
+    const lmbActive = this.lmbDown && !this.chatFocused;
     if (this.placing) {
       if (ePressed) this.confirmPlace();
     } else if (this.fishing) {
       if (ePressed) this.reelIn();
-    } else if (ePressed || this.keys.e.isDown) {
+    } else if (ePressed || this.keys.e.isDown || lmbActive) {
       const now = Date.now();
       // resolve at the base cadence; a per-action cadence (the Bow's slower
       // fire) then further gates the swing so bow < melee DPS
@@ -3433,6 +3800,8 @@ export class GameScene extends Phaser.Scene {
             action.run();
           }
         } else if (action && ePressed) {
+          // one-shot interactions (crate, read, offer, enter Delve) fire once per
+          // E press only — never from the alt-fire mouse button (B1)
           action.run();
         }
       }

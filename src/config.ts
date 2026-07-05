@@ -1,6 +1,10 @@
 export const TILE = 16;
-export const MAP_W = 200;
-export const MAP_H = 200;
+// Frontier expansion (ADR-0009): the World grew 200 → 300 by FAR-EDGE growth
+// (east + south). The original 200×200 is pinned in place — spawn, every build,
+// and every node id stay put (no save migration); the new space is an L-shaped
+// frontier appended by tools/generate-map.ts.
+export const MAP_W = 300;
+export const MAP_H = 300;
 export const PLAYER_SPEED = 130;
 export const INTERACT_RANGE = 30;
 export const ZOOM = 2.5;

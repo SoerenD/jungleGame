@@ -36,7 +36,6 @@ export const RECIPES: Recipe[] = [
 
   { id: 'campfire', output: 'campfire', count: 1, cost: { wood: 3, stone: 2 }, kind: 'structure' },
   { id: 'torch', output: 'torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'structure' },
-  { id: 'hut_wall', output: 'hut_wall', count: 1, cost: { wood: 4 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'bridge', output: 'bridge', count: 1, cost: { wood: 3, fiber: 2 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'crate', output: 'crate', count: 1, cost: { wood: 4, stone: 1 }, kind: 'structure' },
   { id: 'tiki_statue', output: 'tiki_statue', count: 1, cost: { stone: 4, fiber: 1 }, kind: 'structure' },

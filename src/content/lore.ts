@@ -38,6 +38,11 @@ const TABLETS_EN: Record<string, Tablet> = {
     title: 'Tablet of the Seal',
     text: 'We could not slay what slumbers in the arena, so we walled it behind a debt: wood, stone, thread and sweetness, given freely and together. When the jungle has been repaid in full, the Seal will open — and whoever dares may wake the Guardian with an Offering upon its altar. Its scales are the only key to the black rock and the ancient wood.',
   },
+  t6: {
+    id: 't6',
+    title: 'Tablet of the Frontier',
+    text: 'Those who feared the crowded heart walked east until the paths ran out, and south until the sea. They found black rock and ancient wood among these overgrown stones, and a coast where the fish run thick. Climb the high crags and the whole frontier lays itself bare. The jungle is wider than any one camp — go and see it.',
+  },
 };
 
 const TABLETS_DE: Record<string, Tablet> = {
@@ -70,6 +75,11 @@ const TABLETS_DE: Record<string, Tablet> = {
     id: 't5',
     title: 'Steintafel des Siegels',
     text: 'Wir konnten nicht erschlagen, was in der Arena schlummert, also mauerten wir es hinter einer Schuld ein: Holz, Stein, Faden und Süße, frei und gemeinsam gegeben. Wenn der Dschungel voll entlohnt ist, öffnet sich das Siegel — und wer es wagt, mag den Wächter mit einer Opfergabe auf seinem Altar wecken. Seine Schuppen sind der einzige Schlüssel zum schwarzen Gestein und zum uralten Holz.',
+  },
+  t6: {
+    id: 't6',
+    title: 'Steintafel der Grenzlande',
+    text: 'Jene, die das überfüllte Herz mieden, gingen ostwärts, bis die Pfade endeten, und südwärts bis zum Meer. Sie fanden schwarzes Gestein und uraltes Holz zwischen diesen überwucherten Steinen und eine Küste, an der die Fische dicht ziehen. Erklimme die hohen Klippen, und die ganzen Grenzlande liegen offen vor dir. Der Dschungel ist weiter als jedes einzelne Lager — geh und sieh ihn dir an.',
   },
 };
 

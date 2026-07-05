@@ -18,7 +18,7 @@ import {
   TILE,
 } from '../config';
 import { ADJUDICATION_SLACK_MS, eyeOpenWithin, rollGuardianDamage, waveInfoAt } from '../content/guardian';
-import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
+import { footprint, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
 import { sanitizeAppearance } from '../avatars';
@@ -35,6 +35,7 @@ import type {
   CrateResult,
   DigResult,
   Dir,
+  DismantleResult,
   DungeonMsg,
   EatResult,
   FightState,
@@ -111,6 +112,8 @@ export class SupabaseBackend implements Backend {
 
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
   private nodesById = new Map<string, StaticNode>();
+  /** placed Structures by id — kept fresh so a dismantle knows the type + footprint (ADR-0008) */
+  private structures = new Map<string, Structure>();
 
   // local mirrors, kept fresh from RPC results + realtime events
   private inv: Inventory = {};
@@ -132,6 +135,8 @@ export class SupabaseBackend implements Backend {
 
   private slumberTimer: number | null = null;
   private visibilityHooked = false;
+  /** last reported arena-emptiness during an engaged fight — only report transitions (B2) */
+  private lastArenaEmpty: boolean | null = null;
 
   // recovery from server-initiated channel closes (see scheduleResubscribe)
   private resubscribeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -184,9 +189,16 @@ export class SupabaseBackend implements Backend {
   /** update the local fight mirror for a guardian event, then emit it locally */
   private dispatch(event: string, args: any[]): void {
     switch (event) {
+      case 'structurePlaced':
+        this.structures.set((args[0] as Structure).id, args[0] as Structure);
+        break;
+      case 'structureRemoved':
+        this.structures.delete(args[0] as string);
+        break;
       case 'guardianSummoned':
       case 'guardianEngaged':
         this.fightState = args[0] as FightState;
+        this.lastArenaEmpty = null; // fresh fight → re-arm the empty-arena transition tracker (B2)
         this.scheduleSlumberCheck();
         break;
       case 'guardianHit':
@@ -195,6 +207,7 @@ export class SupabaseBackend implements Backend {
       case 'guardianVictory':
       case 'guardianSlumber':
         this.fightState = null;
+        this.lastArenaEmpty = null;
         this.clearSlumberCheck();
         break;
     }
@@ -381,6 +394,8 @@ export class SupabaseBackend implements Backend {
     if (!p || p.name === this.me) return;
     this.positions.set(p.name, p);
     this.emit('position', this.toPlayerPos(p));
+    // B2: a peer stepping out of / into the arena can start or cancel the grace
+    if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
   }
 
   private onPresenceSync(): void {
@@ -398,6 +413,8 @@ export class SupabaseBackend implements Backend {
     const live = new Set(players.map((p) => p.name));
     for (const name of [...this.positions.keys()]) if (!live.has(name)) this.positions.delete(name);
     this.emit('presence', players);
+    // B2: a roster member going offline can empty the arena mid-fight
+    if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
     // the Seal target scales with the head count — refresh the bar live on
     // join/leave (local-only: every client recomputes from its own presence view)
     const heads = players.length || 1;
@@ -424,6 +441,8 @@ export class SupabaseBackend implements Backend {
   sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId): void {
     this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held };
     this.broadcastPos(false);
+    // B2: my own step out of / into the arena may start/cancel the grace
+    if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
   }
 
   private broadcastPos(force: boolean): void {
@@ -493,6 +512,8 @@ export class SupabaseBackend implements Backend {
         placedAt: s.placed_at,
         ...(s.text != null ? { text: s.text } : {}),
       }));
+    // keep the id→Structure mirror in sync so a dismantle knows the type/footprint
+    this.structures = new Map(structures.map((s) => [s.id, s]));
 
     const chatLog: ChatMsg[] = ((chatR.data ?? []) as any[])
       .map((c) => ({ from: c.from_name, text: c.text, ts: c.ts }))
@@ -603,15 +624,24 @@ export class SupabaseBackend implements Backend {
   }
 
   async placeStructure(item: StructureId, tx: number, ty: number, text?: string): Promise<PlaceResult> {
-    // static validity is client-side (bounds, water/land, on a Node); the server owns OCCUPIED
-    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return { ok: false, reason: 'INVALID' };
-    if (this.wd.nodes.some((n) => n.tx === tx && n.ty === ty)) return { ok: false, reason: 'INVALID' };
-    const b = this.wd.blocked[ty * MAP_W + tx];
-    if (ITEMS[item].onWater ? b !== 1 : b !== 0) return { ok: false, reason: 'INVALID' };
+    // static validity is client-side across the WHOLE footprint (bounds,
+    // water/land, on a Node); the server owns OCCUPIED (ADR-0008 footprint-claim)
+    const { w, h } = footprint(item);
+    const onWater = !!ITEMS[item].onWater;
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const fx = tx + dx;
+        const fy = ty + dy;
+        if (fx < 0 || fy < 0 || fx >= MAP_W || fy >= MAP_H) return { ok: false, reason: 'INVALID' };
+        if (this.wd.nodes.some((n) => n.tx === fx && n.ty === fy)) return { ok: false, reason: 'INVALID' };
+        const b = this.wd.blocked[fy * MAP_W + fx];
+        if (onWater ? b !== 1 : b !== 0) return { ok: false, reason: 'INVALID' };
+      }
+    }
 
     const id = `s${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
     const txt = item === 'signpost' ? (text ?? '').trim().slice(0, 40) : null;
-    const res = await this.rpc<any>('jw_place_structure', {
+    const base = {
       p_who: this.me,
       p_item: item,
       p_tx: tx,
@@ -619,12 +649,35 @@ export class SupabaseBackend implements Backend {
       p_text: txt,
       p_id: id,
       p_is_hammock: item === 'hammock',
-    });
+    };
+    // pass the footprint; fall back to the pre-footprint signature if the
+    // migration (0004) isn't deployed yet, so the live world keeps building
+    let res = await this.rpc<any>('jw_place_structure', { ...base, p_w: w, p_h: h });
+    if (!res) res = await this.rpc<any>('jw_place_structure', base);
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'INVALID' };
     this.inv = res.inventory as Inventory;
     const structure = res.structure as Structure;
+    this.structures.set(structure.id, structure);
     this.relay('structurePlaced', structure);
     return { ok: true, structure, inventory: { ...this.inv } };
+  }
+
+  async dismantleStructure(id: string): Promise<DismantleResult> {
+    const s = this.structures.get(id);
+    if (!s) return { ok: false, reason: 'NO_STRUCTURE' };
+    // the FULL refund is the crafting cost (client knows RECIPES); the server
+    // applies it atomically + deletes the row so the op stays server-ordered
+    const recipe = RECIPES.find((r) => r.output === s.type);
+    const refund: Inventory = {};
+    if (recipe) for (const [res_, c] of Object.entries(recipe.cost)) refund[res_ as keyof Inventory] = c as number;
+    const res = await this.rpc<any>('jw_dismantle_structure', { p_who: this.me, p_id: id, p_refund: refund });
+    // degrade gracefully if the migration (0004) isn't deployed: remove + refund
+    // optimistically (the row re-materialises on the next loadWorld until it lands)
+    if (res?.inventory) this.inv = res.inventory as Inventory;
+    else for (const [k, v] of Object.entries(refund)) this.inv[k as ItemId] = (this.inv[k as ItemId] ?? 0) + (v as number);
+    this.structures.delete(id);
+    this.relay('structureRemoved', id);
+    return { ok: true, removed: id, refund, inventory: { ...this.inv } };
   }
 
   // ---------------------------------------------------------------- crates / sawmill
@@ -844,6 +897,10 @@ export class SupabaseBackend implements Backend {
       this.fightState = { ...this.fightState, emptySlumberAt: res.emptySlumberAt as number };
       this.scheduleSlumberCheck();
     }
+    // B2: being Exhausted teleports me out — re-evaluate whether the arena is now
+    // empty of live roster members (covers the case jw_knockdown's own wipe check
+    // misses, e.g. others already stepped out)
+    if (res.exhausted && this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
     return { ok: true, knockdowns: res.knockdowns, exhausted: res.exhausted, wake: res.wake, atHammock: res.atHammock };
   }
 
@@ -858,6 +915,57 @@ export class SupabaseBackend implements Backend {
     if (this.me && this.lastLocal && inRect(this.lastLocal.x, this.lastLocal.y)) names.push(this.me);
     for (const [name, p] of this.positions) if (name !== this.me && inRect(p.x, p.y)) names.push(name);
     return names;
+  }
+
+  /**
+   * Roster members who are LIVE inside the arena: present (online, via presence
+   * positions) and standing in the rect. Exhausted fighters are teleported to
+   * their wake point, so a position check excludes them; offline peers are
+   * pruned from `positions`, so they aren't counted either.
+   */
+  private liveRosterInArena(f: FightState): number {
+    const a = this.wd.arena;
+    const inRect = (x: number, y: number) => {
+      const tx = Math.floor(x / TILE);
+      const ty = Math.floor(y / TILE);
+      return tx >= a.x && tx < a.x + a.w && ty >= a.y && ty < a.y + a.h;
+    };
+    let n = 0;
+    for (const name of f.roster) {
+      const pos = name === this.me ? this.lastLocal : this.positions.get(name);
+      if (pos && inRect(pos.x, pos.y)) n++;
+    }
+    return n;
+  }
+
+  /**
+   * B2 (ADR-0004): when an engaged arena holds zero live roster members, ask the
+   * server (idempotent, ordered) to arm the ~5 s re-slumber; a return within the
+   * grace disarms it. Only fired on the 0↔>0 transition. Degrades quietly if the
+   * migration (0004) isn't deployed — the all-Exhausted wipe path still ends the
+   * fight via jw_knockdown, and everything else falls back to the awake window.
+   */
+  private evaluateArenaOccupancy(): void {
+    const f = this.fightState;
+    if (!f || f.engagedAt === null || f.hp <= 0) {
+      this.lastArenaEmpty = null;
+      return;
+    }
+    const empty = this.liveRosterInArena(f) === 0;
+    if (this.lastArenaEmpty === empty) return; // no transition — nothing to report
+    this.lastArenaEmpty = empty;
+    void this.rpc<any>('jw_guardian_arena_occupancy', {
+      p_who: this.me,
+      p_live: empty ? 0 : 1,
+      p_empty_ms: ARENA_EMPTY_SLUMBER_MS,
+    }).then((res) => {
+      if (!res) return; // RPC not deployed — leave the server's emptySlumberAt untouched
+      const at = (res.emptySlumberAt ?? null) as number | null;
+      if (this.fightState && this.fightState.engagedAt !== null) {
+        this.fightState = { ...this.fightState, emptySlumberAt: at };
+        this.scheduleSlumberCheck();
+      }
+    });
   }
 
   private scheduleSlumberCheck(): void {

@@ -120,3 +120,23 @@ v4 additions (original pixel art, no license concerns; drawn from primitives):
 - `public/assets/audio/pick.wav` — pickaxe-on-stone clink (rock/obsidian
   harvest), synthesized by `tools/make-v4-audio.ts` (16-bit WAV, same pipeline
   as `tools/make-v2-audio.ts`). TODO: replace with sourced CC0 later.
+
+Frontier additions (ADR-0009):
+
+- `public/assets/objects/user-falls.png` — the Thundering Falls animation
+  CURRENTLY IN USE (side-on falls, frames 0-3; `assetConfig.ts` → `waterfall_anim`).
+  ⚠️ PROVENANCE UNCONFIRMED / LICENSE UNCLEARED. A license check flagged it as
+  most likely **RPG-Maker RTP-derived** art (the grass-ringed-pond + sand-pit
+  decoration tiles on the source sheet are the tell), which is commercial and
+  **NOT free to redistribute** in a public web game. Do NOT ship until the origin
+  is confirmed. If it cannot be cleared, revert `waterfall_anim` to the fallback.
+- `public/assets/objects/waterfall-fall.png` — the SAFE FALLBACK falls animation
+  (not currently loaded). Repacked (crest / body / pool rows, 4 frames each =
+  12 × 32×32) from **"Animated Water Tiles" by Sevarihk**, OpenGameArt
+  (https://opengameart.org/content/animated-water-tiles-0), licensed
+  **CC-BY 4.0** — ATTRIBUTION REQUIRED: "Animated Water Tiles by Sevarihk
+  (CC-BY 4.0)". That set is itself an edit of ArMM1998's CC0 Zelda-like tileset.
+- `public/assets/objects/cliff-face.png`, `water-foam.png` — original pixel art
+  composed by `tools/compose-cliffs-water.ts` (no license concerns).
+- `public/assets/objects/hut.png` (retired) / `sawmill.png` — original pixel art
+  from `tools/compose-sawmill-building.ts`.

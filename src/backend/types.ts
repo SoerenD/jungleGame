@@ -184,6 +184,16 @@ export type PlaceResult =
   | { ok: false; reason: 'OCCUPIED' | 'INVALID' | 'NOT_IN_INVENTORY' }
   | { ok: true; structure: Structure; inventory: Inventory };
 
+/**
+ * Dismantling a Structure (ADR-0008): any Player may remove any Structure — no
+ * ownership, like the crate — reclaiming its FULL crafting cost to the
+ * dismantler. Server-ordered; the footprint frees for reuse. `refund` is what
+ * the dismantler's inventory gained (empty for an uncraftable Structure).
+ */
+export type DismantleResult =
+  | { ok: false; reason: 'NO_STRUCTURE' }
+  | { ok: true; removed: string; refund: Inventory; inventory: Inventory };
+
 export type ContributeSealResult =
   | { ok: false; reason: 'ALREADY_BROKEN' | 'NOTHING_TO_GIVE' }
   | { ok: true; taken: Inventory; inventory: Inventory; seal: SealState };
@@ -294,6 +304,8 @@ export interface BackendEvents {
   chat: (msg: ChatMsg) => void;
   nodeChanged: (node: NodeState) => void;
   structurePlaced: (s: Structure) => void;
+  /** a Structure was dismantled (removed) by any Player — server-ordered (ADR-0008) */
+  structureRemoved: (id: string) => void;
   /** a crate's shared contents changed (deposit/withdraw by any Player) */
   crateChanged: (crateId: string, contents: Inventory) => void;
   quest: (q: QuestState) => void;
@@ -335,6 +347,11 @@ export interface Backend {
   craft(recipeId: string): Promise<CraftResult>;
   /** `text` is the signpost line (length-capped server-side) */
   placeStructure(item: StructureId, tx: number, ty: number, text?: string): Promise<PlaceResult>;
+  /**
+   * Dismantle (remove) any Structure for the caller's full refund — no
+   * ownership, server-ordered (ADR-0008). Emits `structureRemoved` to all.
+   */
+  dismantleStructure(id: string): Promise<DismantleResult>;
   /** shared crate storage — mutations are server-ordered like all World mutations */
   crateOpen(crateId: string): Promise<CrateResult>;
   crateDeposit(crateId: string, item: ItemId, count: number): Promise<CrateResult>;

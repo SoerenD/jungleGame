@@ -28,7 +28,7 @@ import {
   waveInfoAt,
   type ArenaSpot,
 } from '../content/guardian';
-import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
+import { footprint, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
@@ -46,6 +46,7 @@ import type {
   CrateResult,
   DigResult,
   Dir,
+  DismantleResult,
   EatResult,
   FightState,
   GuardianHitResult,
@@ -197,6 +198,12 @@ export class MockBackend implements Backend {
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
   private nodesByTile = new Map<string, StaticNode>();
   private nodesById = new Map<string, StaticNode>();
+  /**
+   * Every tile claimed by a placed Structure → that Structure (ADR-0008
+   * footprint). `db.structures` stays keyed by the anchor tile for persistence;
+   * this index spans a Building's whole footprint for occupancy + walkability.
+   */
+  private structTiles = new Map<string, Structure>();
   private bots: Bot[] = [];
   private botTimer: number | null = null;
   private saveTimer: number | null = null;
@@ -224,6 +231,7 @@ export class MockBackend implements Backend {
     for (const [key, s] of Object.entries(this.db.structures)) {
       if (!ITEMS[s.type]) delete this.db.structures[key];
     }
+    this.rebuildStructTiles();
     for (const p of Object.values(this.db.players)) {
       for (const k of Object.keys(p.inventory)) {
         if (!ITEMS[k as ItemId]) delete p.inventory[k as ItemId];
@@ -299,13 +307,29 @@ export class MockBackend implements Backend {
     if (!this.db.world!.gateOpen && this.world.gate.some((g) => g.tx === tx && g.ty === ty)) return false;
     if (!this.db.world!.seal!.broken && this.world.sealGate.some((g) => g.tx === tx && g.ty === ty)) return false;
     const b = this.world.blocked[ty * MAP_W + tx];
-    const s = this.db.structures[tileKey(tx, ty)];
+    const s = this.structTiles.get(tileKey(tx, ty)); // any footprint tile, not just the anchor
     if (b === 1) return s?.type === 'bridge';
     if (b !== 0) return false;
     if (s && ITEMS[s.type]?.blocks) return false;
     const n = this.nodesByTile.get(tileKey(tx, ty));
     if (n && NODE_TYPES[n.type].blocks && this.nodeState(n).hp > 0) return false;
     return true;
+  }
+
+  /** the tiles a Structure claims, anchored at (tx,ty) toward +x/+y (ADR-0008) */
+  private footprintTiles(s: Structure): string[] {
+    const { w, h } = footprint(s.type);
+    const out: string[] = [];
+    for (let dy = 0; dy < h; dy++) for (let dx = 0; dx < w; dx++) out.push(tileKey(s.tx + dx, s.ty + dy));
+    return out;
+  }
+
+  /** rebuild the whole-footprint occupancy index from db.structures */
+  private rebuildStructTiles(): void {
+    this.structTiles.clear();
+    for (const s of Object.values(this.db.structures)) {
+      for (const k of this.footprintTiles(s)) this.structTiles.set(k, s);
+    }
   }
 
   // ---------------------------------------------------------------- join / snapshot
@@ -526,6 +550,58 @@ export class MockBackend implements Backend {
     return names;
   }
 
+  /**
+   * Count the roster members who are LIVE inside the arena right now: online
+   * (the local Player or a live bot), not Exhausted, and standing in the rect.
+   * Exhausted fighters are teleported to their wake point, so a position check
+   * already excludes them; offline peers simply aren't present.
+   */
+  private liveRosterInArena(f: DbFight): number {
+    const a = this.world.arena;
+    const inRect = (x: number, y: number) => {
+      const tx = Math.floor(x / TILE);
+      const ty = Math.floor(y / TILE);
+      return tx >= a.x && tx < a.x + a.w && ty >= a.y && ty < a.y + a.h;
+    };
+    let n = 0;
+    for (const name of f.roster) {
+      if ((f.knockdowns[name] ?? 0) >= EXHAUSTION_KNOCKDOWNS) continue; // Exhausted → out of the fight
+      if (name === this.me) {
+        const p = this.db.players[name];
+        if (p && inRect(p.x, p.y)) n++;
+      } else {
+        const b = this.bots.find((bb) => bb.name === name);
+        if (b && inRect(b.x, b.y)) n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * B2 (ADR-0004): end an engaged fight when the arena holds ZERO live roster
+   * members (all offline/Exhausted/outside) for ~5 s. Lazily evaluated on the
+   * events that drop the count; a brief step-out that returns within the grace
+   * clears the pending re-slumber, so it doesn't end a fight a lone fighter
+   * merely clipped out of. Subsumes the all-Exhausted wipe.
+   */
+  private evaluateArenaOccupancy(): void {
+    const f = this.db.world!.fight;
+    if (!f || f.engagedAt === null || f.hp <= 0) return;
+    const live = this.liveRosterInArena(f);
+    if (live === 0) {
+      if (f.emptySlumberAt === null) {
+        f.emptySlumberAt = Date.now() + ARENA_EMPTY_SLUMBER_MS;
+        this.saveSoon();
+        this.scheduleSlumberCheck();
+      }
+    } else if (f.emptySlumberAt !== null) {
+      // a fighter returned within the grace window — cancel the re-slumber
+      f.emptySlumberAt = null;
+      this.saveSoon();
+      this.scheduleSlumberCheck();
+    }
+  }
+
   private emitQuest(): void {
     this.emit('quest', this.questState());
   }
@@ -541,6 +617,9 @@ export class MockBackend implements Backend {
       p.x = x;
       p.y = y;
       this.saveSoon();
+      // B2: a step out of (or back into) the arena may start/cancel the
+      // empty-arena re-slumber grace during an engaged fight
+      if (this.db.world?.fight?.engagedAt != null) this.evaluateArenaOccupancy();
     }
   }
 
@@ -636,15 +715,20 @@ export class MockBackend implements Backend {
     const p = this.me ? this.db.players[this.me] : null;
     if (!p || (p.inventory[item] ?? 0) <= 0) return { ok: false, reason: 'NOT_IN_INVENTORY' };
     const key = tileKey(tx, ty);
-    if (this.db.structures[key]) return { ok: false, reason: 'OCCUPIED' }; // first placement wins
-    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return { ok: false, reason: 'INVALID' };
-    const b = this.world.blocked[ty * MAP_W + tx];
     const def = ITEMS[item];
-    if (this.nodesByTile.get(key)) return { ok: false, reason: 'INVALID' }; // never build on a Resource Node's spot (incl. fishing spots)
-    if (def.onWater) {
-      if (b !== 1) return { ok: false, reason: 'INVALID' };
-    } else {
-      if (b !== 0) return { ok: false, reason: 'INVALID' };
+    // ADR-0008 footprint-claim: EVERY footprint tile must be free, in-bounds, and
+    // the right terrain — first on the footprint wins.
+    const { w, h } = footprint(item);
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const fx = tx + dx;
+        const fy = ty + dy;
+        if (fx < 0 || fy < 0 || fx >= MAP_W || fy >= MAP_H) return { ok: false, reason: 'INVALID' };
+        if (this.structTiles.has(tileKey(fx, fy))) return { ok: false, reason: 'OCCUPIED' };
+        if (this.nodesByTile.get(tileKey(fx, fy))) return { ok: false, reason: 'INVALID' }; // never build on a Resource Node's spot (incl. fishing spots)
+        const b = this.world.blocked[fy * MAP_W + fx];
+        if (def.onWater ? b !== 1 : b !== 0) return { ok: false, reason: 'INVALID' };
+      }
     }
     p.inventory[item]! -= 1;
     const structure: Structure = {
@@ -660,10 +744,44 @@ export class MockBackend implements Backend {
       // one active Hammock per Player — placing a new one retires the old point
       p.wakePoint = { tx, ty };
     }
-    this.db.structures[key] = structure;
+    this.db.structures[key] = structure; // keyed by the anchor tile
+    for (const k of this.footprintTiles(structure)) this.structTiles.set(k, structure);
     this.saveNow();
     this.emit('structurePlaced', structure);
     return { ok: true, structure, inventory: { ...p.inventory } };
+  }
+
+  async dismantleStructure(id: string): Promise<DismantleResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { ok: false, reason: 'NO_STRUCTURE' };
+    const entry = Object.entries(this.db.structures).find(([, s]) => s.id === id);
+    if (!entry) return { ok: false, reason: 'NO_STRUCTURE' };
+    const [key, s] = entry;
+    // remove the row + free every footprint tile it claimed (ADR-0008: no ownership)
+    delete this.db.structures[key];
+    for (const k of this.footprintTiles(s)) {
+      if (this.structTiles.get(k)?.id === id) this.structTiles.delete(k);
+    }
+    // functional-Structure state dies with the Structure
+    if (s.type === 'crate') delete this.db.crates?.[id];
+    if (s.type === 'sawmill') delete this.db.sawmills?.[id];
+    if (s.type === 'hammock' && p.wakePoint && p.wakePoint.tx === s.tx && p.wakePoint.ty === s.ty) {
+      delete p.wakePoint; // its wake point retires with it
+    }
+    // FULL refund of the crafting cost to the dismantler (nothing for an
+    // uncraftable Structure, e.g. a dug golden idol)
+    const recipe = RECIPES.find((r) => r.output === s.type);
+    const refund: Inventory = {};
+    if (recipe) {
+      for (const [res, count] of Object.entries(recipe.cost)) {
+        refund[res as keyof Inventory] = count as number;
+        p.inventory[res as keyof Inventory] = (p.inventory[res as keyof Inventory] ?? 0) + (count as number);
+      }
+    }
+    this.saveNow();
+    this.emit('structureRemoved', id);
+    return { ok: true, removed: id, refund, inventory: { ...p.inventory } };
   }
 
   // ------------------------------------------------------------ v3: crates (shared storage)
@@ -1120,13 +1238,10 @@ export class MockBackend implements Backend {
         text: t.system.exhaustionCollapse(me, atHammock),
         ts: Date.now(),
       });
-      // arena empty? if the WHOLE roster is now Exhausted, no one is left to
-      // fight — schedule an early re-slumber instead of grinding the awake window
-      const wiped = f.roster.every((n) => (f.knockdowns[n] ?? 0) >= EXHAUSTION_KNOCKDOWNS);
-      if (wiped && f.emptySlumberAt === null) {
-        f.emptySlumberAt = Date.now() + ARENA_EMPTY_SLUMBER_MS;
-        this.scheduleSlumberCheck();
-      }
+      // this Player is now Exhausted + teleported out; if that empties the arena
+      // of live roster members, start the ~5 s re-slumber grace (B2 — subsumes
+      // the all-Exhausted wipe and any who had already stepped out)
+      this.evaluateArenaOccupancy();
     }
     this.saveSoon();
     return { ok: true, knockdowns, exhausted, wake, atHammock };

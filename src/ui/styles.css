@@ -166,6 +166,36 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* craft-panel tabs (B4): three kinds — Tools & Weapons / Buildings & Props /
+   Consumables — click to switch; the active tab is underlined in the accent. */
+#craft-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.craft-tab {
+  flex: 1 1 auto;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg, #e8f5e9);
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.craft-tab:hover {
+  background: rgba(255, 209, 102, 0.1);
+}
+.craft-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: rgba(255, 209, 102, 0.12);
+}
+
 /* image-driven crafting: each recipe is a card — output sprite + ingredient
    icons with count badges; the whole card crafts on click. Names/costs stay
    available as the card's hover tooltip. */

@@ -32,7 +32,6 @@ export type ToolId =
 export type StructureId =
   | 'campfire'
   | 'torch'
-  | 'hut_wall'
   | 'bridge'
   | 'crate'
   | 'tiki_statue'
@@ -61,6 +60,25 @@ export interface ItemDef {
   blocks?: boolean;
   /** structures only: may be placed on water (bridge) */
   onWater?: boolean;
+  /**
+   * structures only: footprint in tiles (ADR-0008). Omitted → 1×1 (a Prop).
+   * ≥2×2 marks a Building. Placement claims — and collision spans — every tile
+   * of the footprint, anchored at the (tx,ty) tile toward +x/+y.
+   */
+  w?: number;
+  h?: number;
+}
+
+/** a Structure's footprint in tiles; Props (and everything else) are 1×1 */
+export function footprint(id: StructureId): { w: number; h: number } {
+  const def = BASE_ITEMS[id];
+  return { w: Math.max(1, def?.w ?? 1), h: Math.max(1, def?.h ?? 1) };
+}
+
+/** a Building is any Structure with a footprint larger than a single tile */
+export function isBuilding(id: StructureId): boolean {
+  const { w, h } = footprint(id);
+  return w > 1 || h > 1;
 }
 
 const BASE_ITEMS: Record<ItemId, ItemDef> = {
@@ -93,7 +111,6 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
 
   campfire: { name: 'Campfire', kind: 'structure', desc: 'A cozy fire. Cooks fish, too.', blocks: true },
   torch: { name: 'Torch', kind: 'structure', desc: 'Lights the path.', blocks: false },
-  hut_wall: { name: 'Hut Wall', kind: 'structure', desc: 'A sturdy wall segment.', blocks: true },
   bridge: { name: 'Bridge', kind: 'structure', desc: 'Walk over water.', blocks: false, onWater: true },
   crate: { name: 'Supply Crate', kind: 'structure', desc: 'Shared storage — E to deposit and withdraw. No locks between friends.', blocks: true },
   tiki_statue: { name: 'Tiki Statue', kind: 'structure', desc: 'Watches the jungle.', blocks: true },
@@ -106,7 +123,9 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   brazier: { name: 'Brazier', kind: 'structure', desc: 'An obsidian fire bowl — glows far into the night.', blocks: true },
   hammock: { name: 'Hammock', kind: 'structure', desc: 'Your personal wake point: Exhaustion and login place you here. One active Hammock per Player.', blocks: false },
   signpost: { name: 'Signpost', kind: 'structure', desc: 'Holds a short line of your writing, readable by everyone.', blocks: false },
-  sawmill: { name: 'Sawmill', kind: 'structure', desc: 'Deposit wood; collect planks after the mill has done its slow work.', blocks: true },
+  // A1 (ADR-0008): the Sawmill is the first real Building — a 2×2 workshop.
+  // Any Player may dismantle any Structure for its full refund (no ownership).
+  sawmill: { name: 'Sawmill', kind: 'structure', desc: 'A 2×2 timber mill: deposit wood, collect planks after its slow work. The first real Building.', blocks: true, w: 2, h: 2 },
   table: { name: 'Table', kind: 'structure', desc: 'A sturdy plank table for the camp.', blocks: true },
 };
 
@@ -141,7 +160,6 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
 
   campfire: { name: 'Lagerfeuer', desc: 'Ein gemütliches Feuer. Brät auch Fisch.' },
   torch: { name: 'Fackel', desc: 'Erleuchtet den Weg.' },
-  hut_wall: { name: 'Hüttenwand', desc: 'Ein stabiles Wandsegment.' },
   bridge: { name: 'Brücke', desc: 'Über Wasser gehen.' },
   crate: { name: 'Vorratskiste', desc: 'Geteilter Speicher — E zum Ein- und Auslagern. Keine Schlösser unter Freunden.' },
   tiki_statue: { name: 'Tiki-Statue', desc: 'Wacht über den Dschungel.' },
@@ -154,7 +172,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   brazier: { name: 'Kohlenbecken', desc: 'Eine Feuerschale aus Obsidian — glüht weit in die Nacht.' },
   hammock: { name: 'Hängematte', desc: 'Dein persönlicher Erwachungspunkt: Erschöpfung und Anmeldung setzen dich hierher. Eine aktive Hängematte pro Spieler.' },
   signpost: { name: 'Wegweiser', desc: 'Trägt eine kurze Zeile deiner Schrift, für alle lesbar.' },
-  sawmill: { name: 'Sägewerk', desc: 'Holz einlegen; Bretter holen, nachdem das Werk seine langsame Arbeit getan hat.' },
+  sawmill: { name: 'Sägewerk', desc: 'Eine 2×2-Holzmühle: Holz einlegen, Bretter holen, wenn ihre langsame Arbeit getan ist. Das erste echte Gebäude.' },
   table: { name: 'Tisch', desc: 'Ein stabiler Brettertisch fürs Lager.' },
 };
 

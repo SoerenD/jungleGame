@@ -46,7 +46,6 @@ export const OBJECTS: Record<string, ObjectDef> = {
 
   st_campfire: { url: '/assets/objects/campfire.png' },
   st_torch: { url: '/assets/objects/torch.png' },
-  st_hut_wall: { url: '/assets/objects/hut-wall.png' },
   st_bridge: { url: '/assets/objects/bridge.png' },
   st_crate: { url: '/assets/objects/crate.png' },
   st_tiki_statue: { url: '/assets/objects/statue.png' },
@@ -63,6 +62,18 @@ export const OBJECTS: Record<string, ObjectDef> = {
   st_signpost: { url: '/assets/objects/signpost.png' },
   st_sawmill: { url: '/assets/objects/sawmill.png' },
   st_table: { url: '/assets/objects/table.png' },
+
+  // faux-3D terrain: a tall cliff face hung below raised edges, and a tileable
+  // falling-water streak scrolled down the waterfall drop (drawn as objects)
+  cliff_face: { url: '/assets/objects/cliff-face.png' },
+  water_foam: { url: '/assets/objects/water-foam.png' },
+  // the falls: the user-supplied side-on waterfall animation. The sheet is a 6×2
+  // grid of 96×193 cells; frames 0-3 (top row) are the four phases of the fall.
+  // PROVENANCE UNCONFIRMED — likely RPG-Maker RTP-derived art (commercial, NOT
+  // cleared for redistribution). Treat as a local mockup until the origin is
+  // confirmed; the CC-BY Sevarihk sheet (waterfall-fall.png) is the safe fallback.
+  // See CREDITS.md.
+  waterfall_anim: { url: '/assets/objects/user-falls.png', frameWidth: 96, frameHeight: 193 },
 
   tablet: { url: '/assets/objects/tablet.png' },
   altar: { url: '/assets/objects/altar.png' },
