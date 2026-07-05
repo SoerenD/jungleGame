@@ -14,6 +14,11 @@
  */
 import type { ResourceId, ToolId } from './items';
 import { rollGuardianDamage } from './guardian';
+// type-only (erased at compile — NO runtime import, so no circular dependency):
+// the open-world Wildlife (ADR-0012) reskins this one engine. Its kinds widen
+// MobKind so MobState/mob sprites accept them; their profiles register at runtime
+// via registerMobProfile below. dungeon.ts never imports wildlife.ts at runtime.
+import type { WildKind } from './wildlife';
 
 // ------------------------------------------------------------- loot
 /** Stage-1 loot: the common Husk drop (the farm loop) and the rare boss drop */
@@ -246,18 +251,29 @@ export function isDelveBlocked(tx: number, ty: number): boolean {
 // molten-reskinned and tuned slightly harder. Bosses: the Deep Guardian ('boss',
 // Stage 1) and the Forgeborn ('forgeborn', Stage 2, + its signature eruption).
 export type HuskKind = 'grasp' | 'spit' | 'cinder' | 'ember';
-export type MobKind = HuskKind | 'boss' | 'forgeborn';
+/** the kinds native to the Dungeons (the closed MOB_PROFILES table below) */
+export type DungeonMobKind = HuskKind | 'boss' | 'forgeborn';
+/** every kind the shared engine simulates: Dungeon Husks/bosses + open-world Wildlife */
+export type MobKind = DungeonMobKind | WildKind;
 
-/** which kinds are the ranged kiters (start in 'kite', run stepRanged) */
-const RANGED_KINDS = new Set<MobKind>(['spit', 'ember']);
-/** which kinds are the scaled reactive bosses (per-head HP, run stepBoss) */
-const BOSS_KINDS = new Set<MobKind>(['boss', 'forgeborn']);
+/** which Dungeon kinds are the ranged kiters (start in 'kite', run stepRanged) */
+const RANGED_KINDS = new Set<DungeonMobKind>(['spit', 'ember']);
+/** which Dungeon kinds are the scaled reactive bosses (per-head HP, run stepBoss) */
+const BOSS_KINDS = new Set<DungeonMobKind>(['boss', 'forgeborn']);
 export function isBossKind(kind: MobKind): boolean {
-  return BOSS_KINDS.has(kind);
+  return BOSS_KINDS.has(kind as DungeonMobKind);
 }
 
 /** static per-kind combat/AI profile (tile units; ms; tiles/second) */
 export interface MobProfile {
+  /**
+   * which reused stepper this kind runs. Omitted → derived from the Dungeon
+   * RANGED_KINDS/BOSS_KINDS sets (the Husks/bosses keep their exact behaviour).
+   * Registered Wildlife sets it explicitly: a predator is 'melee' (chase → strike,
+   * huntable), a peaceful creature is 'ranged' with fireRange 0 (kite = flee, never
+   * fires — a skittish "moving Node"). No new brain — the SAME stepMelee/stepRanged.
+   */
+  ai?: 'melee' | 'ranged' | 'boss';
   hp: number;
   /** collision + hit radius in tiles (boss is chunky) */
   radius: number;
@@ -302,7 +318,7 @@ export interface MobProfile {
  * ~constant across group sizes on purpose (ADR-0007 §6); only count and boss HP
  * scale. The Deep Guardian is a scaled-up reactive Husk — NOT a second engine.
  */
-export const MOB_PROFILES: Record<MobKind, MobProfile> = {
+export const MOB_PROFILES: Record<DungeonMobKind, MobProfile> = {
   // Grasp Husk — melee chaser: steers at the nearest player, telegraphs a lunge.
   // Tuned gentle: a long wind-up + a long recovery give a lone player plenty of
   // time to read the lunge and step out of the small strike zone (players have no
@@ -429,6 +445,28 @@ export const MOB_PROFILES: Record<MobKind, MobProfile> = {
   },
 };
 
+/**
+ * Profiles registered by other pure content modules (open-world Wildlife,
+ * ADR-0012) so the ONE engine simulates their reskins without a new brain. Their
+ * MobProfiles live in their own module and register here at import; stepMob /
+ * createMob / applyMobHit look kinds up through profileOf, Dungeon table first.
+ */
+const EXTRA_PROFILES = new Map<string, MobProfile>();
+export function registerMobProfile(kind: string, profile: MobProfile): void {
+  EXTRA_PROFILES.set(kind, profile);
+}
+/** the static profile for any engine kind — a Dungeon Husk/boss or a registered creature */
+export function profileOf(kind: MobKind): MobProfile {
+  return (MOB_PROFILES as Record<string, MobProfile>)[kind] ?? EXTRA_PROFILES.get(kind)!;
+}
+/** which reused stepper a kind runs: explicit MobProfile.ai, else derived from the Dungeon sets */
+function aiOf(kind: MobKind, P: MobProfile): 'melee' | 'ranged' | 'boss' {
+  if (P.ai) return P.ai;
+  if (BOSS_KINDS.has(kind as DungeonMobKind)) return 'boss';
+  if (RANGED_KINDS.has(kind as DungeonMobKind)) return 'ranged';
+  return 'melee';
+}
+
 /** base husk-per-head coefficients — count scales, per-mob danger stays flat */
 const GRASP_PER_HEAD = 1.6;
 const SPIT_PER_HEAD = 0.9;
@@ -528,7 +566,7 @@ export interface MobState {
 }
 
 export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerHead = BOSS_HP_PER_HEAD): MobState {
-  const P = MOB_PROFILES[spawn.kind];
+  const P = profileOf(spawn.kind);
   const maxHp = isBossKind(spawn.kind) ? bossHpPerHead * delveHeads(heads) : P.hp;
   return {
     id,
@@ -537,7 +575,7 @@ export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerH
     y: spawn.y,
     hp: maxHp,
     maxHp,
-    st: RANGED_KINDS.has(spawn.kind) ? 'kite' : 'chase',
+    st: aiOf(spawn.kind, P) === 'ranged' ? 'kite' : 'chase',
     t: 0,
     face: 0,
     ax: spawn.x,
@@ -592,7 +630,7 @@ function moveToward(m: MobState, tx: number, ty: number, speed: number, ctx: Mob
   const sign = away ? -1 : 1;
   let nx = m.x + (sign * dx * s) / d;
   let ny = m.y + (sign * dy * s) / d;
-  const r = MOB_PROFILES[m.kind].radius;
+  const r = profileOf(m.kind).radius;
   if (ctx.isWall(Math.floor(nx + Math.sign(nx - m.x) * r), Math.floor(m.y))) nx = m.x;
   if (ctx.isWall(Math.floor(m.x), Math.floor(ny + Math.sign(ny - m.y) * r))) ny = m.y;
   m.x = nx;
@@ -609,7 +647,8 @@ function moveToward(m: MobState, tx: number, ty: number, speed: number, ctx: Mob
 export function stepMob(m: MobState, ctx: MobCtx): MobEvent {
   if (m.st === 'dead') return {};
   m.t += ctx.dt;
-  const P = MOB_PROFILES[m.kind];
+  const P = profileOf(m.kind);
+  const ai = aiOf(m.kind, P);
   // AGGRO GATE: a mob only "sees" a player within its aggro range, so it stays
   // inert until you actually approach (the safe-antechamber pacing — otherwise a
   // single always-present player is a target at ANY distance and every mob wakes
@@ -620,7 +659,7 @@ export function stepMob(m: MobState, ctx: MobCtx): MobEvent {
   const range = engaged ? P.aggro * 1.5 : P.aggro;
   const near = nearest0 && nearest0.d <= range ? nearest0 : null;
 
-  const isBoss = isBossKind(m.kind);
+  const isBoss = ai === 'boss';
   if (isBoss) m.phase = bossPhaseForHp(m.hp / m.maxHp);
   // fury ramp: telegraph/cooldown shorten and volleys widen with the phase.
   // Kept gentle (0.85/0.72, not 0.8/0.62) so the boss's phase 3 stays frantic
@@ -629,8 +668,8 @@ export function stepMob(m: MobState, ctx: MobCtx): MobEvent {
 
   if (!near && (m.st === 'chase' || m.st === 'kite')) return {}; // inert until a player nears
 
-  if (RANGED_KINDS.has(m.kind)) return stepRanged(m, ctx, P, near, fury);
-  if (isBoss) return stepBoss(m, ctx, P, near, fury);
+  if (ai === 'ranged') return stepRanged(m, ctx, P, near, fury);
+  if (ai === 'boss') return stepBoss(m, ctx, P, near, fury);
   return stepMelee(m, ctx, P, near, 1);
 }
 

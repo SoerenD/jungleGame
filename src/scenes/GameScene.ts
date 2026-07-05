@@ -4,6 +4,7 @@ import { AVATAR_H, AVATAR_IDLE, AVATAR_W, ensureAvatarTexture } from '../avatars
 import type {
   Backend,
   ChatMsg,
+  CreatureMsg,
   Dir,
   DungeonMsg,
   FightState,
@@ -25,6 +26,7 @@ import {
   DAY_CYCLE_MS,
   DEV_DEEP,
   DEV_DUNGEON,
+  DEV_WILD,
   EXHAUSTION_KNOCKDOWNS,
   FOG_CHUNK,
   FOG_REVEAL_RADIUS,
@@ -45,6 +47,17 @@ import {
   SWING_CADENCE_MS,
   TILE,
   ZOOM,
+  CREATURE_DENSITY,
+  CREATURE_SPAWN_MIN_TILES,
+  CREATURE_SPAWN_MAX_TILES,
+  CREATURE_DESPAWN_TILES,
+  CREATURE_PREDATOR_CHANCE,
+  CREATURE_NIGHT_MULT,
+  CREATURE_NIGHT_THRESHOLD,
+  WILD_EXHAUST_WINDOW_MS,
+  WILD_EXHAUSTION_KNOCKDOWNS,
+  WILD_BROADCAST_MS,
+  WILD_SPAWN_TICK_MS,
 } from '../config';
 import {
   ARENA_H,
@@ -71,7 +84,7 @@ import {
   DEEP_CORE_DROP,
   FORGE_CORE,
   isBossKind,
-  MOB_PROFILES,
+  profileOf,
   PROP_BLOCKS,
   PROP_LIGHT,
   SHARD_PER_KILL,
@@ -83,15 +96,24 @@ import {
   type Stage,
   type StageDef,
 } from '../content/dungeon';
-import { footprint, isBuilding, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
+import { footprint, isBuilding, ITEMS, type ItemId, type ResourceId, type StructureId, type ToolId } from '../content/items';
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
 import {
   emptyVillage,
+  inVillageZone,
   VILLAGE_ART,
   VILLAGE_ZONE_RADIUS,
   type VillageRecord,
 } from '../content/village';
+import {
+  isPredator,
+  isWildKind,
+  planWildSpawn,
+  rollWildLoot,
+  WILDLIFE_ART,
+  type WildKind,
+} from '../content/wildlife';
 import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX, projTheme } from '../mobSprites';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
@@ -103,7 +125,8 @@ type OkJoin = Extract<JoinResult, { ok: true }>;
 
 interface WorldData {
   spawn: { tx: number; ty: number };
-  zones: { name: string; x: number; y: number; w: number; h: number }[];
+  /** ADR-0012: `dangerous` flags the frontier wilds where predators may spawn */
+  zones: { name: string; x: number; y: number; w: number; h: number; dangerous?: boolean }[];
   nodes: { id: string; type: keyof typeof NODE_TYPES; tx: number; ty: number }[];
   foliage: { kind: string; tx: number; ty: number }[];
   blocked: number[];
@@ -383,6 +406,20 @@ export class GameScene extends Phaser.Scene {
   private delveStage: Stage = 1;
   /** Stage 1 only: the Deep Guardian fell and the in-Dungeon door to the Deep is open */
   private deepDoorOpen = false;
+  // ---- ADR-0012: open-world Wildlife — an ephemeral, host-simmed roaming pool
+  /** host: authoritative creature state (HP lives ONLY here — never the DB). Guests: last snapshot. */
+  private wildMobs = new Map<string, MobState>();
+  private wildViews = new Map<string, MobView>();
+  /** host-side gentle-roam state for idle peaceful creatures (orchestration, not engine AI) */
+  private wildWander = new Map<string, { ang: number; until: number }>();
+  /** am I the elected creature host? (lowest-sorting online name — deterministic, zero negotiation) */
+  private isWildHost = false;
+  private wildHostName = '';
+  private lastWildSpawnAt = 0;
+  private lastWildSnapAt = 0;
+  private nextWildId = 1;
+  /** open-world knockdown timestamps — a rolling window (distinct from the Guardian's per-fight count) */
+  private wildKnockdownTimes: number[] = [];
   // ---- v3: the Journey (onboarding tracker + contextual hints)
   private journey: JourneyState = { steps: {}, hintUses: {} };
   private hintText: Phaser.GameObjects.Text | null = null;
@@ -693,6 +730,7 @@ export class GameScene extends Phaser.Scene {
     this.bakeVillageTextures(); // A3: generate the Village Buildings' sprites (no PNG assets)
     this.wireBackend();
     this.wireBus();
+    this.recomputeWildHost(); // ADR-0012: elect the creature host now (re-run on every presence sync)
     bus.emit('journey', this.journey);
 
     void this.backend.loadWorld().then((snap) => {
@@ -761,6 +799,13 @@ export class GameScene extends Phaser.Scene {
     this.initFog();
     this.wireDragPlace();
     this.buildDelveEntrance();
+
+    if (DEV_WILD) {
+      // ADR-0012 solo verify: drop into a danger-flagged frontier Zone (The Cavern
+      // Mouth, walkable ground clear of the Delve shaft) so predators are eligible
+      // right away. The lone MockBackend Player is the creature host — sim is local.
+      this.player.setPosition((80 + 0.5) * TILE, (240 + 0.5) * TILE);
+    }
 
     if (import.meta.env.DEV) {
       (window as any).__jw = {
@@ -841,6 +886,40 @@ export class GameScene extends Phaser.Scene {
             return false;
           },
         },
+        // ADR-0012 open-world Wildlife playtest handles (dev only)
+        wild: {
+          host: () => ({ isHost: this.isWildHost, hostName: this.wildHostName, roster: this.backend.creatureRoster() }),
+          list: () =>
+            [...this.wildMobs.values()].map((m) => ({
+              id: m.id, kind: m.kind, st: m.st, hp: m.hp, maxHp: m.maxHp,
+              predator: isWildKind(m.kind) && isPredator(m.kind as WildKind),
+              x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10,
+              danger: this.dangerAt(Math.floor(m.x), Math.floor(m.y)),
+            })),
+          danger: (tx?: number, ty?: number) =>
+            this.dangerAt(tx ?? Math.floor(this.player.x / TILE), ty ?? Math.floor((this.player.y - 4) / TILE)),
+          knockdowns: () => this.wildKnockdownTimes.length,
+          /** force-spawn one creature near the Player (host only): kind or 'predator'/'peaceful' */
+          spawn: (kind: string) => {
+            if (!this.isWildHost) return null;
+            const tx = Math.floor(this.player.x / TILE) + 2;
+            const ty = Math.floor((this.player.y - 4) / TILE);
+            let k = kind as WildKind;
+            if (kind === 'predator') k = 'jaguar';
+            else if (kind === 'peaceful') k = 'capybara';
+            const id = `w${this.nextWildId++}`;
+            this.wildMobs.set(id, createMob(id, { kind: k, x: tx + 0.5, y: ty + 0.5 }, 1));
+            return id;
+          },
+          /** the speeds every creature obeys vs the Player's (AC4 flee-always proof) */
+          speeds: () => ({
+            playerTilesPerSec: PLAYER_SPEED / TILE,
+            playerBuffed: (PLAYER_SPEED * SPEED_BUFF_FACTOR) / TILE,
+            creatures: (['capybara', 'deer', 'boar', 'jaguar'] as WildKind[]).map((kk) => ({
+              kind: kk, speed: profileOf(kk).speed, lunge: profileOf(kk).lungeSpeed,
+            })),
+          }),
+        },
       };
     }
   }
@@ -882,6 +961,7 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('guardianSlumber', () => this.endFight('slumber'));
     this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
     this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
+    this.backend.on('creatures', (msg: CreatureMsg) => this.onCreatureMsg(msg));
   }
 
   // ------------------------------------------------------------ v2: the Seal
@@ -893,9 +973,9 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ A3: the Village (ADR-0010)
 
-  /** bake a sprite for every Village Building from its art spec — A3 ships no PNGs */
+  /** bake a sprite for every Village Building + Wildlife decor from its art spec — no PNGs */
   private bakeVillageTextures(): void {
-    for (const [id, art] of Object.entries(VILLAGE_ART)) {
+    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART })) {
       if (!art) continue;
       const key = `st_${id}`;
       if (this.textures.exists(key)) continue;
@@ -1646,7 +1726,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private cookAction(): EAction | null {
-    if ((this.inventory.fish ?? 0) <= 0) return null;
+    const hasFish = (this.inventory.fish ?? 0) > 0;
+    // ADR-0012: the cooked-meat campfire recipe (2 meat) — a new INGREDIENT feeding
+    // the EXISTING move-speed buff (cooked_meat eats identically to a cooked fish).
+    const hasMeat = (this.inventory.meat ?? 0) >= 2;
+    if (!hasFish && !hasMeat) return null;
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
     let campfire: Structure | null = null;
@@ -1660,14 +1744,24 @@ export class GameScene extends Phaser.Scene {
     return {
       swing: false,
       run: () => {
-        void this.backend.cook().then((res) => {
-          if (res.ok) {
+        if (hasFish) {
+          void this.backend.cook().then((res) => {
+            if (!res.ok) return;
             this.inventory = res.inventory;
             bus.emit('inventory', this.inventory);
             bus.emit('toast', t.toast.cookFish, 'good');
             this.sfx('craft', 0.5);
-          }
-        });
+          });
+        } else {
+          // roast meat via the generic craft path (jw_craft — no new RPC)
+          void this.backend.craft('cooked_meat').then((res) => {
+            if (!res.ok) return;
+            this.inventory = res.inventory;
+            bus.emit('inventory', this.inventory);
+            bus.emit('toast', t.toast.cookMeat, 'good');
+            this.sfx('craft', 0.5);
+          });
+        }
       },
     };
   }
@@ -2052,8 +2146,10 @@ export class GameScene extends Phaser.Scene {
         this.sfx('harvest', 0.6);
       });
     });
-    bus.on('eat', () => {
-      void this.backend.eatCookedFish().then((res) => {
+    bus.on('eat', (id?: ItemId) => {
+      // cooked meat and cooked fish grant the SAME move buff (ADR-0012 — one-buff rule)
+      const eat = id === 'cooked_meat' ? this.backend.eatCookedMeat() : this.backend.eatCookedFish();
+      void eat.then((res) => {
         if (!res.ok) return;
         this.inventory = res.inventory;
         bus.emit('inventory', this.inventory);
@@ -2083,6 +2179,9 @@ export class GameScene extends Phaser.Scene {
     }
     for (const name of [...this.remotes.keys()]) if (!live.has(name)) this.removeRemote(name);
     this.emitPresence();
+    // ADR-0012: presence changed → re-elect the creature host (graceful re-elect +
+    // respawn on host-leave; the new host repopulates its pool around remaining Players)
+    this.recomputeWildHost();
     // v1 host-leave (ADR-0007 §6): if I'm a guest and the host dropped off
     // presence without a clean 'end', the mobs' brain is gone — boot out, no loot
     if (this.inDelve && !this.isDelveHost && this.delveHostName && !live.has(this.delveHostName)) {
@@ -2354,6 +2453,11 @@ export class GameScene extends Phaser.Scene {
         },
       };
     }
+
+    // ADR-0012: forage a peaceful creature / hunt a predator in reach, before
+    // harvesting a Node that might be standing behind it
+    const wild = this.wildlifeAction();
+    if (wild) return wild;
 
     let best: NodeView | null = null;
     let bestDist = INTERACT_RANGE;
@@ -3573,7 +3677,7 @@ export class GameScene extends Phaser.Scene {
     let bd = reach;
     for (const m of this.mobs.values()) {
       if (m.st === 'dead') continue;
-      const d = Math.hypot(m.x - ptx, m.y - pty) - MOB_PROFILES[m.kind].radius;
+      const d = Math.hypot(m.x - ptx, m.y - pty) - profileOf(m.kind).radius;
       if (d < bd) {
         bd = d;
         best = m;
@@ -3605,7 +3709,7 @@ export class GameScene extends Phaser.Scene {
     this.delveParticipants.add(by);
     if (by === this.me.name) this.delveHitLanded = true;
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
-    const fy = m.y * TILE - MOB_PROFILES[m.kind].radius * TILE - 8;
+    const fy = m.y * TILE - profileOf(m.kind).radius * TILE - 8;
     const shown = roll.damage * GUARDIAN_DISPLAY_SCALE;
     if (roll.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 13);
     else this.floatText(fx, fy, `${shown}`, '#ff9a66', 10);
@@ -3624,7 +3728,7 @@ export class GameScene extends Phaser.Scene {
       x = pv.x / TILE;
       y = pv.y / TILE;
     }
-    return Math.hypot(m.x - x, m.y - y) <= 7 + MOB_PROFILES[m.kind].radius;
+    return Math.hypot(m.x - x, m.y - y) <= 7 + profileOf(m.kind).radius;
   }
 
   private onMobFelled(m: MobState): void {
@@ -3818,7 +3922,7 @@ export class GameScene extends Phaser.Scene {
     for (const m of this.mobs.values()) {
       if (m.st === 'dead') continue;
       seen.add(m.id);
-      const prof = MOB_PROFILES[m.kind];
+      const prof = profileOf(m.kind);
       const rpx = prof.radius * TILE;
       const fh = MOB_FRAME[m.kind].h;
       const barW = Math.max(rpx * 2, MOB_FRAME[m.kind].w * 0.8);
@@ -3939,7 +4043,7 @@ export class GameScene extends Phaser.Scene {
     const pty = (this.player.y - 4) / TILE;
     for (const m of this.mobs.values()) {
       if (m.st !== 'strike') continue;
-      const prof = MOB_PROFILES[m.kind];
+      const prof = profileOf(m.kind);
       // the Forgeborn's eruption is a big radius centred where it planted (m.ax,m.ay);
       // an ordinary melee strike is prof.strikeR at the mob's live position
       const erupt = !!m.erupt;
@@ -4081,6 +4185,464 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ============================================================ ADR-0012: open-world Wildlife
+  /**
+   * Deterministic creature-host election from the shared presence roster (zero
+   * negotiation): the lowest-sorting online real-Player name is the host; every
+   * client computes the same. On a host change I (as a guest) drop any locally
+   * simulated creatures — the host's snapshots drive me now. In single-player the
+   * lone MockBackend Player is trivially the host. Re-run on every presence sync.
+   */
+  private recomputeWildHost(): void {
+    const roster = this.backend.creatureRoster();
+    const host = (roster.length ? [...roster].sort() : [this.me.name])[0];
+    const wasHost = this.isWildHost;
+    const hostChanged = host !== this.wildHostName;
+    this.wildHostName = host;
+    this.isWildHost = host === this.me.name;
+    // stepping down from host, or the authority moved to someone else: my local
+    // creatures are stale — clear them and rebuild from the new host's snapshots
+    if (!this.isWildHost && (wasHost || hostChanged)) this.clearWildMobs();
+  }
+
+  private clearWildMobs(): void {
+    for (const v of this.wildViews.values()) {
+      v.sprite.destroy();
+      v.shadow.destroy();
+      v.tele.destroy();
+      v.bar.destroy();
+    }
+    this.wildViews.clear();
+    this.wildMobs.clear();
+    this.wildWander.clear();
+  }
+
+  /** real online Player positions in TILE units (self + rendered peers; not sim bots) */
+  private wildPlayerPositions(): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    for (const name of this.backend.creatureRoster()) {
+      if (name === this.me.name) out.push({ x: this.player.x / TILE, y: (this.player.y - 4) / TILE });
+      else {
+        const r = this.remotes.get(name);
+        if (r) out.push({ x: r.sprite.x / TILE, y: (r.sprite.y - 4) / TILE });
+      }
+    }
+    if (!out.length) out.push({ x: this.player.x / TILE, y: (this.player.y - 4) / TILE });
+    return out;
+  }
+
+  private wildPlayerAnchors(): { tx: number; ty: number }[] {
+    return this.wildPlayerPositions().map((p) => ({ tx: Math.floor(p.x), ty: Math.floor(p.y) }));
+  }
+
+  /** can a creature stand on this World tile? (open ground — not water/cliff, in bounds) */
+  private wildWalkable(tx: number, ty: number): boolean {
+    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return false;
+    return this.world.blocked[ty * MAP_W + tx] === 0;
+  }
+
+  /**
+   * Is (tx,ty) danger-flagged wilds (predator-eligible)? The Village is ALWAYS a
+   * safe haven, and the un-zoned Deep Jungle + every core Zone are safe too —
+   * predators only ever spawn/roam on a tile whose Zone carries `dangerous`.
+   */
+  private dangerAt(tx: number, ty: number): boolean {
+    if (inVillageZone(this.village, tx, ty)) return false; // the Village never has teeth
+    for (const z of this.world.zones) {
+      if (tx >= z.x && tx < z.x + z.w && ty >= z.y && ty < z.y + z.h) return !!z.dangerous;
+    }
+    return false; // Deep Jungle / unzoned = safe core
+  }
+
+  /** the whole Wildlife frame: host sim + broadcast, then render + own-harm check (every client) */
+  private updateWild(time: number, delta: number): void {
+    if (this.isWildHost) {
+      if (time - this.lastWildSpawnAt > WILD_SPAWN_TICK_MS) {
+        this.lastWildSpawnAt = time;
+        this.maintainWildPool();
+      }
+      this.stepWild(delta);
+      if (time - this.lastWildSnapAt > WILD_BROADCAST_MS) {
+        this.lastWildSnapAt = time;
+        this.broadcastWild();
+      }
+    }
+    this.renderWild(time, delta);
+    if (Date.now() >= this.stunnedUntil) this.checkWildHarm();
+  }
+
+  /**
+   * Host only: keep an ephemeral pool roaming around each online Player. Cull
+   * creatures that drift far from everyone, then top up toward the density — more
+   * (and predator-leaning) at night in danger Zones. Peaceful spawn anywhere
+   * walkable; predators ONLY on danger tiles (planWildSpawn enforces this).
+   */
+  private maintainWildPool(): void {
+    const anchors = this.wildPlayerAnchors();
+    if (!anchors.length) return;
+    const night = this.nightness() > CREATURE_NIGHT_THRESHOLD;
+    for (const [id, m] of this.wildMobs) {
+      let near = false;
+      for (const a of anchors) {
+        if (Math.hypot(m.x - a.tx, m.y - a.ty) <= CREATURE_DESPAWN_TILES) {
+          near = true;
+          break;
+        }
+      }
+      if (!near) {
+        this.wildMobs.delete(id);
+        this.wildWander.delete(id);
+      }
+    }
+    const predatorChance = Math.min(0.9, CREATURE_PREDATOR_CHANCE * (night ? CREATURE_NIGHT_MULT : 1));
+    for (const a of anchors) {
+      const boost = night && this.dangerAt(a.tx, a.ty) ? CREATURE_NIGHT_MULT : 1;
+      const target = Math.round(CREATURE_DENSITY * boost);
+      let count = 0;
+      for (const m of this.wildMobs.values()) {
+        if (Math.hypot(m.x - a.tx, m.y - a.ty) <= CREATURE_SPAWN_MAX_TILES + 6) count++;
+      }
+      // fill a few per tick so life fades in briskly without a pop-in wall
+      for (let i = 0; i < 3 && count < target; i++) {
+        const spawn = planWildSpawn(a, {
+          rng: Math.random,
+          minR: CREATURE_SPAWN_MIN_TILES,
+          maxR: CREATURE_SPAWN_MAX_TILES,
+          isWalkable: (tx, ty) => this.wildWalkable(tx, ty),
+          dangerAt: (tx, ty) => this.dangerAt(tx, ty),
+          predatorChance,
+        });
+        if (!spawn) break;
+        const id = `w${this.nextWildId++}`;
+        this.wildMobs.set(id, createMob(id, { kind: spawn.kind, x: spawn.x, y: spawn.y }, 1));
+        count++;
+      }
+    }
+  }
+
+  /** host: advance every creature one frame through the SHARED engine (stepMob) */
+  private stepWild(delta: number): void {
+    const allTargets = this.wildPlayerPositions(); // peaceful flee from anyone nearby
+    // predators only "see" Players standing in the wilds — step onto the safe core
+    // and they lose the scent (de-aggro); they also can't physically follow (below)
+    const dangerTargets = allTargets.filter((p) => this.dangerAt(Math.floor(p.x), Math.floor(p.y)));
+    for (const m of this.wildMobs.values()) {
+      if (m.st === 'dead') {
+        this.wildMobs.delete(m.id);
+        continue;
+      }
+      const predator = isWildKind(m.kind) && isPredator(m.kind as WildKind);
+      if (predator) {
+        const ev = stepMob(m, {
+          targets: dangerTargets,
+          // safe tiles are walls to a predator → it NEVER crosses into the core
+          isWall: (tx, ty) => !this.wildWalkable(tx, ty) || !this.dangerAt(tx, ty),
+          dt: delta,
+          rng: Math.random,
+        });
+        if (ev.sfx === 'lunge') this.sfx('chop', 0.2);
+      } else {
+        const before = { x: m.x, y: m.y };
+        stepMob(m, {
+          targets: allTargets,
+          isWall: (tx, ty) => !this.wildWalkable(tx, ty),
+          dt: delta,
+          rng: Math.random,
+        });
+        // idle (no one near) → a gentle host-side roam so the World reads alive
+        if (m.x === before.x && m.y === before.y) this.wanderPeaceful(m, delta);
+      }
+    }
+  }
+
+  /** host orchestration (NOT engine AI): amble an idle peaceful creature along a slow random walk */
+  private wanderPeaceful(m: MobState, delta: number): void {
+    const now = Date.now();
+    let w = this.wildWander.get(m.id);
+    if (!w || now >= w.until) {
+      w = { ang: Math.random() * Math.PI * 2, until: now + 1500 + Math.random() * 2500 };
+      this.wildWander.set(m.id, w);
+    }
+    const P = profileOf(m.kind);
+    const s = (P.speed * 0.4 * delta) / 1000; // an amble, well under a flee
+    const nx = m.x + Math.cos(w.ang) * s;
+    const ny = m.y + Math.sin(w.ang) * s;
+    if (this.wildWalkable(Math.floor(nx + Math.sign(Math.cos(w.ang)) * P.radius), Math.floor(m.y))) m.x = nx;
+    else w.until = 0;
+    if (this.wildWalkable(Math.floor(m.x), Math.floor(ny + Math.sign(Math.sin(w.ang)) * P.radius))) m.y = ny;
+    else w.until = 0;
+    m.face = w.ang;
+  }
+
+  /** host → all: ONE batched creature snapshot per tick (already near-Player culled) */
+  private broadcastWild(): void {
+    const mobs: MobSnap[] = [];
+    for (const m of this.wildMobs.values()) {
+      if (m.st === 'dead') continue;
+      mobs.push({
+        id: m.id,
+        kind: m.kind,
+        x: +m.x.toFixed(2),
+        y: +m.y.toFixed(2),
+        hp: m.hp,
+        maxHp: m.maxHp,
+        st: m.st,
+        ax: +m.ax.toFixed(2),
+        ay: +m.ay.toFixed(2),
+        phase: 0,
+      });
+    }
+    this.backend.sendCreatures({ t: 'sync', host: this.me.name, mobs });
+  }
+
+  /** guest: replace the rendered creature set from the host's authoritative snapshot */
+  private applyWildSnap(msg: Extract<CreatureMsg, { t: 'sync' }>): void {
+    const alive = new Set<string>();
+    for (const s of msg.mobs) {
+      alive.add(s.id);
+      let m = this.wildMobs.get(s.id);
+      if (!m) {
+        m = { id: s.id, kind: s.kind as MobKind, x: s.x, y: s.y, hp: s.hp, maxHp: s.maxHp, st: s.st as MobState['st'], t: 0, face: 0, ax: s.ax, ay: s.ay, phase: 0 };
+        this.wildMobs.set(s.id, m);
+      } else {
+        m.x = s.x;
+        m.y = s.y;
+        m.hp = s.hp;
+        m.maxHp = s.maxHp;
+        m.st = s.st as MobState['st'];
+        m.ax = s.ax;
+        m.ay = s.ay;
+      }
+    }
+    for (const id of [...this.wildMobs.keys()]) if (!alive.has(id)) this.wildMobs.delete(id);
+  }
+
+  /** dispatch an open-world Wildlife message (ADR-0012) */
+  private onCreatureMsg(msg: CreatureMsg): void {
+    switch (msg.t) {
+      case 'sync':
+        if (!this.isWildHost && msg.host === this.wildHostName) this.applyWildSnap(msg);
+        break;
+      case 'hit':
+        if (this.isWildHost) this.applyWildHit(msg.id, msg.tool as ToolId | undefined, msg.by);
+        break;
+      case 'forage':
+        if (this.isWildHost) {
+          this.wildMobs.delete(msg.id);
+          this.wildWander.delete(msg.id);
+        }
+        break;
+      case 'felled':
+        if (msg.by === this.me.name) this.grantWildLoot(msg.loot, 'hunted');
+        break;
+    }
+  }
+
+  /** draw creatures (body, telegraph, HP bar) at World depth; guests interpolate snapshots */
+  private renderWild(time: number, delta: number): void {
+    const seen = new Set<string>();
+    const k = Math.min(1, (delta / 1000) * 14);
+    for (const m of this.wildMobs.values()) {
+      if (m.st === 'dead') continue;
+      seen.add(m.id);
+      const prof = profileOf(m.kind);
+      const rpx = prof.radius * TILE;
+      const barW = Math.max(rpx * 2, 16);
+      let v = this.wildViews.get(m.id);
+      if (!v) {
+        const sprite = this.add.sprite(m.x * TILE, m.y * TILE, MOB_TEX[m.kind], 0).setOrigin(0.5, 0.85);
+        const shadow = this.add.image(0, 0, 'shadow').setDisplaySize(rpx * 2.6, rpx * 1.3).setAlpha(0.4);
+        const tele = this.add.graphics();
+        const bar = this.add.rectangle(0, 0, barW, 3, 0x66ff88).setOrigin(0, 0.5).setVisible(false);
+        v = { sprite, shadow, tele, bar };
+        this.wildViews.set(m.id, v);
+      }
+      const prevX = v.sprite.x;
+      const tx = m.x * TILE;
+      const ty = m.y * TILE;
+      v.sprite.x += (tx - v.sprite.x) * k; // lerp smooths guest snapshots; host ~exact
+      v.sprite.y += (ty - v.sprite.y) * k;
+      const px = v.sprite.x;
+      const py = v.sprite.y;
+      v.sprite.setDepth(py);
+      if (Math.abs(px - prevX) > 0.05) v.sprite.setFlipX(px < prevX); // face travel direction
+      const idleKey = `${MOB_TEX[m.kind]}-idle`;
+      if (m.st === 'windup' || m.st === 'aim') {
+        if (v.sprite.anims.isPlaying) v.sprite.anims.stop();
+        v.sprite.setFrame(2);
+      } else if (v.sprite.anims.currentAnim?.key !== idleKey || !v.sprite.anims.isPlaying) {
+        v.sprite.anims.play(idleKey, true);
+      }
+      v.shadow.setPosition(px, py + rpx * 0.4).setDepth(2);
+      const hurt = m.hp < m.maxHp;
+      v.bar.setVisible(hurt).setPosition(px - barW / 2, py - rpx * 2 - 2).setDepth(py + 1).setScale(Math.max(0, m.hp / m.maxHp), 1);
+      v.tele.clear();
+      v.tele.setDepth(3); // a ground-level warning decal
+      if (m.st === 'windup') {
+        const warn = 0.35 + 0.25 * Math.sin(time / 55);
+        v.tele.lineStyle(3, 0xff3322, warn);
+        v.tele.lineBetween(px, py, m.ax * TILE, m.ay * TILE);
+        v.tele.fillStyle(0xff3322, warn * 0.5);
+        v.tele.fillCircle(m.ax * TILE, m.ay * TILE, prof.strikeR * TILE);
+      }
+    }
+    for (const [id, v] of this.wildViews) {
+      if (seen.has(id)) continue;
+      v.sprite.destroy();
+      v.shadow.destroy();
+      v.tele.destroy();
+      v.bar.destroy();
+      this.wildViews.delete(id);
+    }
+  }
+
+  /** each client checks its OWN player against live predator strike zones (peaceful never strike) */
+  private checkWildHarm(): void {
+    const ptx = this.player.x / TILE;
+    const pty = (this.player.y - 4) / TILE;
+    for (const m of this.wildMobs.values()) {
+      if (m.st !== 'strike') continue;
+      const prof = profileOf(m.kind);
+      if (Math.hypot(m.x - ptx, m.y - pty) <= prof.strikeR + 0.35) {
+        this.wildKnockdown(m.x, m.y);
+        return;
+      }
+    }
+  }
+
+  /** a predator caught me: knock down (3 s stun + shove), count toward rolling-window Exhaustion */
+  private wildKnockdown(srcX: number, srcY: number): void {
+    if (Date.now() < this.stunnedUntil) return;
+    this.beginKnockdown();
+    this.sfx('chop', 0.4);
+    this.cameras.main.shake(160, 0.004);
+    const ang = Phaser.Math.Angle.Between(srcX * TILE, srcY * TILE, this.player.x, this.player.y);
+    this.tweens.add({
+      targets: this.player,
+      x: this.player.x + Math.cos(ang) * TILE * 1.6,
+      y: this.player.y + Math.sin(ang) * TILE * 1.6,
+      duration: 200,
+      ease: 'quad.out',
+    });
+    const now = Date.now();
+    this.wildKnockdownTimes = this.wildKnockdownTimes.filter((tms) => now - tms < WILD_EXHAUST_WINDOW_MS);
+    this.wildKnockdownTimes.push(now);
+    if (this.wildKnockdownTimes.length >= WILD_EXHAUSTION_KNOCKDOWNS) {
+      this.wildKnockdownTimes = [];
+      this.wildExhaust();
+    } else {
+      bus.emit('toast', t.toast.knockedInWild(this.wildKnockdownTimes.length, WILD_EXHAUSTION_KNOCKDOWNS), 'bad');
+    }
+  }
+
+  /** Exhaustion in the wilds → wake at Hammock/spawn, inventory FULLY intact (only position + time lost) */
+  private wildExhaust(): void {
+    const wake = this.wildWakePoint();
+    bus.emit('toast', wake.atHammock ? t.toast.wildExhaustionHammock : t.toast.wildExhaustionSpawn, 'bad');
+    this.cameras.main.fadeOut(400, 0, 0, 0);
+    this.time.delayedCall(450, () => {
+      this.player.setPosition((wake.tx + 0.5) * TILE, (wake.ty + 0.5) * TILE);
+      this.stunnedUntil = 0;
+      this.stunMarker?.destroy();
+      this.stunMarker = null;
+      this.cameras.main.fadeIn(500, 0, 0, 0);
+    });
+  }
+
+  /** where Exhaustion wakes me: my own Hammock, else the Village Hall, else World spawn */
+  private wildWakePoint(): { tx: number; ty: number; atHammock: boolean } {
+    for (const s of this.structuresByTile.values()) {
+      if (s.type === 'hammock' && s.placedBy === this.me.name) return { tx: s.tx, ty: s.ty, atHammock: true };
+    }
+    if (this.village.hall) {
+      return { tx: this.village.hall.tx, ty: this.village.hall.ty + footprint('village_hall').h, atHammock: false };
+    }
+    return { tx: this.world.spawn.tx, ty: this.world.spawn.ty, atHammock: false };
+  }
+
+  /** in the World, E on the nearest creature in reach: hunt a predator (swing) or forage a peaceful (catch) */
+  private wildlifeAction(): EAction | null {
+    const reach = this.heldItem === 'bow' ? 6 : 1.9;
+    const ptx = this.player.x / TILE;
+    const pty = (this.player.y - 4) / TILE;
+    let best: MobState | null = null;
+    let bd = reach;
+    for (const m of this.wildMobs.values()) {
+      if (m.st === 'dead') continue;
+      const d = Math.hypot(m.x - ptx, m.y - pty) - profileOf(m.kind).radius;
+      if (d < bd) {
+        bd = d;
+        best = m;
+      }
+    }
+    if (!best) return null;
+    const target = best;
+    if (isWildKind(target.kind) && isPredator(target.kind as WildKind)) {
+      // hunt: a repeatable weapon swing (Bow reaches; melee must close)
+      return { swing: true, cadenceMs: weaponCombat(this.heldTool()).attackMs, run: () => this.wildSwing(target) };
+    }
+    // forage: a one-shot catch (bare hands fine — it is a moving Node, not a fight)
+    return { swing: false, run: () => this.forageWild(target) };
+  }
+
+  private wildSwing(m: MobState): void {
+    const tool = this.heldTool();
+    this.sfx(tool === 'bow' ? 'blip' : 'chop', 0.5);
+    if (this.isWildHost) this.applyWildHit(m.id, tool, this.me.name);
+    else this.backend.sendCreatures({ t: 'hit', id: m.id, by: this.me.name, tool });
+  }
+
+  /** host: adjudicate a player→predator hit — reuse the ADR-0006 weapon roll, apply, float */
+  private applyWildHit(id: string, tool: ToolId | undefined, by: string): void {
+    const m = this.wildMobs.get(id);
+    if (!m || m.st === 'dead') return;
+    const roll = applyMobHit(m, tool, Math.random);
+    const prof = profileOf(m.kind);
+    const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
+    const fy = m.y * TILE - prof.radius * TILE - 8;
+    const shown = roll.damage * GUARDIAN_DISPLAY_SCALE;
+    if (roll.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 13);
+    else this.floatText(fx, fy, `${shown}`, '#ff9a66', 10);
+    if (roll.dead) this.onWildFelled(m, by);
+  }
+
+  /** host: a predator fell — the hunter gets the hide/meat/trophy loot; the creature drops off the wire */
+  private onWildFelled(m: MobState, by: string): void {
+    this.sfx('harvest', 0.5);
+    const loot = rollWildLoot(m.kind as WildKind, Math.random);
+    this.wildMobs.delete(m.id);
+    this.wildWander.delete(m.id);
+    if (by === this.me.name) this.grantWildLoot(loot, 'hunted');
+    else this.backend.sendCreatures({ t: 'felled', id: m.id, by, loot });
+  }
+
+  /** forage a peaceful creature (catch): the catcher claims its loot, the host removes it */
+  private forageWild(m: MobState): void {
+    const loot = rollWildLoot(m.kind as WildKind, Math.random);
+    this.sfx('harvest', 0.6);
+    this.floatText(m.x * TILE, m.y * TILE - 10, '✦', '#dfffd6', 12);
+    if (this.isWildHost) {
+      this.wildMobs.delete(m.id);
+      this.wildWander.delete(m.id);
+    } else {
+      this.wildMobs.delete(m.id); // optimistic; the host removes it authoritatively
+      this.backend.sendCreatures({ t: 'forage', id: m.id, by: this.me.name });
+    }
+    this.grantWildLoot(loot, 'foraged');
+  }
+
+  /** grant Wildlife loot into my own inventory + persist (reuses the generic claim path — no new RPC) */
+  private grantWildLoot(loot: Partial<Record<ResourceId, number>>, kind: 'foraged' | 'hunted'): void {
+    const parts = Object.entries(loot).filter(([, n]) => (n as number) > 0);
+    if (!parts.length) return;
+    void this.backend.claimDelveLoot(loot as Inventory).then((res) => {
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      const text = parts.map(([it, n]) => `+${n} ${ITEMS[it as ItemId]?.name ?? it}`).join('  ');
+      bus.emit('toast', kind === 'foraged' ? t.toast.foraged(text) : t.toast.hunted(text), 'good');
+    });
+  }
+
   update(time: number, delta: number): void {
     if (!this.player) return;
     const dt = delta / 1000;
@@ -4153,6 +4715,10 @@ export class GameScene extends Phaser.Scene {
       const visuallyMoving = r.moving || Math.hypot(r.targetX - r.sprite.x, r.targetY - r.sprite.y) > 2;
       this.applyAnim(r.sprite, r.dir, visuallyMoving);
     }
+
+    // ---- ADR-0012: open-world Wildlife — the host sims + broadcasts the roaming
+    // creature pool; every client renders it and checks its OWN player for harm
+    this.updateWild(time, delta);
 
     // ---- v2/v3/v5: the Guardian fight — the danger schedule derives from
     // engagedAt (the first strike). A DORMANT Guardian (engagedAt null) roams

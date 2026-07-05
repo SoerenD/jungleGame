@@ -45,6 +45,12 @@ export const RECIPES: Recipe[] = [
   // v2 — cheap, repeatable summon Offering (tier-1 resources only)
   { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },
 
+  // ADR-0012 — the cooked-meat campfire recipe: a NEW ingredient (Wildlife meat)
+  // feeding the EXISTING move-speed buff (cooked_meat eats identically to a cooked
+  // fish — no new buff). Surfaced at the campfire like fish cooking; also here so
+  // it lists under Consumables. Uses the generic jw_craft path (no new RPC).
+  { id: 'cooked_meat', output: 'cooked_meat', count: 1, cost: { meat: 2 }, kind: 'consumable' },
+
   { id: 'campfire', output: 'campfire', count: 1, cost: { wood: 3, stone: 2 }, kind: 'structure' },
   { id: 'torch', output: 'torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'structure' },
   { id: 'bridge', output: 'bridge', count: 1, cost: { wood: 3, fiber: 2 }, requiresTool: 'hammer', kind: 'structure' },
@@ -65,6 +71,10 @@ export const RECIPES: Recipe[] = [
   { id: 'guardian_trophy', output: 'guardian_trophy', count: 1, cost: { guardian_scale: 5, obsidian: 2 }, kind: 'structure' },
   { id: 'obsidian_path', output: 'obsidian_path', count: 1, cost: { obsidian: 2 }, kind: 'structure' },
   { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, plank: 2 }, kind: 'structure' },
+
+  // ADR-0012 — decor forged from Wildlife loot (no power; cozy expression only)
+  { id: 'trophy_mount', output: 'trophy_mount', count: 1, cost: { trophy: 1, plank: 2 }, kind: 'structure' },
+  { id: 'hide_rug', output: 'hide_rug', count: 1, cost: { hide: 3 }, kind: 'structure' },
 
   // A3 (ADR-0010): the Village. The Hall founds the Village (always craftable);
   // the four later milestone Buildings + per-tier decor unlock as the Village

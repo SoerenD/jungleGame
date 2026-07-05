@@ -23,6 +23,11 @@ export const MOB_TEX: Record<MobKind, string> = {
   cinder: 'husk-cinder',
   ember: 'husk-ember',
   forgeborn: 'forgeborn',
+  // open-world Wildlife (ADR-0012) — side-view quadrupeds, one drawBeast reskinned
+  capybara: 'wild-capybara',
+  deer: 'wild-deer',
+  boar: 'wild-boar',
+  jaguar: 'wild-jaguar',
 };
 
 /** per-mob sheet frame size (px). Bosses are far bigger — a boss silhouette. */
@@ -33,6 +38,11 @@ export const MOB_FRAME: Record<MobKind, { w: number; h: number }> = {
   cinder: { w: 20, h: 22 },
   ember: { w: 20, h: 24 },
   forgeborn: { w: 48, h: 52 },
+  // Wildlife share the 24×18 quadruped sheet (wider than tall — a side profile)
+  capybara: { w: 24, h: 18 },
+  deer: { w: 24, h: 18 },
+  boar: { w: 24, h: 18 },
+  jaguar: { w: 24, h: 18 },
 };
 
 type Ctx = CanvasRenderingContext2D;
@@ -309,6 +319,103 @@ const FORGEBORN: typeof BOSS = {
   corona: '#ff5a1e', // molten-orange corona, not violet
 };
 
+// -------------------------------------------------------- open-world Wildlife
+// A single side-view quadruped (drawBeast), reskinned per kind by a palette + one
+// distinguishing feature (antlers / tusks / spots) — the SAME reskin discipline as
+// the Deep's Husks. Peaceful kinds read soft and round with dark calm eyes;
+// predators sit lower and leaner with a hot eye-glint. 3-frame sheet: f0 idle, f1
+// idle-heave (mass lifts 1px, legs swing, tail flicks), f2 the alert/telegraph pose.
+interface BeastSpec {
+  outline: string;
+  shadow: string;
+  base: string;
+  highlight: string;
+  belly: string;
+  feature: 'antler' | 'tusk' | 'spots' | 'plain';
+  featureColor: string;
+  eye: string;
+  predator: boolean;
+}
+
+function drawBeast(ctx: Ctx, ox: number, f: number, S: BeastSpec): void {
+  const oy = f === 1 ? -1 : 0; // idle heave lifts the whole mass 1px (feet stay)
+  const alert = f === 2; // telegraph / alert pose
+  const Y = (v: number) => v + oy;
+  const gait = f === 1 ? 1 : 0; // a small leg swing on the heave frame
+
+  R(ctx, ox + 4, 16, 15, 2, S.outline); // ground shadow (planted)
+
+  // legs — front + hind pair; a predator crouches low on the alert frame
+  const legTop = Y(alert && S.predator ? 13 : 12);
+  for (const lx of [5 + gait, 8 + gait, 14 - gait, 17 - gait]) {
+    R(ctx, ox + lx, legTop, 2, 16 - legTop, S.shadow);
+    R(ctx, ox + lx, 15, 2, 1, S.outline);
+  }
+
+  // tail stub (flicks up on the heave)
+  R(ctx, ox + 2, Y(8) + (f === 1 ? 1 : 0), 2, 4, S.base);
+  R(ctx, ox + 2, Y(8), 2, 1, S.outline);
+
+  // body mass
+  const bodyTop = Y(alert && S.predator ? 8 : 6);
+  const bodyBot = Y(13);
+  R(ctx, ox + 3, bodyTop, 15, bodyBot - bodyTop, S.base);
+  R(ctx, ox + 3, bodyTop, 15, 1, S.outline);
+  R(ctx, ox + 4, bodyTop + 1, 13, 1, S.highlight);
+  R(ctx, ox + 3, bodyBot - 2, 15, 2, S.belly);
+  R(ctx, ox + 3, bodyTop, 1, bodyBot - bodyTop, S.shadow); // rump edge
+  if (S.feature === 'spots') {
+    for (const [sx, sy] of [[6, 8], [10, 9], [13, 7], [9, 11], [15, 10]] as [number, number][]) {
+      R(ctx, ox + sx, Y(sy), 2, 2, S.featureColor);
+      R(ctx, ox + sx + 1, Y(sy), 1, 1, S.base);
+    }
+  }
+
+  // neck + head to the right (renderer flips the whole sprite for facing)
+  const headTop = Y(alert ? (S.predator ? 8 : 3) : 5);
+  R(ctx, ox + 15, Y(alert && !S.predator ? 6 : 8), 4, 5, S.base); // neck
+  R(ctx, ox + 17, headTop, 6, 6, S.base); // head
+  R(ctx, ox + 17, headTop, 6, 1, S.highlight);
+  R(ctx, ox + 22, headTop + 2, 2, 3, S.base); // snout
+  R(ctx, ox + 22, headTop + 4, 2, 1, S.shadow);
+  R(ctx, ox + 20, headTop + 2, 1, 1, S.eye);
+  if (S.predator && alert) R(ctx, ox + 20, headTop + 1, 1, 1, '#ffffff'); // glint
+
+  if (S.feature === 'antler') {
+    R(ctx, ox + 17, headTop - 3, 1, 3, S.featureColor);
+    R(ctx, ox + 16, headTop - 4, 1, 2, S.featureColor);
+    R(ctx, ox + 20, headTop - 4, 1, 4, S.featureColor);
+    R(ctx, ox + 21, headTop - 5, 1, 2, S.featureColor);
+    R(ctx, ox + 19, headTop - 2, 1, 1, S.featureColor);
+  } else if (S.feature === 'tusk') {
+    R(ctx, ox + 21, headTop + 5, 2, 1, S.featureColor); // tusk from the snout
+    R(ctx, ox + 22, headTop + 4, 1, 1, S.featureColor);
+    R(ctx, ox + 17, headTop - 2, 2, 2, S.base); // bristly ear
+    R(ctx, ox + 17, headTop - 2, 1, 1, S.outline);
+  } else {
+    R(ctx, ox + 17, headTop - 2, 2, 2, alert ? S.highlight : S.base); // ears
+    R(ctx, ox + 20, headTop - 2, 2, 2, alert ? S.highlight : S.base);
+    R(ctx, ox + 17, headTop - 2, 1, 1, S.outline);
+  }
+}
+
+const CAPYBARA: BeastSpec = {
+  outline: '#2a1c12', shadow: '#4a3323', base: '#7a5638', highlight: '#9a7350', belly: '#5a3d28',
+  feature: 'plain', featureColor: '#9a7350', eye: '#1a120a', predator: false,
+};
+const DEER: BeastSpec = {
+  outline: '#33251a', shadow: '#5a4230', base: '#9a7a52', highlight: '#c0a074', belly: '#cbb48c',
+  feature: 'antler', featureColor: '#e0cfa8', eye: '#1a120a', predator: false,
+};
+const BOAR: BeastSpec = {
+  outline: '#1a140f', shadow: '#33261c', base: '#4a3a2c', highlight: '#63503c', belly: '#3a2c20',
+  feature: 'tusk', featureColor: '#eadfc4', eye: '#ff7a2a', predator: true,
+};
+const JAGUAR: BeastSpec = {
+  outline: '#2a1c08', shadow: '#7a5a20', base: '#c99a3e', highlight: '#e6c060', belly: '#e8dcc0',
+  feature: 'spots', featureColor: '#2a1c08', eye: '#ffd24a', predator: true,
+};
+
 const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
   grasp: drawGrasp,
   spit: drawSpit,
@@ -316,6 +423,10 @@ const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
   cinder: (c, ox, f) => drawGrasp(c, ox, f, CINDER),
   ember: (c, ox, f) => drawSpit(c, ox, f, EMBER),
   forgeborn: (c, ox, f) => drawBoss(c, ox, f, FORGEBORN),
+  capybara: (c, ox, f) => drawBeast(c, ox, f, CAPYBARA),
+  deer: (c, ox, f) => drawBeast(c, ox, f, DEER),
+  boar: (c, ox, f) => drawBeast(c, ox, f, BOAR),
+  jaguar: (c, ox, f) => drawBeast(c, ox, f, JAGUAR),
 };
 
 /** draw one mob frame at an x-offset — exported so it can be rasterized/previewed

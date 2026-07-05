@@ -119,6 +119,10 @@ export const DEV_DUNGEON = params.has('dungeon');
 // open too, so leaving the Deep lands you at a usable World entrance. Use
 // ?dungeon for Stage 1.
 export const DEV_DEEP = params.has('deep');
+// ?wild = drop the lone MockBackend Player straight into a danger-flagged frontier
+// Zone (ADR-0012) with Wildlife already roaming, for solo verification. The lone
+// Player IS the creature host, so everything host-side runs locally.
+export const DEV_WILD = params.has('wild');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006
@@ -142,7 +146,11 @@ export const GUARDIAN_AWAKE_MS = DEV_FIGHT ? 90_000 : 300_000;
  * (no refund). Shortened in dev so the timeout path is testable.
  */
 export const DORMANT_TIMEOUT_MS = import.meta.env.DEV ? 30_000 : 90_000;
-export const KNOCKDOWN_STUN_MS = 5_000;
+// ADR-0012: lowered 5 000 → 3 000 GLOBALLY (a deliberate change that also makes
+// the Guardian/Delve marginally more forgiving — accepted, playtest-tunable via a
+// compensating HP/window nudge if the Guardian feels too soft, NOT by reverting).
+// The open-world wilds and every other knockdown source share this one stun.
+export const KNOCKDOWN_STUN_MS = 3_000;
 /** knockdowns within one fight before Exhaustion (wake at spawn) */
 export const EXHAUSTION_KNOCKDOWNS = 3;
 /**
@@ -157,3 +165,29 @@ export const GUARDIAN_SCALE_DROP = 3;
 // ---------------------------------------------------------------- v2: cooking
 export const SPEED_BUFF_FACTOR = 1.2;
 export const SPEED_BUFF_MS = 180_000;
+
+// ---------------------------------------------------------------- ADR-0012: open-world Wildlife
+// Client-host orchestration constants for the ephemeral creature pool. The per-
+// creature speeds/aggro live in content/wildlife.ts (node-pure, tiles/second);
+// these are the host-loop tuning knobs. Numbers are playtest work.
+/** creatures the host keeps roaming around EACH online Player (peaceful + predators) */
+export const CREATURE_DENSITY = 6;
+/** spawn ring radius around a Player, in tiles — just past view, so life fades in */
+export const CREATURE_SPAWN_MIN_TILES = 12;
+export const CREATURE_SPAWN_MAX_TILES = 20;
+/** a creature farther than this (tiles) from EVERY online Player is discarded */
+export const CREATURE_DESPAWN_TILES = 30;
+/** base chance a spawn on a danger tile is a predator (peaceful otherwise) */
+export const CREATURE_PREDATOR_CHANCE = 0.5;
+/** night multiplies both predator odds and the danger-Zone pool (core stays safe) */
+export const CREATURE_NIGHT_MULT = 1.6;
+/** night begins when nightness() exceeds this (the wilds grow teeth after dark) */
+export const CREATURE_NIGHT_THRESHOLD = 0.55;
+/** rolling window for open-world knockdowns → Exhaustion (distinct from the Guardian's per-fight count) */
+export const WILD_EXHAUST_WINDOW_MS = 45_000;
+/** open-world knockdowns within the window before Exhaustion (wake at Hammock/spawn) */
+export const WILD_EXHAUSTION_KNOCKDOWNS = 3;
+/** the host's ONE batched `creatures` broadcast cadence (ms) — matches the position stream budget */
+export const WILD_BROADCAST_MS = 200;
+/** how often the host tops up / culls its pool (ms) — cheap, so not every frame */
+export const WILD_SPAWN_TICK_MS = 900;

@@ -285,25 +285,32 @@ carvePath([
 const SPAWN = { tx: 100, ty: 100 };
 
 // ---------------------------------------------------------------- zones
+// ADR-0012: each Zone carries a `dangerous` flag. The core (near spawn) + the
+// un-zoned Deep Jungle stay a SAFE haven — peaceful Wildlife roams there, but no
+// predator ever spawns/attacks (the safe start the Journey assumes). Predators
+// live ONLY in the danger-flagged FRONTIER Zones: "combat is something you walk
+// into." Adding the field does not touch zoneAt (name-keyed) or the RNG order, so
+// every Node id + Zone rect stays byte-stable.
 const zones = [
   // quarry zones come first — zoneAt takes the first hit, and both overlap
   // broader zones (the South Quarry sits inside the River Delta rectangle)
-  { name: 'North Quarry', x: 116, y: 22, w: 16, h: 16 },
-  { name: 'South Quarry', x: 40, y: 118, w: 16, h: 16 },
-  { name: 'Spawn Clearing', x: 88, y: 88, w: 24, h: 24 },
-  { name: 'Thundering Falls', x: 86, y: 6, w: 30, h: 34 },
-  { name: 'Ancient Ruins', x: 140, y: 14, w: 48, h: 44 },
-  { name: 'Dense Grove', x: 128, y: 66, w: 62, h: 62 },
-  { name: 'Sunken Swamp', x: 126, y: 134, w: 64, h: 56 },
-  { name: 'River Delta', x: 12, y: 120, w: 70, h: 74 },
-  { name: 'Hidden Grove', x: 6, y: 56, w: 30, h: 40 },
+  { name: 'North Quarry', x: 116, y: 22, w: 16, h: 16, dangerous: false },
+  { name: 'South Quarry', x: 40, y: 118, w: 16, h: 16, dangerous: false },
+  { name: 'Spawn Clearing', x: 88, y: 88, w: 24, h: 24, dangerous: false },
+  { name: 'Thundering Falls', x: 86, y: 6, w: 30, h: 34, dangerous: false },
+  { name: 'Ancient Ruins', x: 140, y: 14, w: 48, h: 44, dangerous: false },
+  { name: 'Dense Grove', x: 128, y: 66, w: 62, h: 62, dangerous: false },
+  { name: 'Sunken Swamp', x: 126, y: 134, w: 64, h: 56, dangerous: false },
+  { name: 'River Delta', x: 12, y: 120, w: 70, h: 74, dangerous: false },
+  { name: 'Hidden Grove', x: 6, y: 56, w: 30, h: 40, dangerous: false },
   // ---- FRONTIER zones (ADR-0009), appended after the core. Every rect lies
   // wholly in the east (x>=200) OR south (y>=200) frontier, so no CORE cell
   // (x<200 AND y<200) ever matches one — core zoneAt results are unchanged.
-  { name: 'Highland Crags', x: 224, y: 10, w: 62, h: 72 }, // east-north: the hill + 3rd quarry + vista
-  { name: 'Overgrown Temple', x: 214, y: 116, w: 72, h: 76 }, // east-south: tier-2 grove + lore
-  { name: 'Mangrove Coast', x: 100, y: 226, w: 108, h: 70 }, // south: fishing + shipwreck treasure
-  { name: 'The Cavern Mouth', x: 16, y: 222, w: 80, h: 74 }, // south-west: the Delve entrance
+  // These are the danger-flagged WILDS (ADR-0012): predators prowl here.
+  { name: 'Highland Crags', x: 224, y: 10, w: 62, h: 72, dangerous: true }, // east-north: the hill + 3rd quarry + vista
+  { name: 'Overgrown Temple', x: 214, y: 116, w: 72, h: 76, dangerous: true }, // east-south: tier-2 grove + lore
+  { name: 'Mangrove Coast', x: 100, y: 226, w: 108, h: 70, dangerous: true }, // south: fishing + shipwreck treasure
+  { name: 'The Cavern Mouth', x: 16, y: 222, w: 80, h: 74, dangerous: true }, // south-west: the Delve entrance
 ];
 
 function zoneAt(x: number, y: number): string {

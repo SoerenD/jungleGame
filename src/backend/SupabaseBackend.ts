@@ -44,6 +44,7 @@ import type {
   CookResult,
   CraftResult,
   CrateResult,
+  CreatureMsg,
   DigResult,
   Dir,
   DismantleResult,
@@ -139,6 +140,8 @@ export class SupabaseBackend implements Backend {
   // the last raw seal row, so a join/leave can re-emit the bar with the new target
   private onlineCount = 1;
   private lastSeal: { broken?: boolean; contributed?: Record<string, number> } | null = null;
+  /** ADR-0012: the last presence roster (self + peers) — the creature-host election set */
+  private creatureRosterNames: string[] = [];
 
   // position tracking for presence + arena roster
   private lastLocal: SelfPos | null = null;
@@ -323,6 +326,9 @@ export class SupabaseBackend implements Backend {
     // positions; delivered straight to whoever is in the run (self:false already
     // stops the sender hearing its own frame)
     ch.on('broadcast', { event: 'delve' }, ({ payload }) => this.emit('dungeon', payload as DungeonMsg));
+    // the open-world Wildlife stream (ADR-0012) — the host's batched creature
+    // snapshots + guest hit/forage actions; delivered to whoever is in the World
+    ch.on('broadcast', { event: 'creatures' }, ({ payload }) => this.emit('creatures', payload as CreatureMsg));
     ch.on('presence', { event: 'sync' }, () => this.onPresenceSync());
     ch.on('presence', { event: 'join' }, () => this.broadcastPos(true)); // re-announce so new joiners see me
     // the server explains itself (rate limit, restart, auth…) via a `system`
@@ -432,6 +438,8 @@ export class SupabaseBackend implements Backend {
     // drop peers no longer present so GameScene can prune their sprites
     const live = new Set(players.map((p) => p.name));
     for (const name of [...this.positions.keys()]) if (!live.has(name)) this.positions.delete(name);
+    // ADR-0012: the real online roster feeds the deterministic creature-host election
+    this.creatureRosterNames = players.map((p) => p.name);
     this.emit('presence', players);
     // B2: a roster member going offline can empty the arena mid-fight
     if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
@@ -912,6 +920,16 @@ export class SupabaseBackend implements Backend {
     void this.channel?.send({ type: 'broadcast', event: 'delve', payload: msg });
   }
 
+  /** ADR-0012: the real online roster (self + peers), from the last presence sync */
+  creatureRoster(): string[] {
+    return this.creatureRosterNames.length ? [...this.creatureRosterNames] : this.me ? [this.me] : [];
+  }
+
+  /** the elected host's ONE batched per-tick creature broadcast (or a guest action) */
+  sendCreatures(msg: CreatureMsg): void {
+    void this.channel?.send({ type: 'broadcast', event: 'creatures', payload: msg });
+  }
+
   async hitGuardian(withTool?: ToolId): Promise<GuardianHitResult> {
     const f = this.fightState;
     if (!f) return { ok: false, reason: 'NO_FIGHT' };
@@ -1095,6 +1113,22 @@ export class SupabaseBackend implements Backend {
 
   async eatCookedFish(): Promise<EatResult> {
     const res = await this.rpc<any>('jw_eat', { p_who: this.me });
+    if (!res || res.ok === false) return { ok: false, reason: 'NOTHING_TO_EAT' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, inventory: { ...this.inv }, buffMs: SPEED_BUFF_MS };
+  }
+
+  async eatCookedMeat(): Promise<EatResult> {
+    // consume 1 cooked_meat through the generic craft RPC (count 0 output = a pure
+    // consume: jw_afford checks it, cost is deducted, nothing is produced) — the
+    // +20% move buff is applied client-side (ADR-0001), so NO new RPC is needed.
+    const res = await this.rpc<any>('jw_craft', {
+      p_who: this.me,
+      p_cost: { cooked_meat: 1 },
+      p_output: 'cooked_meat',
+      p_count: 0,
+      p_requires_tool: null,
+    });
     if (!res || res.ok === false) return { ok: false, reason: 'NOTHING_TO_EAT' };
     this.inv = res.inventory as Inventory;
     return { ok: true, inventory: { ...this.inv }, buffMs: SPEED_BUFF_MS };

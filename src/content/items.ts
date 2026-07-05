@@ -18,7 +18,12 @@ export type ResourceId =
   | 'deep_core'
   // ADR-0011 — the Deep (Stage 2) drops that forge the Forgebrand
   | 'cinder_shard'
-  | 'forge_core';
+  | 'forge_core'
+  // ADR-0012 — open-world Wildlife drops (hide/meat/trophy family). Feed EXISTING
+  // loops only: the Village pool, a cooked-meat campfire recipe, decor Structures.
+  | 'hide'
+  | 'meat'
+  | 'trophy';
 export type ToolId =
   | 'axe'
   | 'pickaxe'
@@ -65,9 +70,12 @@ export type StructureId =
   | 'lamp_post'
   | 'fountain'
   | 'flower_bed'
-  | 'victory_arch';
+  | 'victory_arch'
+  // ADR-0012 — decor Structures forged from Wildlife loot (no new power)
+  | 'trophy_mount'
+  | 'hide_rug';
 /** carried consumables that are neither Resources nor Tools */
-export type ConsumableId = 'summon_totem' | 'cooked_fish';
+export type ConsumableId = 'summon_totem' | 'cooked_fish' | 'cooked_meat';
 export type ItemId = ResourceId | ToolId | StructureId | ConsumableId;
 
 export interface ItemDef {
@@ -114,6 +122,9 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   deep_core: { name: 'Deep Core', kind: 'resource', desc: 'The molten heart of the Deep Guardian, granted to everyone who fought it. Rare — forges the Sword.' },
   cinder_shard: { name: 'Cinder Shard', kind: 'resource', desc: 'Molten shrapnel from a felled Cinder or Ember Husk in the Deep. Common — the farm of a Deep run.' },
   forge_core: { name: 'Forge Core', kind: 'resource', desc: 'The white-hot heart of the Forgeborn, granted to everyone who descended and fought it. Rare — forges the Forgebrand.' },
+  hide: { name: 'Hide', kind: 'resource', desc: 'Tough hide from foraged or hunted Wildlife. Give it to the Village, or lay it as a rug.' },
+  meat: { name: 'Raw Meat', kind: 'resource', desc: 'Fresh meat from Wildlife. Cook it at a campfire for a hearty meal that quickens your step.' },
+  trophy: { name: 'Wild Trophy', kind: 'resource', desc: 'A prize rack or fang from the wilds — rare. Mount it, or grace the Village pool with it.' },
 
   axe: { name: 'Axe', kind: 'tool', desc: 'Chops trees twice as fast.' },
   pickaxe: { name: 'Pickaxe', kind: 'tool', desc: 'Breaks rocks twice as fast.' },
@@ -129,6 +140,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
 
   summon_totem: { name: 'Summoning Totem', kind: 'consumable', desc: 'An Offering for the arena altar — wakes the Guardian. Consumed on summon.' },
   cooked_fish: { name: 'Cooked Fish', kind: 'food', desc: 'Warm and hearty. Eating it quickens your step for a while.' },
+  cooked_meat: { name: 'Cooked Meat', kind: 'food', desc: 'Roasted at a campfire. Eating it quickens your step for a while — the same warmth a cooked fish gives.' },
 
   campfire: { name: 'Campfire', kind: 'structure', desc: 'A cozy fire. Cooks fish, too.', blocks: true },
   torch: { name: 'Torch', kind: 'structure', desc: 'Lights the path.', blocks: false },
@@ -162,6 +174,9 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   fountain: { name: 'Fountain', kind: 'structure', desc: 'A tiled fountain, the pride of a proper Village.', blocks: true, w: 2, h: 2 },
   flower_bed: { name: 'Flower Bed', kind: 'structure', desc: 'A bed of blooms brightening a Town square.', blocks: false },
   victory_arch: { name: 'Victory Arch', kind: 'structure', desc: 'A triumphal arch — decor fit for a Capital.', blocks: false, w: 2, h: 1 },
+  // ADR-0012 — Wildlife-loot decor. No power, pure cozy expression.
+  trophy_mount: { name: 'Trophy Mount', kind: 'structure', desc: 'A mounted trophy from the wilds — proof of the hunt.', blocks: true },
+  hide_rug: { name: 'Hide Rug', kind: 'structure', desc: 'A soft hide laid out on the floor.', blocks: false },
 };
 
 /** German name + description overlay; kind/blocks/onWater stay from BASE_ITEMS */
@@ -180,6 +195,9 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   deep_core: { name: 'Tiefenkern', desc: 'Das glühende Herz des Tiefenwächters, verliehen an alle, die gegen ihn kämpften. Selten — schmiedet das Schwert.' },
   cinder_shard: { name: 'Glutsplitter', desc: 'Glühender Splitter einer gefallenen Glut- oder Aschehülle in der Tiefe. Häufig — die Ausbeute eines Tiefen-Zugs.' },
   forge_core: { name: 'Schmiedekern', desc: 'Das weißglühende Herz des Schmiedegeborenen, verliehen an alle, die hinabstiegen und gegen ihn kämpften. Selten — schmiedet den Schmiedebrand.' },
+  hide: { name: 'Fell', desc: 'Zähes Fell von erjagtem oder gesammeltem Wild. Gib es dem Dorf oder leg es als Teppich aus.' },
+  meat: { name: 'Rohes Fleisch', desc: 'Frisches Fleisch von Wild. Brate es am Lagerfeuer für eine herzhafte Mahlzeit, die deinen Schritt beschleunigt.' },
+  trophy: { name: 'Wildtrophäe', desc: 'Ein prächtiges Geweih oder Fangzahn aus der Wildnis — selten. Häng sie auf oder zier den Dorfvorrat damit.' },
 
   axe: { name: 'Axt', desc: 'Fällt Bäume doppelt so schnell.' },
   pickaxe: { name: 'Spitzhacke', desc: 'Bricht Felsen doppelt so schnell.' },
@@ -195,6 +213,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
 
   summon_totem: { name: 'Beschwörungstotem', desc: 'Eine Opfergabe für den Arena-Altar — weckt den Wächter. Beim Beschwören verbraucht.' },
   cooked_fish: { name: 'Gebratener Fisch', desc: 'Warm und herzhaft. Ihn zu essen beschleunigt deinen Schritt für eine Weile.' },
+  cooked_meat: { name: 'Gebratenes Fleisch', desc: 'Am Lagerfeuer geröstet. Es zu essen beschleunigt deinen Schritt für eine Weile — dieselbe Wärme wie gebratener Fisch.' },
 
   campfire: { name: 'Lagerfeuer', desc: 'Ein gemütliches Feuer. Brät auch Fisch.' },
   torch: { name: 'Fackel', desc: 'Erleuchtet den Weg.' },
@@ -222,6 +241,8 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   fountain: { name: 'Springbrunnen', desc: 'Ein gekachelter Brunnen, der Stolz eines echten Dorfes.' },
   flower_bed: { name: 'Blumenbeet', desc: 'Ein Beet voller Blüten, das einen Stadtplatz erhellt.' },
   victory_arch: { name: 'Triumphbogen', desc: 'Ein Triumphbogen — Zierde einer Hauptstadt.' },
+  trophy_mount: { name: 'Trophäenbrett', desc: 'Eine aufgehängte Trophäe aus der Wildnis — Beweis der Jagd.' },
+  hide_rug: { name: 'Fellteppich', desc: 'Ein weiches Fell, auf dem Boden ausgelegt.' },
 };
 
 /** ITEMS in the session's language: German overlays name/desc onto the English base */

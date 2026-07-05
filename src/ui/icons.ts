@@ -8,6 +8,7 @@ import { OBJECTS } from '../assetConfig';
 import { asset } from '../paths';
 import type { ItemId } from '../content/items';
 import { VILLAGE_ART, type StructureArt } from '../content/village';
+import { WILDLIFE_ART } from '../content/wildlife';
 
 /** shared palette: char → CSS color ('.' and unknown chars are transparent) */
 export const PAL: Record<string, string> = {
@@ -252,6 +253,63 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '............',
     '............',
   ],
+  // ADR-0012 — open-world Wildlife loot (hide / meat / trophy) + the cooked meal
+  hide: [
+    '............',
+    '............',
+    '..xxxxxxxx..',
+    '.xWwwwwnWx..',
+    '.xwWnwwwwx..',
+    '.xwwwwWwwx..',
+    '.xwnwwwnWx..',
+    '.xWwwnwwwx..',
+    '..xxxxxxxx..',
+    '............',
+    '............',
+    '............',
+  ],
+  meat: [
+    '............',
+    '............',
+    '...xxxxx....',
+    '..xRRrRrx...',
+    '.xRrrrrRx...',
+    '.xrrcrrrx...',
+    '.xRrrrcrx...',
+    'nxrrrRrx....',
+    'nxxxxxxx....',
+    '............',
+    '............',
+    '............',
+  ],
+  trophy: [
+    '..S.....S...',
+    '..S..S..S...',
+    '.SS..S..SS..',
+    '..SS.S.SS...',
+    '...SSSSS....',
+    '....xxx.....',
+    '...xnnnx....',
+    '...xmnmx....',
+    '...xnnnx....',
+    '....xxx.....',
+    '............',
+    '............',
+  ],
+  cooked_meat: [
+    '............',
+    '............',
+    '...xwWwx....',
+    '..xwWmWwx...',
+    '..xwwWwwx...',
+    '..xkwwwkx...',
+    '..xwwkwwx...',
+    '...xwwwx....',
+    '....xnx.....',
+    '.....nx.....',
+    '......n.....',
+    '............',
+  ],
   sword: [
     '............',
     '.........xx.',
@@ -486,7 +544,8 @@ export function itemIcon(id: ItemId): string {
   const hit = cache.get(id);
   if (hit) return hit;
   const grid = GRIDS[id];
-  const villageArt: StructureArt | undefined = VILLAGE_ART[id as keyof typeof VILLAGE_ART];
+  const villageArt: StructureArt | undefined =
+    VILLAGE_ART[id as keyof typeof VILLAGE_ART] ?? WILDLIFE_ART[id as keyof typeof WILDLIFE_ART];
   let url = '';
   if (grid) {
     const canvas = document.createElement('canvas');

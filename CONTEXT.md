@@ -1,11 +1,15 @@
 # Jungle World
 
 A pixel-art multiplayer browser game: one persistent jungle world that a group of friends
-inhabits together — gathering resources, crafting, and building. The base world is peaceful
-(no hunger, no player death, nothing attacks you in the open world). v2 adds opt-in combat,
-always kept out of the peaceful open world: the **Guardian** at the Ruins, and — planned —
-instanced **Dungeons** entered by choice through a World entrance. The open world itself stays
-peaceful; combat is something you walk into.
+inhabits together — gathering resources, crafting, and building. The world near home is
+peaceful (no hunger, no death, no item loss — *ever*), and stays that way: the **core** Zones
+and the **Village** are a guaranteed safe haven. Danger is **zoned to the deep wilds** — combat
+is still something you *walk into*, now literally. Three combat spaces, all opt-in: the summoned
+**Guardian** at the Ruins, the instanced **Dungeons** (the **Delve**), and **Wildlife** —
+dangerous animals that roam the danger-flagged frontier Zones. Nothing in the peaceful core will
+ever attack you; nothing anywhere can kill you or take your stuff (harm is only ever a
+knockdown). (The earlier absolute "nothing attacks you in the open world" is refined by
+ADR-0012: the *core* stays inviolate, the *wilds* gain natural teeth.)
 
 ## Language
 
@@ -67,7 +71,7 @@ _Avoid_: seal (that is the permanent one), gate, wall (generic)
 
 **Guardian**:
 A colossal creature slumbering at the Ruins — the only thing in the World that can be fought. Players summon it with Offerings, it never leaves its arena, and being caught by it knocks a Player down for a few seconds — no item loss, never death. Its drops unlock the next tier of harvesting Tools (fishing rod, ancient axe/pickaxe) — but not the Bow, which is tier-1 and craftable before the first fight. It fights on a fully authored schedule (ADR-0002): tile-slam waves, telegraphed lunges to new arena spots, and three fury phases keyed on elapsed awake time — never on what Players do.
-_Avoid_: boss, monster, enemy (the World has no enemies; the Guardian is summoned by choice)
+_Avoid_: boss, monster, enemy (the Guardian is summoned by choice — the World's only *natural* foes are **Wildlife**, and only in the deep wilds)
 
 **Eye Window**:
 The Guardian's only vulnerability: its amber eye opens for a short window after each slam (shorter in later fury phases). The window is a timing GATE — hits land only while the eye is open; outside it they bounce off for 0. *How much* a landing hit deals is then a matter of the weapon's damage band, crit and attack speed (see the Guardian damage rule). Skill is dodging and positioning to reach the window, not key-mashing.
@@ -82,8 +86,36 @@ A boss-gated segment of a **Dungeon** — and its own **instanced run**. The **D
 _Avoid_: level, floor, room (the loading/gameplay-shape words the Dungeon entry already forbids)
 
 **Husk**:
-A reactive creature that lives **only inside a Dungeon** — animated constructs stirred by the ruins, not living beings, so the open **World** still has no enemies. Every **Stage** holds two kinds (a melee chaser, a ranged kiter) and ends at a scaled-up Husk **boss**. In the **Delve**, Stage 1 is **stone-and-clay** (a Grasp Husk + a Spit Husk, ending at the **Deep Guardian**); Stage 2 (the **Deep**) is **cinder-and-basalt** (a Cinder Husk + an Ember Husk, ending at **the Forgeborn**). All are the same reactive AI — reskinned and retuned, never a new engine. Husks chase, telegraph their attacks, and knock Players down (never kill); the party's **host** client simulates them, never a server.
+A reactive creature that lives **only inside a Dungeon** — animated constructs stirred by the ruins, not living beings, so the open **World**'s only loose creatures are natural **Wildlife** (ADR-0012), never Husks. Every **Stage** holds two kinds (a melee chaser, a ranged kiter) and ends at a scaled-up Husk **boss**. In the **Delve**, Stage 1 is **stone-and-clay** (a Grasp Husk + a Spit Husk, ending at the **Deep Guardian**); Stage 2 (the **Deep**) is **cinder-and-basalt** (a Cinder Husk + an Ember Husk, ending at **the Forgeborn**). All are the same reactive AI — reskinned and retuned, never a new engine. Husks chase, telegraph their attacks, and knock Players down (never kill); the party's **host** client simulates them, never a server.
 _Avoid_: enemy/monster (those are World-wide claims — Husks are Dungeon-only), NPC
+
+**Wildlife**:
+The roaming creatures that bring the open **World** to life — the answer to "a big map with nothing
+happening in it" (ADR-0012). One **host-simulated** engine — the reactive **Husk** AI reskinned,
+never a new brain (`stepMob` / `MobProfile` from `content/dungeon.ts`) — with two **dispositions**:
+**peaceful** creatures (skittish, **forageable** — approach and catch a moving Node) roam the *whole*
+map for ambient life; **predatory** creatures (aggressive, **huntable** with Husk combat, or fled)
+roam *only* the **danger-flagged** deep-wilds **Zones**. Wildlife is **ephemeral** — spawned around
+online **Players** by the elected **host**, never persisted, discarded when no one is near or online
+(no server simulates the empty World; ADR-0001 preserved). A predator that catches you is a
+**knockdown**, never death and never item loss; **fleeing always works** (no predator outruns a
+Player, none crosses into the safe core). Both dispositions drop a **hide / meat / trophy** Resource
+family. Distinct from the summoned **Guardian** (authored colossus) and the **Husk** (Dungeon-only
+construct): Wildlife is *natural animals* — the deep jungle's own teeth.
+_Avoid_: monster, enemy, mob (these are natural animals, not authored foes loose in the World), Husk (that is the Dungeon construct), spawner (creatures are host-spawned, not from a placed point)
+
+**Host** (open-world):
+The single **Player** client that simulates all **Wildlife** at any moment, elected **deterministically**
+from the shared presence view (e.g. lowest-sorting online name) with **zero negotiation** — the same
+presence recompute every client already runs for the roster. It steps every creature's AI and
+**broadcasts all creature state in one batched message per tick** (so bandwidth is ~one stream
+regardless of creature count, staying under the realtime cap the position stream already respects).
+On host departure presence re-fires, a new host is elected, and — because Wildlife is ephemeral — it
+simply respawns creatures around the remaining Players; in-flight combat state is lost (graceful
+degradation, no host-migration protocol). Distinct from the **Dungeon** host (ADR-0007), which owns a
+*locked-roster instance* and whose departure *ends the run*; the open-world host owns nothing
+persistent and can hand off mid-session.
+_Avoid_: server (there is none — ADR-0001), authority (informal), master
 
 **Avatar**:
 The visual appearance of a Player: a blocky, big-headed pixel sprite composed from four color choices (skin, hair, shirt, pants), each picked from a curated palette. Chosen at first join, editable at every join, and visible to all Players.
@@ -142,6 +174,10 @@ _Avoid_: altar (that is the Seal/Guardian Offering point), spawn point
 - A **Dungeon** is entered through a fixed **World** entrance but is itself **ephemeral and instanced** — it exists only while a party is inside, resets each run, and is **simulated by one player's client (the host)**, not a server (ADR-0001 preserved; ADR-0007). It is the sole place that reverses *"nothing reacts"*: its creatures chase and a final boss awaits, while the open **World** and the **Guardian** stay non-reactive (ADR-0002). Always co-op; the roster locks at the entrance like the **Ward**, and mob count/HP scale to headcount with per-person danger held ~constant. Harm stays **knockdown → Exhaustion** — a full-party wipe *or the host leaving* ends the run (v1 has no host migration: host-leave boots the party out, no loot).
 - The first **Dungeon**, the **Delve**, is reached through a rubble-sealed mine shaft opened **once, permanently, with an Ancient Pickaxe** — so Dungeons are **post-Guardian** content (a tier-2 Tool is the key). Its **Husks** and **Deep Guardian** drop materials that craft the game's first **pure-combat weapon, the Sword** — a **Tool** with no gathering use, it only fights, and it strikes Husks, the boss, and the Guardian alike.
 - The **Village** is the game's **meta-loop**: gathering, the **Guardian**, the **Dungeon**, and the **frontier** all yield contributions that feed its **Hall**, raising the communal **tier**, which unlocks more to build — the reason to go back out (ADR-0010). It runs **parallel** to the tier-1→tier-2 tool ladder and **gates nothing**; its unlocked utilities are non-combat conveniences (opt-in **Buildings**), so the one-buff rule holds. Goals stay **implicit** — the Village's visible grandeur and the Hall's pool display *are* the signpost (the resolution of "quests vs. implicit goals": keep it implicit, let the World dangle the goal).
+- **Wildlife completes the frontier's reward-gradient (ADR-0012).** ADR-0009 gave the frontier more *reward* per step but no more *risk*; **predatory Wildlife is that missing risk half.** Danger is **zoned**: the **core** Zones and the **Village** are a guaranteed safe haven (a fresh Player at their first tree, or a cozy fisher, is never jumped); **predators spawn only in danger-flagged frontier Zones**, while **peaceful Wildlife roams everywhere** for ambient life. This makes "combat is something you *walk into*" literally true — you cross the threshold into the wilds. It fills the **connective tissue** (the dead space *between* destinations), which more destinations never could.
+- **Wildlife harm reuses the existing currency, nothing new.** A predator catch is a **knockdown** (the wilds use a **3 s** stun — the global `KNOCKDOWN_STUN_MS` is lowered 5 s → 3 s, which also makes the **Guardian**/**Dungeon** marginally more forgiving; accepted, playtest-tunable). **Three knockdowns in a rolling window → Exhaustion → wake at Hammock/spawn, inventory fully intact.** No player HP is ever introduced, no item is ever dropped — the no-death/no-loss contract is load-bearing. **Fleeing always works**; crossing back into the safe core is guaranteed safety.
+- **Night raises the wilds' teeth, never the core's.** The real-clock day/night cycle now gates danger: danger-flagged Zones get **more/tougher predators after dark**, turning day/night from cosmetics into a real "push in after dark?" decision (and giving the **Hand Torch** and the cooked-fish speed buff a purpose out there). The core stays **always safe**, day or night.
+- **Hunting/foraging feeds existing loops, adds no power.** Wildlife drops a **hide / meat / trophy** Resource family that flows only into things that already exist: the **Village** pool (the "frontier finds" ADR-0010 anticipated), **cooking** (a new campfire *ingredient* granting the **existing** move-speed buff — the **one-buff rule holds**, it is a new input not a new buff), and **decor / trophy Structures** (cozy expression + Village grandeur). It grants **no armour, no weapon stats, no new buff** — the no-HP and one-buff rules are inviolate, and the **Village still gates nothing**.
 
 ## Example dialogue
 

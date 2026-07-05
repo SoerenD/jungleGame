@@ -70,6 +70,7 @@ import type {
   KnockdownResult,
   NodeState,
   DungeonMsg,
+  CreatureMsg,
   OfferResult,
   OpenDelveResult,
   PlaceResult,
@@ -1235,6 +1236,17 @@ export class MockBackend implements Backend {
     /* no peers to broadcast to in the Mock world */
   }
 
+  /** ADR-0012: the creature-host election roster — just the lone real Player (bots
+   *  are sim flavor, never host candidates), so the Mock Player is always the host */
+  creatureRoster(): string[] {
+    return this.me ? [this.me] : [];
+  }
+
+  /** single-player: the lone Player is the creature host — nothing goes on the wire */
+  sendCreatures(_msg: CreatureMsg): void {
+    /* no peers in the Mock world */
+  }
+
   async hitGuardian(withTool?: ToolId): Promise<GuardianHitResult> {
     await this.lag();
     this.reconcileGuardian();
@@ -1377,6 +1389,15 @@ export class MockBackend implements Backend {
     const p = this.me ? this.db.players[this.me] : null;
     if (!p || (p.inventory.cooked_fish ?? 0) < 1) return { ok: false, reason: 'NOTHING_TO_EAT' };
     p.inventory.cooked_fish! -= 1;
+    this.saveNow();
+    return { ok: true, inventory: { ...p.inventory }, buffMs: SPEED_BUFF_MS };
+  }
+
+  async eatCookedMeat(): Promise<EatResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p || (p.inventory.cooked_meat ?? 0) < 1) return { ok: false, reason: 'NOTHING_TO_EAT' };
+    p.inventory.cooked_meat! -= 1;
     this.saveNow();
     return { ok: true, inventory: { ...p.inventory }, buffMs: SPEED_BUFF_MS };
   }

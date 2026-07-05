@@ -352,6 +352,13 @@ const en = {
     exhaustionDeepYou:
       'Exhaustion takes you — out of the Deep. Any hits you landed still count if the party wins.',
     knockedInDeep: (n: number, max: number) => `Knocked down in the Deep! (${n}/${max})`,
+    // ADR-0012 — open-world Wildlife
+    cookMeat: 'You roast the meat over the fire. (Eat it from your inventory.)',
+    foraged: (parts: string) => `You forage the wildlife — ${parts}.`,
+    hunted: (parts: string) => `Felled! ${parts}.`,
+    knockedInWild: (n: number, max: number) => `A predator knocks you down! (${n}/${max} — the third means Exhaustion)`,
+    wildExhaustionHammock: 'Exhaustion overtakes you in the wilds — you wake in your Hammock, pack fully intact.',
+    wildExhaustionSpawn: 'Exhaustion overtakes you in the wilds — you wake at the spawn, pack fully intact.',
   },
 
   delve: {
@@ -664,6 +671,13 @@ const de: Strings = {
     exhaustionDeepYou:
       'Erschöpfung übermannt dich — raus aus der Tiefe. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
     knockedInDeep: (n, max) => `In der Tiefe niedergeschlagen! (${n}/${max})`,
+    // ADR-0012 — Wildnis
+    cookMeat: 'Du röstest das Fleisch über dem Feuer. (Iss es aus deinem Inventar.)',
+    foraged: (parts) => `Du sammelst vom Wild — ${parts}.`,
+    hunted: (parts) => `Erlegt! ${parts}.`,
+    knockedInWild: (n, max) => `Ein Raubtier schlägt dich nieder! (${n}/${max} — der dritte bedeutet Erschöpfung)`,
+    wildExhaustionHammock: 'Erschöpfung übermannt dich in der Wildnis — du erwachst in deiner Hängematte, Rucksack unversehrt.',
+    wildExhaustionSpawn: 'Erschöpfung übermannt dich in der Wildnis — du erwachst am Startpunkt, Rucksack unversehrt.',
   },
 
   delve: {

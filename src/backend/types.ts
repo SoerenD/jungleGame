@@ -326,6 +326,23 @@ export type DungeonMsg =
   | { t: 'hit'; runId: string; mobId: string; by: string; tool?: ItemId }
   | { t: 'down'; runId: string; name: string; out: boolean };
 
+/**
+ * The open-world Wildlife transport (ADR-0012), carried on the same `jw-world`
+ * channel as a distinct broadcast event. The elected creature host emits ONE
+ * batched `sync` per tick (all live creatures, spatially culled to near online
+ * Players) so bandwidth is ~one stream regardless of count — under the realtime
+ * cap the position stream already respects. Non-host clients render from `sync`.
+ * Guests emit `hit`/`forage` to the host on a Player action (occasional, not
+ * per-tick); the host emits `felled` back so the hunter claims their own loot.
+ * In single-player (MockBackend) nothing is on the wire — the lone Player is the
+ * host and simulates locally (mirrors the Delve's peer-host split, ADR-0007).
+ */
+export type CreatureMsg =
+  | { t: 'sync'; host: string; mobs: MobSnap[] }
+  | { t: 'hit'; id: string; by: string; tool?: ItemId }
+  | { t: 'forage'; id: string; by: string }
+  | { t: 'felled'; id: string; by: string; loot: Inventory };
+
 export interface BackendEvents {
   position: (pos: PlayerPos) => void;
   presence: (players: PlayerPos[]) => void;
@@ -354,6 +371,8 @@ export interface BackendEvents {
   delveOpened: () => void;
   /** a peer-host-authority Delve message arrived from another client (ADR-0007) */
   dungeon: (msg: DungeonMsg) => void;
+  /** an open-world Wildlife message arrived from another client (ADR-0012) */
+  creatures: (msg: CreatureMsg) => void;
 }
 
 /**
@@ -429,6 +448,18 @@ export interface Backend {
    */
   sendDungeon(msg: DungeonMsg): void;
   /**
+   * the real online Player roster (self + peers, EXCLUDING sim bots) — the
+   * deterministic creature-host election set (ADR-0012). The lowest-sorting name
+   * is the elected host; every client computes the same. MockBackend returns just
+   * the lone Player (trivially the host); SupabaseBackend returns its presence view.
+   */
+  creatureRoster(): string[];
+  /**
+   * fire-and-forget an open-world Wildlife message over the Realtime channel
+   * (ADR-0012). No-op in single-player (MockBackend) — the lone host is local.
+   */
+  sendCreatures(msg: CreatureMsg): void;
+  /**
    * land one hit on the Guardian (server-ordered, participation recorded); the
    * backend rolls the damage + crit from `withTool`'s weapon band with an
    * injected rng and returns `{ damage, crit }`. `withTool` is the in-hand Tool,
@@ -446,6 +477,11 @@ export interface Backend {
   cook(): Promise<CookResult>;
   /** consume one cooked fish; the speed buff itself is client-side (ADR-0001) */
   eatCookedFish(): Promise<EatResult>;
+  /**
+   * consume one cooked MEAT for the SAME move buff (ADR-0012 — a new ingredient,
+   * NOT a new buff). Reuses the generic craft path server-side (no new RPC).
+   */
+  eatCookedMeat(): Promise<EatResult>;
   /** remember that this Player has seen the intro story */
   markIntroSeen(): Promise<void>;
   /** tick one Journey objective for this Player (idempotent) */
