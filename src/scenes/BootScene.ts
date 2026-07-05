@@ -3,7 +3,7 @@ import { AUDIO, OBJECTS, TILESET } from '../assetConfig';
 import { asset } from '../paths';
 import { GRIDS, PAL } from '../ui/icons';
 import { ITEMS, type ItemId } from '../content/items';
-import { ensureMobTextures } from '../mobSprites';
+import { ensureMobTextures, ensureProjectileTextures } from '../mobSprites';
 import { ensureDelvePropTextures } from '../delveProps';
 import { t } from '../i18n';
 
@@ -152,6 +152,8 @@ export class BootScene extends Phaser.Scene {
 
     // the Delve's Husks + Deep Guardian — procedural 3-frame sprites (ADR-0007)
     ensureMobTextures(this);
+    // the ranged Husks' spat shots — acid glob (Stage 1) / molten cinder (the Deep)
+    ensureProjectileTextures(this);
     // the Delve's props (beams, pillars, braziers, rubble, rails, glyphs…)
     ensureDelvePropTextures(this);
 

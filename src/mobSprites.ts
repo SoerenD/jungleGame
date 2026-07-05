@@ -353,3 +353,171 @@ export function ensureMobTextures(scene: Phaser.Scene): void {
     }
   });
 }
+
+// -------------------------------------------------------- Delve projectiles
+// The ranged Husks' spat shots (ADR-0007 / ADR-0011) — NOT a generic ball. Stage
+// 1's Spit Husk hurls a corrosive ACID glob (its green throat-sac bile, dripping);
+// Stage 2's Ember Husk / Forgeborn spit a molten CINDER (a jagged white-hot core
+// that sparks). Each is a 3-frame flicker LOOP in the mob's own throat-sac
+// palette, drawn the same fillRect→texture way as the sprites. Deliberately RADIAL
+// / direction-agnostic: a peer renders these from host snapshots that carry
+// position only (no velocity), so a comet-tail that points a fixed way is out —
+// the drips/sparks/core hop between frames to sell motion regardless of heading.
+export type ProjTheme = 'acid' | 'ember';
+
+export const PROJ_TEX: Record<ProjTheme, string> = {
+  acid: 'delve-proj-acid',
+  ember: 'delve-proj-ember',
+};
+
+/** additive-glow tint + alpha per theme (halo scale is derived from the radius) */
+export const PROJ_GLOW: Record<ProjTheme, { color: number; alpha: number; scale: number }> = {
+  acid: { color: 0x39e467, alpha: 0.42, scale: 0.65 }, // sacBright green
+  ember: { color: 0xff8c2a, alpha: 0.5, scale: 0.7 }, // molten crackHot orange
+};
+
+/** which Delve Stage fires which projectile theme (Stage 1 acid, the Deep molten) */
+export function projTheme(stage: 1 | 2): ProjTheme {
+  return stage === 1 ? 'acid' : 'ember';
+}
+
+const PROJ_LEGEND: Record<ProjTheme, Record<string, string>> = {
+  acid: { o: '#0e3d2f', d: '#13563b', b: '#1f9e6b', B: '#39e467', c: '#b6ffcf' },
+  ember: { o: '#5a1a08', d: '#c43a12', e: '#e0561f', E: '#ff9a4d', c: '#ffe0a0', w: '#ffffff' },
+};
+
+// 3-frame 12×12 sheets; the drips (acid) / sparks + notched crown (ember) shift
+// each frame so the loop shimmers and never reads as a static dot.
+const PROJ_FRAMES: Record<ProjTheme, string[][]> = {
+  acid: [
+    [
+      '............',
+      '....oo......',
+      '...odbbdo...',
+      '..odbBBbo...',
+      '..obBccBdo..',
+      '.odBcccBbo..',
+      '..obBccBbdo.',
+      '..odbBBbbo..',
+      '...obbbdo...',
+      '....odbo....',
+      '.....bo.....',
+      '......d.....',
+    ],
+    [
+      '............',
+      '....oo......',
+      '...obbbo....',
+      '..odBBBbdo..',
+      '.odBccccBo..',
+      '.obBccccBbo.',
+      '..obBccBbo..',
+      '...obBBbdo..',
+      '...oddbo....',
+      '....obo.....',
+      '............',
+      '......b.....',
+    ],
+    [
+      '............',
+      '.....oo.....',
+      '...odbbdo...',
+      '..obbBBdo...',
+      '..odBccBbo..',
+      '.obBcccBbdo.',
+      '..odBccBbo..',
+      '..obbBBbo...',
+      '...obbdo....',
+      '....odo.....',
+      '....b.......',
+      '.....b......',
+    ],
+  ],
+  ember: [
+    [
+      '............',
+      '....o.o.....',
+      '...oeEeeo...',
+      '..odEcwEeo..',
+      '.oeEcwwcEo..',
+      '..oEcwwwEe..',
+      '.oedEwwEeo..',
+      '..oeEEEeeo..',
+      '...oeeeo....',
+      '..e..o..e...',
+      '.....e......',
+      '............',
+    ],
+    [
+      '............',
+      '...o.oe.....',
+      '..oeEEeeo...',
+      '..oeEwwEeo..',
+      '.oedcwwwcEo.',
+      '.oEcwwwwcEo.',
+      '..oeEwwwEo..',
+      '...oeEEEeo..',
+      '..o.oeeo.e..',
+      '....e.o.....',
+      '...e....e...',
+      '............',
+    ],
+    [
+      '............',
+      '....oeo.....',
+      '...oeEeeo...',
+      '..oeEcwwEo..',
+      '.oedEwwwEe..',
+      '..oEcwwwcEo.',
+      '.oeEwwcEeo..',
+      '..odeEEeeo..',
+      '...oeeed....',
+      '..e..o..e...',
+      '......e.....',
+      '....e.......',
+    ],
+  ],
+};
+
+function drawProjFrame(ctx: Ctx, ox: number, rows: string[], map: Record<string, string>): void {
+  for (let y = 0; y < rows.length; y++) {
+    const row = rows[y];
+    for (let x = 0; x < row.length; x++) {
+      const col = map[row[x]];
+      if (col) R(ctx, ox + x, y, 1, 1, col);
+    }
+  }
+}
+
+/**
+ * Build the two Delve projectile textures (3-frame 12×12 sheets) + their looping
+ * "fly" animations. Global textures/anims like ensureMobTextures — call once in
+ * BootScene. Idempotent.
+ */
+export function ensureProjectileTextures(scene: Phaser.Scene): void {
+  (Object.keys(PROJ_TEX) as ProjTheme[]).forEach((theme) => {
+    const key = PROJ_TEX[theme];
+    const frames = PROJ_FRAMES[theme];
+    const map = PROJ_LEGEND[theme];
+    const W = 12;
+    const H = 12;
+    if (!scene.textures.exists(key)) {
+      const canvas = document.createElement('canvas');
+      canvas.width = W * frames.length;
+      canvas.height = H;
+      const ctx = canvas.getContext('2d')!;
+      frames.forEach((rows, f) => drawProjFrame(ctx, f * W, rows, map));
+      const tex = scene.textures.addCanvas(key, canvas)!;
+      frames.forEach((_, f) => tex.add(f, 0, f * W, 0, W, H));
+    }
+    const animKey = `${key}-fly`;
+    if (!scene.anims.exists(animKey)) {
+      scene.anims.create({
+        key: animKey,
+        frames: scene.anims.generateFrameNumbers(key, { start: 0, end: frames.length - 1 }),
+        frameRate: 7,
+        repeat: -1,
+      });
+    }
+  });
+}

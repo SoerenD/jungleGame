@@ -92,7 +92,7 @@ import {
   VILLAGE_ZONE_RADIUS,
   type VillageRecord,
 } from '../content/village';
-import { MOB_FRAME, MOB_TEX } from '../mobSprites';
+import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX, projTheme } from '../mobSprites';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import { drawStructureArt } from '../ui/icons';
@@ -356,7 +356,7 @@ export class GameScene extends Phaser.Scene {
   private mobViews = new Map<string, MobView>();
   /** host: live projectiles. Peers render them from snapshots. */
   private projectiles: DelveProjectile[] = [];
-  private projViews = new Map<string, Phaser.GameObjects.Arc>();
+  private projViews = new Map<string, { sprite: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image }>();
   private delveObjects: Phaser.GameObjects.GameObject[] = [];
   /** per-room floor CanvasTexture keys — removed on teardown so a re-entry rebuilds */
   private delveFloorKeys: string[] = [];
@@ -3411,7 +3411,10 @@ export class GameScene extends Phaser.Scene {
       v.bar.destroy();
     }
     this.mobViews.clear();
-    for (const a of this.projViews.values()) a.destroy();
+    for (const v of this.projViews.values()) {
+      v.sprite.destroy();
+      v.glow.destroy();
+    }
     this.projViews.clear();
     for (const pv of this.delvePeers.values()) {
       pv.marker.destroy();
@@ -3886,20 +3889,43 @@ export class GameScene extends Phaser.Scene {
       v.bar.destroy();
       this.mobViews.delete(id);
     }
+    // projectiles wear the live Stage's spat shot (ADR-0011): an acid glob in the
+    // Delve, a molten cinder in the Deep — a flickering pixel sprite over an
+    // additive glow, sized to the shot's radius. Radial art, so guest snapshots
+    // (position only) render identically.
+    const theme = projTheme(this.delveStage);
+    const projKey = PROJ_TEX[theme];
+    const projGlow = PROJ_GLOW[theme];
     const seenP = new Set<string>();
     for (const p of this.projectiles) {
       seenP.add(p.id);
-      let a = this.projViews.get(p.id);
-      if (!a) {
-        a = this.add.circle(0, 0, Math.max(3, p.r * TILE), 0xffcc44).setStrokeStyle(1, 0x3a2a08);
-        this.projViews.set(p.id, a);
-        this.delveObjects.push(a);
+      const px = p.x * TILE;
+      const py = p.y * TILE;
+      let v = this.projViews.get(p.id);
+      if (!v) {
+        const glow = this.add
+          .image(0, 0, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(projGlow.color)
+          .setAlpha(projGlow.alpha);
+        const sprite = this.add.sprite(0, 0, projKey, 0).setOrigin(0.5, 0.5);
+        sprite.anims.play(`${projKey}-fly`, true);
+        v = { sprite, glow };
+        this.projViews.set(p.id, v);
+        this.delveObjects.push(sprite, glow);
       }
-      a.setPosition(p.x * TILE, p.y * TILE).setDepth(DELVE_DEPTH_PROJ);
+      // the 12px art fills the shot's diameter; the 64px glow is a soft halo ~2.4× it
+      const diam = Math.max(6, p.r * TILE * 2);
+      v.sprite.setPosition(px, py).setDepth(DELVE_DEPTH_PROJ).setScale(diam / 12);
+      v.glow
+        .setPosition(px, py)
+        .setDepth(DELVE_DEPTH_PROJ - 1)
+        .setScale((diam / 26) * (projGlow.scale / 0.65));
     }
-    for (const [id, a] of this.projViews) {
+    for (const [id, v] of this.projViews) {
       if (seenP.has(id)) continue;
-      a.destroy();
+      v.sprite.destroy();
+      v.glow.destroy();
       this.projViews.delete(id);
     }
   }
