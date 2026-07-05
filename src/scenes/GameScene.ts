@@ -3753,10 +3753,13 @@ export class GameScene extends Phaser.Scene {
       this.broadcastMobSnap();
     }
 
-    // E: strike / leave (same cadence discipline as the World swing loop)
+    // E / LMB: strike / leave (same cadence discipline + alt-fire as the World swing loop)
     if (!this.chatFocused && !stunned) {
       const ePressed = Phaser.Input.Keyboard.JustDown(this.keys.e);
-      if (ePressed || this.keys.e.isDown) {
+      // B1: LMB is alt-fire for swing:true attacks here too; one-shots (leave,
+      // descend) stay E-only via the `ePressed` guard below (chat already excluded)
+      const lmbActive = this.lmbDown;
+      if (ePressed || this.keys.e.isDown || lmbActive) {
         const now = Date.now();
         if (ePressed || now - this.lastSwingAt >= SWING_CADENCE_MS) {
           const action = this.resolveEAction();
