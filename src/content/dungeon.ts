@@ -323,19 +323,20 @@ export const MOB_PROFILES: Record<MobKind, MobProfile> = {
     projSpeed: 0,
     projR: 0,
   },
-  // Spit Husk — ranged kiter: keeps its distance, fires slow telegraphed
-  // projectiles you can side-step; long cooldown so it never machine-guns you
+  // Spit Husk — ranged kiter: keeps its distance, fires telegraphed projectiles
+  // you can side-step. Cooldown kept short enough to pressure (a lone dawdler eats
+  // a shot roughly every ~2.7s) but the wind-up stays long enough to read + dodge.
   spit: {
     hp: 6,
     radius: 0.42,
     speed: 2.2,
     aggro: 8,
     reach: 0,
-    telegraphMs: 1150,
+    telegraphMs: 1000,
     strikeMs: 0,
     lungeSpeed: 0,
     strikeR: 0,
-    cooldownMs: 2800,
+    cooldownMs: 1700,
     kiteMin: 4.5,
     fireRange: 7,
     projSpeed: 4.5,
@@ -382,19 +383,20 @@ export const MOB_PROFILES: Record<MobKind, MobProfile> = {
     projSpeed: 0,
     projR: 0,
   },
-  // Ember Husk — molten ranged kiter: faster shot, slightly shorter cooldown +
-  // longer reach than the Spit Husk, but still side-steppable and long-telegraphed.
+  // Ember Husk — molten ranged kiter: faster shot, shorter cooldown + longer reach
+  // than the Spit Husk (~a shot every ~2.35s), but still side-steppable and clearly
+  // telegraphed. The Deep's shooters lean on you harder than the Delve's.
   ember: {
     hp: 7,
     radius: 0.44,
     speed: 2.4,
     aggro: 8.5,
     reach: 0,
-    telegraphMs: 1050,
+    telegraphMs: 950,
     strikeMs: 0,
     lungeSpeed: 0,
     strikeR: 0,
-    cooldownMs: 2500,
+    cooldownMs: 1400,
     kiteMin: 4.5,
     fireRange: 7.5,
     projSpeed: 5.0,
