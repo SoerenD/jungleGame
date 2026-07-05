@@ -1,5 +1,6 @@
 import type { ItemId, StructureId, ToolId } from '../content/items';
 import type { NodeTypeId } from '../content/nodeTypes';
+import type { VillageRecord } from '../content/village';
 
 /** legacy tint-preset id — only survives in pre-update Player rows for migration */
 export type AvatarId = 0 | 1 | 2 | 3;
@@ -154,6 +155,14 @@ export interface FightState {
   emptySlumberAt: number | null;
 }
 
+/**
+ * The Village (ADR-0010): one collective, group-founded meta-loop per World.
+ * Server-ordered, additive, and tile-INDEPENDENT — the tier/pool belong to the
+ * group, never the Hall's tile, so moving or dismantling the Hall never resets
+ * progress. Identical shape to the content-side VillageRecord.
+ */
+export type VillageState = VillageRecord;
+
 export interface WorldSnapshot {
   nodes: NodeState[];
   structures: Structure[];
@@ -162,6 +171,7 @@ export interface WorldSnapshot {
   quest: QuestState;
   seal: SealState;
   fight: FightState | null;
+  village: VillageState;
 }
 
 export type OfferResult =
@@ -197,6 +207,15 @@ export type DismantleResult =
 export type ContributeSealResult =
   | { ok: false; reason: 'ALREADY_BROKEN' | 'NOTHING_TO_GIVE' }
   | { ok: true; taken: Inventory; inventory: Inventory; seal: SealState };
+
+/**
+ * Give every carried qualifying Resource/loot into the Village's communal pool
+ * at the Hall (ADR-0010 §2) — additive and permanent. `gained` is the points
+ * this deposit added; `village` is the record after any tier advancement.
+ */
+export type ContributeVillageResult =
+  | { ok: false; reason: 'NO_HALL' | 'NOTHING_TO_GIVE' }
+  | { ok: true; taken: Inventory; inventory: Inventory; village: VillageState; gained: number };
 
 export type SummonResult =
   | { ok: false; reason: 'SEAL_INTACT' | 'FIGHT_IN_PROGRESS' | 'NO_TOTEM' }
@@ -313,6 +332,8 @@ export interface BackendEvents {
   sealChanged: (seal: SealState) => void;
   /** the one-time, forever moment — arena opens for everyone */
   sealBroken: () => void;
+  /** the Village record changed — founded, contributed to, advanced a tier, or the Hall moved/removed (ADR-0010) */
+  villageChanged: (village: VillageState) => void;
   guardianSummoned: (fight: FightState) => void;
   /** the first strike landed: the clock re-anchors to `engagedAt`, roster + HP lock, the Ward rises */
   guardianEngaged: (fight: FightState) => void;
@@ -373,6 +394,12 @@ export interface Backend {
    * at the monument — clamped so an overshooting quota takes only what it needs
    */
   contributeSeal(): Promise<ContributeSealResult>;
+  /**
+   * give every carried qualifying Resource/loot into the Village's communal pool
+   * at the Hall (ADR-0010) — additive, permanent, server-ordered. Crossing a
+   * tier threshold with its milestone built advances the whole Village.
+   */
+  contributeVillage(): Promise<ContributeVillageResult>;
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
   /**

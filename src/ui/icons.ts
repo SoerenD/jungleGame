@@ -7,6 +7,7 @@
 import { OBJECTS } from '../assetConfig';
 import { asset } from '../paths';
 import type { ItemId } from '../content/items';
+import { VILLAGE_ART, type StructureArt } from '../content/village';
 
 /** shared palette: char → CSS color ('.' and unknown chars are transparent) */
 export const PAL: Record<string, string> = {
@@ -378,6 +379,61 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
   ],
 };
 
+/**
+ * Draw a Village Building (ADR-0010) into a 2D context at any W×H — shared by the
+ * slot icon here and the in-world texture the scene bakes, so they always match.
+ * The whole silhouette is derived from the compact StructureArt spec, so A3 ships
+ * no PNG assets yet every Building still reads as its own distinct object.
+ */
+export function drawStructureArt(ctx: CanvasRenderingContext2D, W: number, H: number, art: StructureArt): void {
+  const O = '#23262c'; // shared outline
+  const R = (x: number, y: number, w: number, h: number, c: string) => {
+    ctx.fillStyle = c;
+    ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+  };
+  ctx.clearRect(0, 0, W, H);
+  const u = W / 12; // one "grid pixel" — keeps proportions across sizes
+  const cx = W / 2;
+  if (art.shape === 'decor') {
+    // a post with a bright cap (banner / lamp / bloom read as "something raised")
+    R(cx - u, H * 0.42, u * 2, H * 0.58, O);
+    R(cx - u * 0.5, H * 0.44, u, H * 0.56, art.body);
+    R(cx - u * 2, H * 0.1, u * 4, H * 0.34, O);
+    R(cx - u * 1.5, H * 0.14, u * 3, H * 0.26, art.trim);
+    return;
+  }
+  const wallTop = Math.round(H * 0.42);
+  // walls
+  R(u, wallTop, W - u * 2, H - wallTop, O);
+  R(u * 1.5, wallTop + 1, W - u * 3, H - wallTop - 1, art.body);
+  // roof: a spire+crown for monuments, a trapezoid for plain buildings
+  if (art.shape === 'monument') {
+    R(cx - u * 1.5, u, u * 3, wallTop, O);
+    R(cx - u, u * 1.5, u * 2, wallTop - 1, art.roof);
+    R(cx - u * 2.5, 0, u * 5, u * 2.6, O);
+    R(cx - u * 2, u * 0.5, u * 4, u * 1.8, art.trim);
+  } else {
+    for (let i = 0; i < wallTop; i++) {
+      const inset = (1 - i / wallTop) * (W * 0.34);
+      R(inset, i, W - inset * 2, 1.2, art.roof);
+    }
+    R(u, wallTop - 1, W - u * 2, 1.5, O); // eave line
+  }
+  // door
+  const doorH = (H - wallTop) * 0.6;
+  R(cx - u * 1.3, H - doorH, u * 2.6, doorH, O);
+  R(cx - u * 0.9, H - doorH + 1, u * 1.8, doorH - 1, art.trim);
+  // windows flank the door on plain buildings
+  if (art.shape === 'building') {
+    const wy = wallTop + (H - wallTop) * 0.2;
+    const s = u * 1.5;
+    R(u * 2, wy, s, s, O);
+    R(u * 2.3, wy + u * 0.3, s - u * 0.6, s - u * 0.6, art.trim);
+    R(W - u * 3.5, wy, s, s, O);
+    R(W - u * 3.2, wy + u * 0.3, s - u * 0.6, s - u * 0.6, art.trim);
+  }
+}
+
 const cache = new Map<ItemId, string>();
 
 /** icon URL for an item: a data URL for drawn icons, an asset URL for structures */
@@ -385,6 +441,7 @@ export function itemIcon(id: ItemId): string {
   const hit = cache.get(id);
   if (hit) return hit;
   const grid = GRIDS[id];
+  const villageArt: StructureArt | undefined = VILLAGE_ART[id as keyof typeof VILLAGE_ART];
   let url = '';
   if (grid) {
     const canvas = document.createElement('canvas');
@@ -399,6 +456,13 @@ export function itemIcon(id: ItemId): string {
         ctx.fillRect(x, y, 1, 1);
       }
     });
+    url = canvas.toDataURL();
+  } else if (villageArt) {
+    // the Village's own Buildings (ADR-0010) have no PNG — draw their slot icon
+    const canvas = document.createElement('canvas');
+    canvas.width = 12;
+    canvas.height = 12;
+    drawStructureArt(canvas.getContext('2d')!, 12, 12, villageArt);
     url = canvas.toDataURL();
   } else {
     // structure sprites are runtime-loaded files: prefix with the base path so

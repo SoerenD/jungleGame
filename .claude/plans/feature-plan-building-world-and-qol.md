@@ -1,7 +1,8 @@
 # Feature plan — Buildings, Frontier & QoL batch
 
-**One line:** Six resolved changes from the design grill — a real building/village system,
-a bigger frontier World with faux-elevation, and four smaller gameplay/UX fixes.
+**One line:** Seven resolved changes from the design grill — a real building system, a bigger
+frontier World with faux-elevation, a communal **Village meta-loop** (the game's missing long-term
+progression), and four smaller gameplay/UX fixes.
 
 > ⚠ **What is ALREADY built — do NOT re-implement:** the Guardian combat overhaul (ADR-0006:
 > weapon bands/crits/DPS, damage-dealt float, HP 560, `GUARDIAN_DISPLAY_SCALE`) and Dungeons v1 /
@@ -11,10 +12,11 @@ a bigger frontier World with faux-elevation, and four smaller gameplay/UX fixes.
 > Big-ticket detail lives in **ADR-0008** (Buildings) and **ADR-0009** (Frontier). Domain terms:
 > CONTEXT "Structure / Building / Prop", "Zone / frontier", "Dungeon".
 
-**Suggested build order:** the six items are largely independent. Rough effort: **A2 (Frontier)**
-is the biggest (map + art + render); **A1 (Buildings)** is next; **B1–B4** are small. Do the small
-ones first for quick wins, or parallelize. **#11 (quests vs implicit goals) is UNRESOLVED** — see
-the end; do not build a quest system.
+**Suggested build order:** **A1 (Buildings) → A3 (Village)** are a dependency chain — the Village is
+built *from* Buildings, so A1 first. **A2 (Frontier)** is the biggest standalone effort (map + art +
+render). **B1–B4** are small quick wins. Reasonable order: B-items → A1 → A3 → A2 (A2 parallelizable).
+**#11 is resolved** — folded into A3 (goals stay implicit; the Village is the shared goal); do NOT
+build a quest system.
 
 ---
 
@@ -81,6 +83,50 @@ composed via `tools/compose-*.ts`. Regen `public/map/*.json` — **must keep exi
 3. The Highland Crags hill reads as *raised*: cliff edges block, the ramp is the only way up, a
    Player on top renders above Players/objects at the base, and a base shadow is present.
 4. Reaching the vista lifts minimap fog around the crag.
+
+---
+
+## A3 — The Village: communal meta-loop  (ADR-0010; progression / #11)
+
+**Depends on A1 (Buildings)** — the Village's milestone builds and unlockable building types *are*
+Buildings. This is the game's missing long-term progression; big feature, its own build effort.
+
+**Decisions**
+- **One communal Village, one collective tier, collective-only** (no individual tracking). The hub
+  every activity feeds.
+- **Driver:** a permanent, additive contribution **pool** at the **Hall** (accepts a broad set —
+  resources, planks, Guardian scales, Delve cores, frontier finds) **+ a milestone build per tier.**
+- **Ladder:** ~5 capped tiers **Camp → Hamlet → Village → Town → Capital**, endless decoration within
+  each. Each tier unlocks new building types (decor + **non-combat QoL**: Waystone/fast-travel, Grand
+  Stockpile, Bell), automatic visual grandeur, a prestige title. **Parallel — gates nothing.** The
+  one-buff rule holds (utilities are opt-in Buildings, never stat buffs).
+- **Group-founded:** raising the Hall (tier-1 milestone) wherever the group agrees founds the Village
+  there (first-claim, server-ordered); zone = a radius around the Hall. Re-foundable; **the tier/pool
+  are tile-independent — moving or dismantling the Hall never resets progress.**
+- **Hall = communal spawn:** priority **Hammock > Hall > World spawn.** Build-anywhere still allowed;
+  only village-zone builds advance the tier.
+- **Cozy guardrails:** no decay / no upkeep; optional & ignorable; collective-only forever;
+  **months-long** pace, **early-fast/late-grand**, scales to headcount.
+
+**Where:** new persistent **Village** state (tier, pool, Hall location) — one per world,
+server-ordered, **tile-independent** — in `src/backend/types.ts` + both backends; the **Hall** as a
+special Structure (founding + contribution UI + pool/tier display + spawn anchor); spawn resolution
+updated (Hammock > Hall > World spawn); a "what counts" contribution table + tier thresholds (new
+content module).
+
+**Acceptance**
+1. Raising the Hall founds the Village there; the Hall becomes the group's spawn (unless a Player has
+   a Hammock); with no Hall, spawn is the World spawn.
+2. Depositing qualifying resources/loot at the Hall raises the shared pool (additive, permanent,
+   synced); crossing a threshold **and** completing the tier's milestone build advances the tier for
+   everyone.
+3. Each tier unlocks its new building types + applies visible grandeur; the Village gates no other
+   content.
+4. Dismantling or re-founding the Hall **preserves** the tier and pool (tile-independent).
+5. No decay: the tier never drops on its own; no individual contribution stats appear anywhere.
+
+**Scope note:** numbers (contribution table, thresholds, pacing) are playtest tuning — DPS-style,
+tune after it's playable.
 
 ---
 
@@ -159,9 +205,10 @@ ADR-0001 (no server). CONTEXT: Structure/Building/Prop, Zone/frontier, Exhaustio
 
 ---
 
-## OPEN — not decided this session
+## #11 quests vs. implicit goals — RESOLVED (folded into the Village)
 
-**#11 quests vs. implicit goals.** Grill reached the fork (A stay implicit / B explicit quests /
-C hybrid bounties board) with a recommendation of **A** (the game is already Factorio-style; the
-Seal bars and taunting tier-2 nodes prove implicit signaling works; *"Avoid: quest log"* stands).
-**No decision made — do not implement anything here.** Resume the grill on this before building.
+Goals stay **implicit** — no quest system, *"Avoid: quest log"* stands. The progression gap behind
+#11 is answered by **A3 the Village (ADR-0010)**: it becomes the shared, world-signalled goal (its
+grandeur + the Hall's pool display *are* the signpost). **Do NOT build a quest log.** The only
+adjacent work worth doing is making existing implicit carrots more *legible* (a taunting tier-2 node
+that reads "needs a better tool", the Delve entrance that reads "something's down there").

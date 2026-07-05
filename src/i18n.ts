@@ -132,6 +132,18 @@ const en = {
     broken: 'The Seal lies broken. The arena stands open, forever.',
   },
 
+  village: {
+    title: '🏛 The Village',
+    hint: 'Stand by the Hall and press E to give resources & loot to the pool.',
+    unfounded: 'Raise a Village Hall (Buildings tab) anywhere to found the Village.',
+    tierName: (tier: number) => ['Wildland', 'Camp', 'Hamlet', 'Village', 'Town', 'Capital'][tier] ?? 'Village',
+    tierTitle: (tier: number) => ['Wanderers', 'Settlers', 'Homesteaders', 'Villagers', 'Townsfolk', 'Citizens of the Capital'][tier] ?? '',
+    poolLabel: 'Pool',
+    milestoneDone: (name: string) => `✓ ${name} raised`,
+    milestoneTodo: (name: string) => `○ Raise a ${name} in the zone`,
+    capital: 'The grandest tier — decorate freely!',
+  },
+
   fight: {
     title: '⚔ The Guardian',
     stirs: '⚔ The Guardian stirs',
@@ -302,6 +314,10 @@ const en = {
     blockedByNode: (name: string) => `${name} is in the way — the whole footprint must be clear.`,
     placed: (name: string) => `${name} placed!`,
     hammockSet: 'Your Hammock is set — Exhaustion and login bring you here.',
+    villageFoundedYou: 'You found the Village — this is home now. Everyone without a Hammock wakes here.',
+    villageContributed: (pts: number) => `You give to the Village — +${pts} to the pool!`,
+    villageNothingToGive: 'You carry nothing the Village pool accepts.',
+    hallAlreadyStands: 'A Hall already stands — dismantle it to re-found the Village elsewhere.',
     alreadyBuiltHere: 'Someone already built here — first placement wins. Item kept.',
     dismantled: (name: string, gained: string) => `${name} dismantled — ${gained}`,
     dismantledBare: (name: string) => `${name} dismantled.`,
@@ -344,6 +360,8 @@ const en = {
     delveOpened: (who: string) => `the rubble gives way — ${who} has opened the Delve! A cold draught rises from the shaft.`,
     guardianBested: (who: string, scales: number) =>
       `🏆 THE GUARDIAN IS BESTED! ${who} carried the day — ${scales} Guardian Scales to every fighter. It sinks back into slumber.`,
+    villageFounded: (who: string) => `🏛 ${who} founded the Village! Everyone without a Hammock now wakes at the Hall.`,
+    villageGrew: (name: string) => `🏛 the Village has grown into a ${name}!`,
     exhaustionCollapse: (who: string, atHammock: boolean) =>
       `${who} collapses from Exhaustion — out for this fight, waking ${atHammock ? 'in their Hammock' : 'at the spawn'}. Hits already landed still count toward the loot.`,
   },
@@ -412,6 +430,18 @@ const de: Strings = {
     title: '⛩ Das Siegel',
     hint: 'Stell dich nah heran und drücke E, um deine Opfergaben darzubringen.',
     broken: 'Das Siegel ist gebrochen. Die Arena steht offen, für immer.',
+  },
+
+  village: {
+    title: '🏛 Das Dorf',
+    hint: 'Stell dich zur Halle und drücke E, um Ressourcen & Beute in den Vorrat zu geben.',
+    unfounded: 'Errichte irgendwo eine Dorfhalle (Reiter Gebäude), um das Dorf zu gründen.',
+    tierName: (tier: number) => ['Wildnis', 'Lager', 'Weiler', 'Dorf', 'Stadt', 'Hauptstadt'][tier] ?? 'Dorf',
+    tierTitle: (tier: number) => ['Wanderer', 'Siedler', 'Gehöftler', 'Dörfler', 'Städter', 'Bürger der Hauptstadt'][tier] ?? '',
+    poolLabel: 'Vorrat',
+    milestoneDone: (name: string) => `✓ ${name} errichtet`,
+    milestoneTodo: (name: string) => `○ Errichte ${name} in der Zone`,
+    capital: 'Die höchste Stufe — schmücke nach Herzenslust!',
   },
 
   fight: {
@@ -581,6 +611,10 @@ const de: Strings = {
     blockedByNode: (name) => `${name} ist im Weg — die ganze Grundfläche muss frei sein.`,
     placed: (name) => `${name} platziert!`,
     hammockSet: 'Deine Hängematte steht — Erschöpfung und Anmeldung bringen dich hierher.',
+    villageFoundedYou: 'Du hast das Dorf gegründet — jetzt ist hier Heimat. Jeder ohne Hängematte erwacht hier.',
+    villageContributed: (pts: number) => `Du gibst dem Dorf — +${pts} für den Vorrat!`,
+    villageNothingToGive: 'Du trägst nichts, was der Dorfvorrat annimmt.',
+    hallAlreadyStands: 'Eine Halle steht bereits — bau sie ab, um das Dorf woanders neu zu gründen.',
     alreadyBuiltHere: 'Hier hat schon jemand gebaut — die erste Platzierung gewinnt. Item behalten.',
     dismantled: (name, gained) => `${name} abgebaut — ${gained}`,
     dismantledBare: (name) => `${name} abgebaut.`,
@@ -622,6 +656,8 @@ const de: Strings = {
     delveOpened: (who) => `das Geröll gibt nach — ${who} hat den Schacht geöffnet! Ein kalter Luftzug steigt aus der Tiefe auf.`,
     guardianBested: (who, scales) =>
       `🏆 DER WÄCHTER IST BEZWUNGEN! ${who} haben den Sieg errungen — ${scales} Wächterschuppen für jeden Kämpfer. Er sinkt zurück in den Schlummer.`,
+    villageFounded: (who: string) => `🏛 ${who} hat das Dorf gegründet! Jeder ohne Hängematte erwacht nun an der Halle.`,
+    villageGrew: (name: string) => `🏛 das Dorf ist zu ${name} herangewachsen!`,
     exhaustionCollapse: (who, atHammock) =>
       `${who} bricht vor Erschöpfung zusammen — raus aus diesem Kampf, erwacht ${atHammock ? 'in der Hängematte' : 'am Startpunkt'}. Bereits gelandete Treffer zählen weiter zur Beute.`,
   },

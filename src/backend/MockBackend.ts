@@ -31,6 +31,17 @@ import {
 import { footprint, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
+import {
+  emptyVillage,
+  inVillageZone,
+  isVillageStructure,
+  milestoneForTier,
+  recomputeTier,
+  villageContribution,
+  VILLAGE_MAX_TIER,
+  type VillageRecord,
+  type VillageTier,
+} from '../content/village';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
 import { asset } from '../paths';
 import { t } from '../i18n';
@@ -41,6 +52,7 @@ import type {
   BackendEvents,
   ChatMsg,
   ContributeSealResult,
+  ContributeVillageResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -152,6 +164,8 @@ interface Db {
     treasureIndex: number;
     seal?: { broken: boolean; contributed: Record<SealResourceId, number> };
     fight?: DbFight | null;
+    /** the communal Village (ADR-0010): tier + additive pool + Hall location, tile-independent */
+    village?: VillageRecord;
   };
 }
 
@@ -223,6 +237,7 @@ export class MockBackend implements Backend {
     this.db.world ??= { gateOpen: false, treasureIndex: 0 };
     this.db.world.seal ??= { broken: false, contributed: { wood: 0, stone: 0, fiber: 0, fruit: 0 } };
     this.db.world.fight ??= null;
+    this.db.world.village ??= emptyVillage();
     this.db.crates ??= {};
     this.db.sawmills ??= {};
     // drop anything whose id is no longer a known item — retired Structures/Tools
@@ -366,10 +381,15 @@ export class MockBackend implements Backend {
     }
     this.normalizeJourney(name, p);
     this.startBots();
-    // login position: the owner's Hammock replaces the World spawn
+    // login position (ADR-0010 §4): Hammock > Village Hall > last spot. A founded
+    // Hall makes the Village home; without a Hammock a Player wakes there.
     if (p.wakePoint) {
       p.x = (p.wakePoint.tx + 0.5) * TILE;
       p.y = (p.wakePoint.ty + 0.5) * TILE;
+    } else if (this.db.world!.village?.hall) {
+      const w = this.wakeTileFor(p);
+      p.x = (w.tx + 0.5) * TILE;
+      p.y = (w.ty + 0.5) * TILE;
     }
     return {
       ok: true,
@@ -465,7 +485,52 @@ export class MockBackend implements Backend {
       quest: this.questState(),
       seal: this.sealState(),
       fight: this.fightState(),
+      village: this.villageState(),
     };
+  }
+
+  private villageState(): VillageRecord {
+    const v = (this.db.world!.village ??= emptyVillage());
+    return { tier: v.tier, pool: v.pool, hall: v.hall ? { ...v.hall } : null, milestonesBuilt: v.milestonesBuilt };
+  }
+
+  /**
+   * Where a Player wakes/appears (ADR-0010 §4): priority Hammock > Village Hall >
+   * World spawn. The Hall tile is just south of its footprint (the footprint
+   * itself is solid). Used by both login and Exhaustion.
+   */
+  private wakeTileFor(p: DbPlayer): { tx: number; ty: number } {
+    if (p.wakePoint) return { ...p.wakePoint };
+    const hall = this.db.world!.village?.hall;
+    if (hall) return { tx: hall.tx, ty: hall.ty + footprint('village_hall').h };
+    return { ...this.world.spawn };
+  }
+
+  /**
+   * Record a Village build (ADR-0010): the Hall founds/re-founds the Village
+   * (tile-independent — never resets the pool/tier); the later milestone
+   * Buildings advance it only when raised inside the village zone. Decor is a
+   * no-op. Returns true when the record changed (→ emit villageChanged).
+   */
+  private noteVillageBuild(item: StructureId, tx: number, ty: number): boolean {
+    const v = (this.db.world!.village ??= emptyVillage());
+    let changed = false;
+    if (item === 'village_hall') {
+      v.hall = { tx, ty }; // found or relocate — progress belongs to the group, not the tile
+      if (v.milestonesBuilt < 1) v.milestonesBuilt = 1;
+      changed = true;
+    } else {
+      for (let tier = 2; tier <= VILLAGE_MAX_TIER; tier++) {
+        if (milestoneForTier(tier) !== item) continue;
+        if (inVillageZone(v, tx, ty) && v.milestonesBuilt < tier) {
+          v.milestonesBuilt = tier as VillageTier;
+          changed = true;
+        }
+        break;
+      }
+    }
+    if (changed) v.tier = recomputeTier(v).tier;
+    return changed;
   }
 
   private questState(): QuestState {
@@ -746,6 +811,20 @@ export class MockBackend implements Backend {
     }
     this.db.structures[key] = structure; // keyed by the anchor tile
     for (const k of this.footprintTiles(structure)) this.structTiles.set(k, structure);
+    // A3 (ADR-0010): the Hall founds/relocates the Village; a milestone Building
+    // raised in-zone advances the tier. Emit villageChanged so grandeur updates.
+    if (isVillageStructure(item)) {
+      const before = this.db.world!.village!.tier;
+      if (this.noteVillageBuild(item, tx, ty)) {
+        const v = this.db.world!.village!;
+        if (item === 'village_hall' && before === 0) {
+          this.pushChat({ from: t.system.sender, text: t.system.villageFounded(this.me ?? ''), ts: Date.now() });
+        } else if (v.tier > before) {
+          this.pushChat({ from: t.system.sender, text: t.system.villageGrew(t.village.tierName(v.tier)), ts: Date.now() });
+        }
+        this.emit('villageChanged', this.villageState());
+      }
+    }
     this.saveNow();
     this.emit('structurePlaced', structure);
     return { ok: true, structure, inventory: { ...p.inventory } };
@@ -768,6 +847,14 @@ export class MockBackend implements Backend {
     if (s.type === 'sawmill') delete this.db.sawmills?.[id];
     if (s.type === 'hammock' && p.wakePoint && p.wakePoint.tx === s.tx && p.wakePoint.ty === s.ty) {
       delete p.wakePoint; // its wake point retires with it
+    }
+    // A3 (ADR-0010): dismantling THE Hall un-homes the Village (spawn falls back
+    // to World spawn) but PRESERVES tier/pool/milestones — progress is
+    // tile-independent, re-founding never resets it.
+    const village = this.db.world!.village;
+    if (s.type === 'village_hall' && village?.hall && village.hall.tx === s.tx && village.hall.ty === s.ty) {
+      village.hall = null;
+      this.emit('villageChanged', this.villageState());
     }
     // FULL refund of the crafting cost to the dismantler (nothing for an
     // uncraftable Structure, e.g. a dug golden idol)
@@ -1004,6 +1091,31 @@ export class MockBackend implements Backend {
     return { ok: true, taken, inventory: { ...p.inventory }, seal: this.sealState() };
   }
 
+  // ------------------------------------------------------------ A3: the Village (ADR-0010)
+
+  async contributeVillage(): Promise<ContributeVillageResult> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!v.hall) return { ok: false, reason: 'NO_HALL' };
+    if (!p) return { ok: false, reason: 'NOTHING_TO_GIVE' };
+    const { taken, points } = villageContribution(p.inventory);
+    if (points <= 0) return { ok: false, reason: 'NOTHING_TO_GIVE' };
+    for (const [item, n] of Object.entries(taken)) {
+      p.inventory[item as ItemId] = (p.inventory[item as ItemId] ?? 0) - n;
+      if ((p.inventory[item as ItemId] ?? 0) <= 0) delete p.inventory[item as ItemId];
+    }
+    const before = v.tier;
+    v.pool += points; // additive, permanent — never decays
+    v.tier = recomputeTier(v).tier;
+    if (v.tier > before) {
+      this.pushChat({ from: t.system.sender, text: t.system.villageGrew(t.village.tierName(v.tier)), ts: Date.now() });
+    }
+    this.saveNow();
+    this.emit('villageChanged', this.villageState());
+    return { ok: true, taken: taken as Inventory, inventory: { ...p.inventory }, village: this.villageState(), gained: points };
+  }
+
   // ------------------------------------------------------------ v2: the Guardian
 
   /**
@@ -1212,9 +1324,10 @@ export class MockBackend implements Backend {
     if (!inSlam && !inRing) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
-    // Exhaustion wakes a Player at their Hammock, else at the World spawn
+    // Exhaustion wakes a Player at their Hammock, else the Village Hall, else the
+    // World spawn (ADR-0010 §4: Hammock > Village Hall > World spawn)
     const atHammock = !!p.wakePoint;
-    const wake = p.wakePoint ? { ...p.wakePoint } : { ...this.world.spawn };
+    const wake = this.wakeTileFor(p);
     // the slam window (incl. slack) never crosses a wave boundary, so the
     // wave at the report's server time is the wave that hit
     const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS).index;

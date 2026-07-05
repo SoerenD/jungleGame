@@ -93,9 +93,16 @@ import {
 import { footprint, isBuilding, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
+import {
+  emptyVillage,
+  VILLAGE_ART,
+  VILLAGE_ZONE_RADIUS,
+  type VillageRecord,
+} from '../content/village';
 import { MOB_FRAME, MOB_TEX } from '../mobSprites';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
+import { drawStructureArt } from '../ui/icons';
 import { showIntro } from '../ui/intro';
 import { t, zoneName } from '../i18n';
 
@@ -299,6 +306,12 @@ export class GameScene extends Phaser.Scene {
   private monumentPos = { x: 0, y: 0 };
   private sealBarrierParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
   private nearMonument = false;
+  // A3 (ADR-0010): the communal Village. `village` mirrors the backend record;
+  // the aura/banner render its automatic grandeur around the founded Hall.
+  private village: VillageRecord = emptyVillage();
+  private villageAura?: Phaser.GameObjects.Graphics;
+  private villageBanner?: Phaser.GameObjects.Text;
+  private nearHall = false;
   // ---- v2: the Guardian
   private fight: FightState | null = null;
   private guardianSprite!: Phaser.GameObjects.Sprite;
@@ -678,11 +691,13 @@ export class GameScene extends Phaser.Scene {
       .setDepth(999_998)
       .setVisible(false);
     this.tweens.add({ targets: this.hintText, alpha: { from: 1, to: 0.55 }, duration: 700, yoyo: true, repeat: -1 });
+    this.bakeVillageTextures(); // A3: generate the Village Buildings' sprites (no PNG assets)
     this.wireBackend();
     this.wireBus();
     bus.emit('journey', this.journey);
 
     void this.backend.loadWorld().then((snap) => {
+      this.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
       for (const n of snap.nodes) this.addNode(n);
       for (const s of snap.structures) this.addStructure(s);
       for (const p of snap.players) this.upsertRemote(p);
@@ -794,6 +809,7 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('gateOpened', () => this.openGateVisual());
     this.backend.on('sealChanged', (s: SealState) => this.applySeal(s));
     this.backend.on('sealBroken', () => this.epicSealBreak());
+    this.backend.on('villageChanged', (v: VillageRecord) => this.applyVillage(v));
     this.backend.on('guardianSummoned', (f: FightState) => this.startFight(f, true));
     this.backend.on('guardianEngaged', (f: FightState) => this.engageFight(f));
     this.backend.on('guardianHit', (hp: number) => {
@@ -815,6 +831,101 @@ export class GameScene extends Phaser.Scene {
   private applySeal(seal: SealState): void {
     this.seal = seal;
     bus.emit('seal', seal);
+  }
+
+  // ------------------------------------------------------------ A3: the Village (ADR-0010)
+
+  /** bake a sprite for every Village Building from its art spec — A3 ships no PNGs */
+  private bakeVillageTextures(): void {
+    for (const [id, art] of Object.entries(VILLAGE_ART)) {
+      if (!art) continue;
+      const key = `st_${id}`;
+      if (this.textures.exists(key)) continue;
+      const { w, h } = footprint(id as StructureId);
+      const W = w * TILE;
+      // buildings/monuments stand a tile (or two) taller than their footprint so
+      // the roof pokes up like every other object; decor stays low
+      const extra = art.shape === 'monument' ? 2 : art.shape === 'building' ? 1 : 1;
+      const H = (h + extra) * TILE;
+      const tex = this.textures.createCanvas(key, W, H);
+      if (!tex) continue;
+      drawStructureArt(tex.context, W, H, art);
+      tex.refresh();
+    }
+  }
+
+  private applyVillage(v: VillageRecord): void {
+    this.village = { ...v, hall: v.hall ? { ...v.hall } : null };
+    bus.emit('village', this.village);
+    this.refreshVillageVisuals();
+  }
+
+  /**
+   * The Village's automatic grandeur (ADR-0010 §3): a warm aura that grows and
+   * brightens each tier around the founded Hall, the fainter ring marking the
+   * village zone (where builds advance the tier), and a tier banner overhead.
+   */
+  private refreshVillageVisuals(): void {
+    const hall = this.village.hall;
+    if (!hall) {
+      this.villageAura?.destroy();
+      this.villageAura = undefined;
+      this.villageBanner?.destroy();
+      this.villageBanner = undefined;
+      return;
+    }
+    const { w, h } = footprint('village_hall');
+    const cx = (hall.tx + w / 2) * TILE;
+    const cy = (hall.ty + h / 2) * TILE;
+    const tier = Math.max(1, this.village.tier);
+    const warm = 0xffca7a;
+    if (!this.villageAura) this.villageAura = this.add.graphics().setDepth(-3);
+    const g = this.villageAura;
+    g.clear();
+    const radius = (5 + tier * 2.5) * TILE; // grows each tier — visible grandeur
+    g.fillStyle(warm, 0.04 + tier * 0.012);
+    g.fillCircle(cx, cy, radius);
+    g.lineStyle(2, warm, 0.3 + tier * 0.04);
+    g.strokeCircle(cx, cy, radius);
+    g.lineStyle(1, 0xffe9c9, 0.18); // the village zone: only in-zone builds advance the tier
+    g.strokeCircle(cx, cy, VILLAGE_ZONE_RADIUS * TILE);
+    const label = `🏛 ${t.village.tierName(tier)}`;
+    const by = hall.ty * TILE - 6;
+    if (!this.villageBanner) {
+      this.villageBanner = this.add
+        .text(cx, by, label, { fontSize: '9px', color: '#ffe9c9', stroke: '#3a2a18', strokeThickness: 3 })
+        .setOrigin(0.5, 1)
+        .setResolution(4)
+        .setDepth(890_000);
+    } else {
+      this.villageBanner.setText(label).setPosition(cx, by);
+    }
+  }
+
+  /** E at the Hall pours every carried qualifying Resource/loot into the communal pool */
+  private contributeVillage(hall: Structure): void {
+    void this.backend.contributeVillage().then((res) => {
+      if (!res.ok) {
+        if (res.reason === 'NOTHING_TO_GIVE') bus.emit('toast', t.toast.villageNothingToGive, 'bad');
+        return;
+      }
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      const hx = (hall.tx + 1) * TILE;
+      const hy = hall.ty * TILE;
+      this.floatText(hx, hy - 8, `+${res.gained}`, '#ffca7a');
+      bus.emit('toast', t.toast.villageContributed(res.gained), 'good');
+      this.sfx('place', 0.6);
+    });
+  }
+
+  /** true if a Village Hall may be raised now — only one may stand at a time (re-found by dismantling) */
+  private canFoundHall(): boolean {
+    if (this.village.hall) {
+      bus.emit('toast', t.toast.hallAlreadyStands, 'bad');
+      return false;
+    }
+    return true;
   }
 
   private buildSealBarrier(): void {
@@ -2168,6 +2279,10 @@ export class GameScene extends Phaser.Scene {
     const cook = this.cookAction();
     if (cook) return cook;
 
+    // the Village Hall: E pours qualifying Resources/loot into the communal pool (ADR-0010)
+    const hall = this.nearbyStructure(['village_hall']);
+    if (hall) return { swing: false, run: () => this.contributeVillage(hall) };
+
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
     if (st) {
@@ -2381,6 +2496,7 @@ export class GameScene extends Phaser.Scene {
   private enterPlaceMode(item: StructureId): void {
     if (this.inDelve) return; // no building inside the ephemeral Delve
     if ((this.inventory[item] ?? 0) <= 0) return;
+    if (item === 'village_hall' && !this.canFoundHall()) return; // only one Hall stands at a time (ADR-0010)
     this.placing = item;
     this.ghost?.destroy();
     this.ghost = this.objImage(0, 0, `st_${item}`);
@@ -2533,6 +2649,7 @@ export class GameScene extends Phaser.Scene {
 
   /** place `item` on a specific tile — signposts prompt for their line first */
   private placeAtTile(item: StructureId, tx: number, ty: number): void {
+    if (item === 'village_hall' && !this.canFoundHall()) return; // backstop for drag-place (ADR-0010)
     if (item === 'signpost') {
       // the signpost line prompt freezes movement through the same chat-focus
       // wiring as the chat box
@@ -2604,6 +2721,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private doPlace(item: StructureId, tx: number, ty: number, text?: string): void {
+    const foundingHall = item === 'village_hall' && !this.village.hall; // first founding for the celebratory toast
     void this.backend.placeStructure(item, tx, ty, text).then((result) => {
       if (result.ok) {
         this.inventory = result.inventory;
@@ -2613,6 +2731,7 @@ export class GameScene extends Phaser.Scene {
         this.useHint('place');
         if (item === 'campfire') this.tickJourney('place_campfire');
         if (item === 'hammock') bus.emit('toast', t.toast.hammockSet, 'info');
+        if (foundingHall) bus.emit('toast', t.toast.villageFoundedYou, 'good');
         this.exitPlaceMode();
       } else if (result.reason === 'OCCUPIED') {
         bus.emit('toast', t.toast.alreadyBuiltHere, 'bad');
@@ -2747,6 +2866,15 @@ export class GameScene extends Phaser.Scene {
       this.nearMonument = nearMon;
       bus.emit('seal-near', nearMon);
       if (nearMon) this.tickJourney('visit_seal');
+    }
+    // the Village Hall shows the tier/pool panel on approach (ADR-0010)
+    const hall = this.village.hall;
+    const nearHall =
+      !!hall &&
+      Phaser.Math.Distance.Between(this.player.x, this.player.y, (hall.tx + 1) * TILE, (hall.ty + 1) * TILE) < TILE * 7;
+    if (nearHall !== this.nearHall) {
+      this.nearHall = nearHall;
+      bus.emit('village-near', nearHall);
     }
     this.updateFog();
     this.checkVista();

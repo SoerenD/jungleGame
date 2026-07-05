@@ -47,7 +47,20 @@ export type StructureId =
   | 'hammock'
   | 'signpost'
   | 'sawmill'
-  | 'table';
+  | 'table'
+  // A3 (ADR-0010) — the Village: the Hall (founding + communal spawn), the four
+  // later milestone Buildings, and per-tier decor unlocks. Progress lives in the
+  // per-world Village record, not these tiles (re-founding never resets it).
+  | 'village_hall'
+  | 'village_well'
+  | 'market_square'
+  | 'stone_keep'
+  | 'grand_monument'
+  | 'village_banner'
+  | 'lamp_post'
+  | 'fountain'
+  | 'flower_bed'
+  | 'victory_arch';
 /** carried consumables that are neither Resources nor Tools */
 export type ConsumableId = 'summon_totem' | 'cooked_fish';
 export type ItemId = ResourceId | ToolId | StructureId | ConsumableId;
@@ -127,6 +140,20 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   // Any Player may dismantle any Structure for its full refund (no ownership).
   sawmill: { name: 'Sawmill', kind: 'structure', desc: 'A 2×2 timber mill: deposit wood, collect planks after its slow work. The first real Building.', blocks: true, w: 2, h: 2 },
   table: { name: 'Table', kind: 'structure', desc: 'A sturdy plank table for the camp.', blocks: true },
+  // A3 (ADR-0010): the Village. The Hall founds the Village wherever it is raised
+  // and becomes the communal wake point; the four later Buildings are each a
+  // tier's milestone; the rest are per-tier decor. Contributions feed one shared,
+  // permanent pool — these tiles carry no progress of their own.
+  village_hall: { name: 'Village Hall', kind: 'structure', desc: 'Raise it anywhere to found the Village and make it home: everyone without a Hammock wakes here. Stand close and press E to give resources and loot to the communal pool. Re-founding it never resets the Village.', blocks: true, w: 2, h: 2 },
+  village_well: { name: 'Village Well', kind: 'structure', desc: 'The Hamlet milestone: raise it in the village zone, with a full pool, to grow the Village from Camp to Hamlet.', blocks: true, w: 2, h: 2 },
+  market_square: { name: 'Market Square', kind: 'structure', desc: 'The Village milestone: a bustling stall that carries a Hamlet up to a full Village.', blocks: true, w: 2, h: 2 },
+  stone_keep: { name: 'Stone Keep', kind: 'structure', desc: 'The Town milestone: a stout keep that raises a Village into a Town.', blocks: true, w: 2, h: 2 },
+  grand_monument: { name: 'Grand Monument', kind: 'structure', desc: 'The Capital milestone: a soaring monument that crowns a Town as a Capital.', blocks: true, w: 2, h: 2 },
+  village_banner: { name: 'Village Banner', kind: 'structure', desc: 'A proud banner — the first flourish of a founded Camp.', blocks: false },
+  lamp_post: { name: 'Lamp Post', kind: 'structure', desc: 'A wrought lamp that glows warm through a Hamlet night.', blocks: true },
+  fountain: { name: 'Fountain', kind: 'structure', desc: 'A tiled fountain, the pride of a proper Village.', blocks: true, w: 2, h: 2 },
+  flower_bed: { name: 'Flower Bed', kind: 'structure', desc: 'A bed of blooms brightening a Town square.', blocks: false },
+  victory_arch: { name: 'Victory Arch', kind: 'structure', desc: 'A triumphal arch — decor fit for a Capital.', blocks: false, w: 2, h: 1 },
 };
 
 /** German name + description overlay; kind/blocks/onWater stay from BASE_ITEMS */
@@ -174,6 +201,16 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   signpost: { name: 'Wegweiser', desc: 'Trägt eine kurze Zeile deiner Schrift, für alle lesbar.' },
   sawmill: { name: 'Sägewerk', desc: 'Eine 2×2-Holzmühle: Holz einlegen, Bretter holen, wenn ihre langsame Arbeit getan ist. Das erste echte Gebäude.' },
   table: { name: 'Tisch', desc: 'Ein stabiler Brettertisch fürs Lager.' },
+  village_hall: { name: 'Dorfhalle', desc: 'Errichte sie irgendwo, um das Dorf zu gründen und zur Heimat zu machen: Jeder ohne Hängematte erwacht hier. Stell dich nah heran und drücke E, um Ressourcen und Beute in den gemeinsamen Vorrat zu geben. Ein Neugründen setzt das Dorf nie zurück.' },
+  village_well: { name: 'Dorfbrunnen', desc: 'Der Weiler-Meilenstein: Errichte ihn in der Dorfzone bei vollem Vorrat, um aus dem Lager einen Weiler zu machen.' },
+  market_square: { name: 'Marktplatz', desc: 'Der Dorf-Meilenstein: ein belebter Stand, der einen Weiler zum vollen Dorf erhebt.' },
+  stone_keep: { name: 'Steinfeste', desc: 'Der Stadt-Meilenstein: eine wehrhafte Feste, die ein Dorf zur Stadt macht.' },
+  grand_monument: { name: 'Großes Monument', desc: 'Der Hauptstadt-Meilenstein: ein ragendes Monument, das eine Stadt zur Hauptstadt krönt.' },
+  village_banner: { name: 'Dorfbanner', desc: 'Ein stolzes Banner — der erste Schmuck eines gegründeten Lagers.' },
+  lamp_post: { name: 'Laternenpfahl', desc: 'Eine schmiedeeiserne Laterne, die warm durch eine Weiler-Nacht leuchtet.' },
+  fountain: { name: 'Springbrunnen', desc: 'Ein gekachelter Brunnen, der Stolz eines echten Dorfes.' },
+  flower_bed: { name: 'Blumenbeet', desc: 'Ein Beet voller Blüten, das einen Stadtplatz erhellt.' },
+  victory_arch: { name: 'Triumphbogen', desc: 'Ein Triumphbogen — Zierde einer Hauptstadt.' },
 };
 
 /** ITEMS in the session's language: German overlays name/desc onto the English base */

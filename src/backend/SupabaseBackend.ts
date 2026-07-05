@@ -21,6 +21,16 @@ import { ADJUDICATION_SLACK_MS, eyeOpenWithin, rollGuardianDamage, waveInfoAt } 
 import { footprint, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
+import {
+  emptyVillage,
+  isVillageStructure,
+  milestoneTierOf,
+  VILLAGE_CONTRIB,
+  VILLAGE_MAX_TIER,
+  VILLAGE_THRESHOLDS,
+  VILLAGE_ZONE_RADIUS,
+  type VillageRecord,
+} from '../content/village';
 import { sanitizeAppearance } from '../avatars';
 import { asset } from '../paths';
 import { t } from '../i18n';
@@ -30,6 +40,7 @@ import type {
   BackendEvents,
   ChatMsg,
   ContributeSealResult,
+  ContributeVillageResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -122,6 +133,8 @@ export class SupabaseBackend implements Backend {
   private delveOpen = false;
   private treasureIndex = 0;
   private fightState: FightState | null = null;
+  /** local mirror of the communal Village (ADR-0010), kept fresh from RPCs + events */
+  private village: VillageRecord = emptyVillage();
   // the Seal scales per-head: how many Players are online (from presence) and
   // the last raw seal row, so a join/leave can re-emit the bar with the new target
   private onlineCount = 1;
@@ -195,6 +208,9 @@ export class SupabaseBackend implements Backend {
       case 'structureRemoved':
         this.structures.delete(args[0] as string);
         break;
+      case 'villageChanged':
+        this.village = args[0] as VillageRecord;
+        break;
       case 'guardianSummoned':
       case 'guardianEngaged':
         this.fightState = args[0] as FightState;
@@ -259,9 +275,13 @@ export class SupabaseBackend implements Backend {
     this.inv = (res.inventory ?? {}) as Inventory;
     this.tablets = (res.tablets ?? []) as string[];
 
+    this.village = this.villageFromJson(res.village);
+    // appear point (ADR-0010 §4): Hammock > Village Hall > server-returned spot.
+    // A founded Hall makes the Village home for anyone without a Hammock.
     const wp = res.wakePoint as { tx: number; ty: number } | null;
-    const x = wp ? (wp.tx + 0.5) * TILE : (res.x as number);
-    const y = wp ? (wp.ty + 0.5) * TILE : (res.y as number);
+    const hallTile = !wp && this.village.hall ? this.hallWakeTile(this.village.hall) : null;
+    const x = wp ? (wp.tx + 0.5) * TILE : hallTile ? (hallTile.tx + 0.5) * TILE : (res.x as number);
+    const y = wp ? (wp.ty + 0.5) * TILE : hallTile ? (hallTile.ty + 0.5) * TILE : (res.y as number);
     this.lastLocal = { name, appearance: appr, x, y, dir: 'down', moving: false };
 
     await this.connectRealtime(x, y);
@@ -474,7 +494,7 @@ export class SupabaseBackend implements Backend {
       this.supa.from('nodes').select('id,type,tx,ty,hp,harvested_at'),
       this.supa.from('structures').select('id,type,tx,ty,placed_by,placed_at,text'),
       this.supa.from('chat').select('from_name,text,ts').order('ts', { ascending: false }).limit(50),
-      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight').eq('id', 1).single(),
+      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight,village').eq('id', 1).single(),
       this.me ? this.supa.from('players').select('inventory,tablets').eq('name', this.me).single() : Promise.resolve({ data: null } as any),
     ]);
 
@@ -487,6 +507,7 @@ export class SupabaseBackend implements Backend {
     this.delveOpen = !!world?.delve_open;
     this.treasureIndex = world?.treasure_index ?? 0;
     this.fightState = this.fightPublic(world?.fight);
+    this.village = this.villageFromJson(world?.village);
 
     // overlay touched nodes onto the full static list, applying lazy regrow
     const now = Date.now();
@@ -527,7 +548,25 @@ export class SupabaseBackend implements Backend {
       quest: this.questState(),
       seal: this.sealState(world?.seal),
       fight: this.fightState,
+      village: { ...this.village, hall: this.village.hall ? { ...this.village.hall } : null },
     };
+  }
+
+  /** normalise a stored Village jsonb (or a null column) into a VillageRecord */
+  private villageFromJson(v: any): VillageRecord {
+    if (!v || typeof v !== 'object') return emptyVillage();
+    const hall = v.hall && typeof v.hall === 'object' ? { tx: v.hall.tx, ty: v.hall.ty } : null;
+    return {
+      tier: (v.tier ?? 0) as VillageRecord['tier'],
+      pool: v.pool ?? 0,
+      hall,
+      milestonesBuilt: (v.milestonesBuilt ?? 0) as VillageRecord['milestonesBuilt'],
+    };
+  }
+
+  /** the walkable tile a Player wakes on for a founded Hall: just south of its footprint */
+  private hallWakeTile(hall: { tx: number; ty: number }): { tx: number; ty: number } {
+    return { tx: hall.tx, ty: hall.ty + footprint('village_hall').h };
   }
 
   private questState(): QuestState {
@@ -659,6 +698,29 @@ export class SupabaseBackend implements Backend {
     const structure = res.structure as Structure;
     this.structures.set(structure.id, structure);
     this.relay('structurePlaced', structure);
+    // A3 (ADR-0010): the Hall founds/relocates the Village; a milestone Building
+    // raised in-zone advances the tier. A second, server-ordered RPC keeps
+    // jw_place_structure generic; decor (target 0) never touches the Village.
+    if (isVillageStructure(item)) {
+      const target = milestoneTierOf(item);
+      if (target > 0) {
+        const nres = await this.rpc<any>('jw_village_note_build', {
+          p_who: this.me,
+          p_target_tier: target,
+          p_tx: tx,
+          p_ty: ty,
+          p_radius: VILLAGE_ZONE_RADIUS,
+          p_thresholds: VILLAGE_THRESHOLDS,
+          p_max: VILLAGE_MAX_TIER,
+        });
+        if (nres?.changed && nres.village) {
+          const v = this.villageFromJson(nres.village);
+          if (nres.founded) this.pushChat(t.system.sender, t.system.villageFounded(this.me ?? ''));
+          else if (v.tier > (nres.tierBefore ?? v.tier)) this.pushChat(t.system.sender, t.system.villageGrew(t.village.tierName(v.tier)));
+          this.relay('villageChanged', v);
+        }
+      }
+    }
     return { ok: true, structure, inventory: { ...this.inv } };
   }
 
@@ -677,6 +739,11 @@ export class SupabaseBackend implements Backend {
     else for (const [k, v] of Object.entries(refund)) this.inv[k as ItemId] = (this.inv[k as ItemId] ?? 0) + (v as number);
     this.structures.delete(id);
     this.relay('structureRemoved', id);
+    // A3 (ADR-0010): dismantling THE Hall un-homes the Village (spawn falls back
+    // to World spawn) but preserves the tier/pool — the RPC returns the record.
+    if (s.type === 'village_hall' && res?.village) {
+      this.relay('villageChanged', this.villageFromJson(res.village));
+    }
     return { ok: true, removed: id, refund, inventory: { ...this.inv } };
   }
 
@@ -782,6 +849,24 @@ export class SupabaseBackend implements Backend {
       this.relay('sealBroken');
     }
     return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, seal };
+  }
+
+  // ---------------------------------------------------------------- A3: the Village (ADR-0010)
+
+  async contributeVillage(): Promise<ContributeVillageResult> {
+    const res = await this.rpc<any>('jw_contribute_village', {
+      p_who: this.me,
+      p_values: VILLAGE_CONTRIB,
+      p_thresholds: VILLAGE_THRESHOLDS,
+      p_max: VILLAGE_MAX_TIER,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING_TO_GIVE' };
+    this.inv = res.inventory as Inventory;
+    const before = this.village.tier;
+    const village = this.villageFromJson(res.village);
+    this.relay('villageChanged', village); // dispatch updates this.village + broadcasts
+    if (village.tier > before) this.pushChat(t.system.sender, t.system.villageGrew(t.village.tierName(village.tier)));
+    return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, village, gained: res.gained ?? 0 };
   }
 
   // ---------------------------------------------------------------- Guardian

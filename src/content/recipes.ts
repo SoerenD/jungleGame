@@ -8,6 +8,13 @@ export interface Recipe {
   /** tool that must be in the inventory to craft (not consumed) */
   requiresTool?: ToolId;
   kind: 'tool' | 'structure' | 'consumable';
+  /**
+   * A3 (ADR-0010): the minimum Village tier at which this recipe unlocks. Absent
+   * or 0 → always craftable. The craft UI hides a recipe until the Village
+   * reaches its tier; this gates only the Village's own decor/QoL Buildings and
+   * never the Guardian/Delve/frontier.
+   */
+  villageMin?: number;
 }
 
 export const RECIPES: Recipe[] = [
@@ -54,4 +61,19 @@ export const RECIPES: Recipe[] = [
   { id: 'guardian_trophy', output: 'guardian_trophy', count: 1, cost: { guardian_scale: 5, obsidian: 2 }, kind: 'structure' },
   { id: 'obsidian_path', output: 'obsidian_path', count: 1, cost: { obsidian: 2 }, kind: 'structure' },
   { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, plank: 2 }, kind: 'structure' },
+
+  // A3 (ADR-0010): the Village. The Hall founds the Village (always craftable);
+  // the four later milestone Buildings + per-tier decor unlock as the Village
+  // grows (villageMin). Costs/gating are playtest tuning — the numbers matter
+  // less than the always-there-but-optional shape.
+  { id: 'village_hall', output: 'village_hall', count: 1, cost: { plank: 8, stone: 6, fiber: 4 }, requiresTool: 'hammer', kind: 'structure' },
+  { id: 'village_well', output: 'village_well', count: 1, cost: { plank: 6, stone: 8 }, requiresTool: 'hammer', kind: 'structure', villageMin: 1 },
+  { id: 'village_banner', output: 'village_banner', count: 1, cost: { plank: 1, fiber: 2 }, kind: 'structure', villageMin: 1 },
+  { id: 'market_square', output: 'market_square', count: 1, cost: { plank: 10, fiber: 6, fruit: 4 }, requiresTool: 'hammer', kind: 'structure', villageMin: 2 },
+  { id: 'lamp_post', output: 'lamp_post', count: 1, cost: { plank: 1, stone: 2 }, kind: 'structure', villageMin: 2 },
+  { id: 'stone_keep', output: 'stone_keep', count: 1, cost: { plank: 8, stone: 16, hardwood: 2 }, requiresTool: 'hammer', kind: 'structure', villageMin: 3 },
+  { id: 'fountain', output: 'fountain', count: 1, cost: { plank: 4, stone: 8 }, requiresTool: 'hammer', kind: 'structure', villageMin: 3 },
+  { id: 'grand_monument', output: 'grand_monument', count: 1, cost: { plank: 12, obsidian: 4, guardian_scale: 2 }, requiresTool: 'hammer', kind: 'structure', villageMin: 4 },
+  { id: 'flower_bed', output: 'flower_bed', count: 1, cost: { fiber: 2, fruit: 2 }, kind: 'structure', villageMin: 4 },
+  { id: 'victory_arch', output: 'victory_arch', count: 1, cost: { plank: 6, obsidian: 2 }, requiresTool: 'hammer', kind: 'structure', villageMin: 5 },
 ];

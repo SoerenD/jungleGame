@@ -4,6 +4,7 @@ import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../conten
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
+import { milestoneForTier, tierThreshold, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 import { asset } from '../paths';
@@ -14,6 +15,9 @@ let inv: Inventory = {};
 let treasureLoc: { tx: number; ty: number } | null = null;
 let quest: QuestState | null = null;
 let seal: SealState | null = null;
+/** the communal Village record (ADR-0010) — drives the tier panel + recipe gating */
+let village: VillageRecord | null = null;
+let villageTier = 0;
 let journey: JourneyState | null = null;
 let placingNow = false;
 /** the open craft tab, mapped to the recipe kind — defaults to Tools & Weapons (B4) */
@@ -97,6 +101,14 @@ export function initHud(name: string, muted: boolean): void {
       <h3>${t.seal.title}</h3>
       <div id="seal-bars"></div>
       <div id="seal-hint">${t.seal.hint}</div>
+    </div>
+    <div id="village-panel" class="panel" data-testid="village-panel">
+      <h3>${t.village.title}</h3>
+      <div id="village-tier"></div>
+      <div class="seal-bar"><div id="village-fill" class="seal-fill village-fill" style="width:0%"></div></div>
+      <div id="village-pool"></div>
+      <div id="village-milestone"></div>
+      <div id="village-hint">${t.village.hint}</div>
     </div>
     <div id="fight-panel" data-testid="fight-panel">
       <div id="fight-title">${t.fight.title}</div>
@@ -295,6 +307,15 @@ export function initHud(name: string, muted: boolean): void {
   });
   bus.on('seal-near', (near: boolean) => {
     el('seal-panel').classList.toggle('open', near);
+  });
+  bus.on('village', (v: VillageRecord) => {
+    village = v;
+    villageTier = v.tier;
+    renderVillagePanel();
+    renderRecipes(); // tier-locked Buildings unlock as the Village grows (villageMin)
+  });
+  bus.on('village-near', (near: boolean) => {
+    el('village-panel').classList.toggle('open', near);
   });
   bus.on('fog', (explored: Set<number>, chunksW: number, chunksH: number) => {
     if (!fogLayer) fogLayer = document.createElement('canvas');
@@ -693,6 +714,30 @@ function renderSealBars(): void {
   el('seal-hint').textContent = seal.broken ? t.seal.broken : t.seal.hint;
 }
 
+/**
+ * The Village tier panel (ADR-0010): the prestige badge, the additive pool bar to
+ * the next threshold, and the milestone the group must raise in-zone to advance.
+ * Collective-only — no individual contribution ever appears here.
+ */
+function renderVillagePanel(): void {
+  if (!village) return;
+  const tier = village.tier;
+  el('village-tier').innerHTML = `<b>${t.village.tierName(tier)}</b> <span class="v-title">${t.village.tierTitle(tier)}</span>`;
+  if (tier >= VILLAGE_MAX_TIER) {
+    el('village-fill').style.width = '100%';
+    el('village-pool').textContent = `${t.village.poolLabel}: ${village.pool}`;
+    el('village-milestone').textContent = t.village.capital;
+    return;
+  }
+  const next = tierThreshold(tier + 1);
+  el('village-fill').style.width = `${next > 0 ? Math.min(100, (village.pool / next) * 100) : 100}%`;
+  el('village-pool').textContent = `${t.village.poolLabel}: ${village.pool} / ${next}`;
+  const ms = milestoneForTier(tier + 1);
+  const msName = ms ? ITEMS[ms].name : '';
+  const built = village.milestonesBuilt > tier;
+  el('village-milestone').textContent = built ? t.village.milestoneDone(msName) : t.village.milestoneTodo(msName);
+}
+
 function setFightHp(hp: number, max: number): void {
   // the fill is a scale-invariant ratio; the readout numbers are cosmetically
   // scaled up (the same factor the damage float uses, ADR-0006 §5)
@@ -1039,7 +1084,9 @@ function renderRecipes(): void {
   }
   // this tab's recipes, craftable ones sorted ahead of the rest (stable order)
   const recipes = RECIPES.map((r, i) => ({ r, i }))
-    .filter(({ r }) => r.kind === craftTab)
+    // A3 (ADR-0010): a Village Building stays hidden until the Village reaches its
+    // tier (villageMin). The Hall (villageMin 0) is always craftable.
+    .filter(({ r }) => r.kind === craftTab && (r.villageMin ?? 0) <= villageTier)
     .sort((a, b) => Number(recipeCraftable(b.r)) - Number(recipeCraftable(a.r)) || a.i - b.i)
     .map(({ r }) => r);
   for (const r of recipes) {

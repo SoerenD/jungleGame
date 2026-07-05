@@ -94,8 +94,16 @@ What happens instead of death: a Player knocked down 3 times within a single Gua
 _Avoid_: death, dying, respawn (nothing in the World kills)
 
 **Hammock**:
-A craftable Structure that sets its builder's personal wake point: Exhaustion and login place that Player at their Hammock instead of the World spawn. One active Hammock per Player.
+A craftable Structure that sets its builder's personal wake point: Exhaustion and login place that Player at their Hammock — the highest-priority wake point, overriding both the **Village** Hall and the World spawn. One active Hammock per Player.
 _Avoid_: bed, spawn point, home
+
+**Village**:
+The one communal settlement the whole group raises together — the game's ongoing shared goal and **meta-loop**, successor to the one-time **Seal**. A single collective **tier** (Camp → Hamlet → Village → Town → Capital) rises from a permanent, additive contribution pool at its **Hall** plus a signature milestone build per tier; each tier unlocks new building types + visible grandeur. Collective-only (no individual tracking), optional (gates nothing), never decays.
+_Avoid_: base, colony, town (informal)
+
+**Hall**:
+The founding **Structure** at the heart of the **Village**: the group raises it (the tier-1 milestone) wherever they agree, and that spot *becomes* the Village. It holds the contribution pool and, once founded, is the group's communal wake point (priority **Hammock** > Hall > World spawn). It can be re-founded elsewhere without losing progress — the tier belongs to the group, never the tile.
+_Avoid_: altar (that is the Seal/Guardian Offering point), spawn point
 
 ## Relationships
 
@@ -129,6 +137,7 @@ _Avoid_: bed, spawn point, home
 - The **Journey** ends at the first Seal **Offering** — onboarding hands every new Player directly to the World's shared goal. Existing Players get steps auto-completed from their current state.
 - A **Dungeon** is entered through a fixed **World** entrance but is itself **ephemeral and instanced** — it exists only while a party is inside, resets each run, and is **simulated by one player's client (the host)**, not a server (ADR-0001 preserved; ADR-0007). It is the sole place that reverses *"nothing reacts"*: its creatures chase and a final boss awaits, while the open **World** and the **Guardian** stay non-reactive (ADR-0002). Always co-op; the roster locks at the entrance like the **Ward**, and mob count/HP scale to headcount with per-person danger held ~constant. Harm stays **knockdown → Exhaustion** — a full-party wipe *or the host leaving* ends the run (v1 has no host migration: host-leave boots the party out, no loot).
 - The first **Dungeon**, the **Delve**, is reached through a rubble-sealed mine shaft opened **once, permanently, with an Ancient Pickaxe** — so Dungeons are **post-Guardian** content (a tier-2 Tool is the key). Its **Husks** and **Deep Guardian** drop materials that craft the game's first **pure-combat weapon, the Sword** — a **Tool** with no gathering use, it only fights, and it strikes Husks, the boss, and the Guardian alike.
+- The **Village** is the game's **meta-loop**: gathering, the **Guardian**, the **Dungeon**, and the **frontier** all yield contributions that feed its **Hall**, raising the communal **tier**, which unlocks more to build — the reason to go back out (ADR-0010). It runs **parallel** to the tier-1→tier-2 tool ladder and **gates nothing**; its unlocked utilities are non-combat conveniences (opt-in **Buildings**), so the one-buff rule holds. Goals stay **implicit** — the Village's visible grandeur and the Hall's pool display *are* the signpost (the resolution of "quests vs. implicit goals": keep it implicit, let the World dangle the goal).
 
 ## Example dialogue
 
