@@ -38,11 +38,12 @@ export const MOB_FRAME: Record<MobKind, { w: number; h: number }> = {
   cinder: { w: 20, h: 22 },
   ember: { w: 20, h: 24 },
   forgeborn: { w: 48, h: 52 },
-  // Wildlife share the 24×18 quadruped sheet (wider than tall — a side profile)
-  capybara: { w: 24, h: 18 },
-  deer: { w: 24, h: 18 },
-  boar: { w: 24, h: 18 },
-  jaguar: { w: 24, h: 18 },
+  // Wildlife: per-species side-profile sheets sized to their true silhouette
+  // (capybara from "Naturalist"; deer/boar/jaguar from "Detailed Large-Frame").
+  capybara: { w: 26, h: 18 },
+  deer: { w: 34, h: 26 },
+  boar: { w: 30, h: 20 },
+  jaguar: { w: 34, h: 22 },
 };
 
 type Ctx = CanvasRenderingContext2D;
@@ -320,101 +321,366 @@ const FORGEBORN: typeof BOSS = {
 };
 
 // -------------------------------------------------------- open-world Wildlife
-// A single side-view quadruped (drawBeast), reskinned per kind by a palette + one
-// distinguishing feature (antlers / tusks / spots) — the SAME reskin discipline as
-// the Deep's Husks. Peaceful kinds read soft and round with dark calm eyes;
-// predators sit lower and leaner with a hot eye-glint. 3-frame sheet: f0 idle, f1
-// idle-heave (mass lifts 1px, legs swing, tail flicks), f2 the alert/telegraph pose.
-interface BeastSpec {
-  outline: string;
-  shadow: string;
-  base: string;
-  highlight: string;
-  belly: string;
-  feature: 'antler' | 'tusk' | 'spots' | 'plain';
-  featureColor: string;
-  eye: string;
-  predator: boolean;
-}
+// True per-species silhouettes drawn from hand-authored pixel grids. The capybara
+// is the "Naturalist" set (a soft barrel with a blunt head); the deer, boar and
+// jaguar are the "Detailed Large-Frame" set (real anatomy — jointed legs, arched
+// neck + antler rack, humped tusked shoulders, low-slung rosetted cat). Each is a
+// 3-frame sheet: f0 idle, f1 idle-heave (mass lifts 1px on planted legs), f2 alert.
 
-function drawBeast(ctx: Ctx, ox: number, f: number, S: BeastSpec): void {
-  const oy = f === 1 ? -1 : 0; // idle heave lifts the whole mass 1px (feet stay)
-  const alert = f === 2; // telegraph / alert pose
-  const Y = (v: number) => v + oy;
-  const gait = f === 1 ? 1 : 0; // a small leg swing on the heave frame
+// ---- Capybara ("Naturalist"): grid + auto silhouette outline ----
+const CAPY_SHADOW = 'rgba(14,20,8,0.35)';
+const CAPY_EXEMPT = new Set(['a', 'A', 'l', 'f', 'k', 'w', 't', 'T']);
+const CAPY_PAL: Record<string, string> = {
+  o: '#241708', s: '#5a4128', b: '#7c5c3a', h: '#96764e', r: '#a98a5e',
+  n: '#8a7052', e: '#120c05', k: '#332312', l: '#4e3922', f: '#3a2a17', '.': CAPY_SHADOW,
+};
+const CAPY_LEGTOP = 12;
+const CAPY_IDLE = [
+  '',
+  '',
+  '                b   b',
+  '               hhhhhhhh',
+  '    hhrhhhrhhhhbbbbbbbbb',
+  '   bbbbbbbbbbbbbbbbbennnk',
+  '  bbbbbbbbbbbbbbbbbbbnnnn',
+  '  bbbbbbbbbbbbbbbbbbbnnns',
+  '  bbbbbbbbbbbbbbbbbbsssss',
+  '  bbbrbbsbbbrbsbbbbbbb',
+  '  bbbsbbbbbsbbbbbsbbbb',
+  '   ssssssssssssssssss',
+  '    ll f        ll f',
+  '    ll f        ll f',
+  '    ll f        ll f',
+  '    kk f        kk f',
+  '   ...................',
+  '      ..............',
+];
+const CAPY_ALERT = [
+  '                b   b',
+  '               hhhhhhhh',
+  '               bbbbbbbbbk',
+  '               bbbbbennnn',
+  '    hhrhhhrhhhhbbbbbbnnnn',
+  '   bbbbbbbbbbbbbbbbbbsss',
+  '  bbbbbbbbbbbbbbbbbbbss',
+  '  bbbbbbbbbbbbbbbbbbb',
+  '  bbbbbbsbbbbbsbbbbb',
+  '  bbbbbbbbbbbbbbbbbbbb',
+  '  bbbsbbbbbsbbbbbsbbbb',
+  '   ssssssssssssssssss',
+  '    ll f        ll f',
+  '    ll f        ll f',
+  '    ll f        ll f',
+  '    kk f        kk f',
+  '   ...................',
+  '      ..............',
+];
 
-  R(ctx, ox + 4, 16, 15, 2, S.outline); // ground shadow (planted)
-
-  // legs — front + hind pair; a predator crouches low on the alert frame
-  const legTop = Y(alert && S.predator ? 13 : 12);
-  for (const lx of [5 + gait, 8 + gait, 14 - gait, 17 - gait]) {
-    R(ctx, ox + lx, legTop, 2, 16 - legTop, S.shadow);
-    R(ctx, ox + lx, 15, 2, 1, S.outline);
-  }
-
-  // tail stub (flicks up on the heave)
-  R(ctx, ox + 2, Y(8) + (f === 1 ? 1 : 0), 2, 4, S.base);
-  R(ctx, ox + 2, Y(8), 2, 1, S.outline);
-
-  // body mass
-  const bodyTop = Y(alert && S.predator ? 8 : 6);
-  const bodyBot = Y(13);
-  R(ctx, ox + 3, bodyTop, 15, bodyBot - bodyTop, S.base);
-  R(ctx, ox + 3, bodyTop, 15, 1, S.outline);
-  R(ctx, ox + 4, bodyTop + 1, 13, 1, S.highlight);
-  R(ctx, ox + 3, bodyBot - 2, 15, 2, S.belly);
-  R(ctx, ox + 3, bodyTop, 1, bodyBot - bodyTop, S.shadow); // rump edge
-  if (S.feature === 'spots') {
-    for (const [sx, sy] of [[6, 8], [10, 9], [13, 7], [9, 11], [15, 10]] as [number, number][]) {
-      R(ctx, ox + sx, Y(sy), 2, 2, S.featureColor);
-      R(ctx, ox + sx + 1, Y(sy), 1, 1, S.base);
+function drawCapybara(ctx: Ctx, ox: number, f: number): void {
+  const grid = f === 2 ? CAPY_ALERT : CAPY_IDLE;
+  const pal = CAPY_PAL;
+  const legTop = CAPY_LEGTOP;
+  const { w, h } = MOB_FRAME.capybara;
+  const M: (string | null)[][] = [];
+  for (let y = 0; y < h; y++) M.push(new Array(w).fill(null));
+  for (let y = 0; y < h && y < grid.length; y++) {
+    const row = grid[y];
+    for (let x = 0; x < row.length && x < w; x++) {
+      const ch = row[x];
+      if (ch === ' ') continue;
+      const tx = f === 1 && ch === 'f' ? x - 1 : x;
+      if (tx >= 0 && tx < w) M[y][tx] = ch;
     }
   }
+  const isFill = (ch: string | null) => !!ch && ch !== '.';
+  const O: boolean[][] = [];
+  for (let y = 0; y < h; y++) {
+    O.push(new Array(w).fill(false));
+    for (let x = 0; x < w; x++) {
+      if (isFill(M[y][x])) continue;
+      const nb = [
+        y > 0 ? M[y - 1][x] : null,
+        y < h - 1 ? M[y + 1][x] : null,
+        x > 0 ? M[y][x - 1] : null,
+        x < w - 1 ? M[y][x + 1] : null,
+      ];
+      if (nb.some((c) => isFill(c) && !CAPY_EXEMPT.has(c as string))) O[y][x] = true;
+    }
+  }
+  const put = (x: number, y: number, color: string) => { ctx.fillStyle = color; ctx.fillRect(ox + x, y, 1, 1); };
+  const drawRow = (y: number, ty: number) => {
+    if (ty < 0 || ty >= h) return;
+    for (let x = 0; x < w; x++) {
+      const ch = M[y][x];
+      if (isFill(ch)) put(x, ty, pal[ch as string] || '#ff00ff');
+      else if (O[y][x]) put(x, ty, pal.o);
+      else if (ch === '.') put(x, ty, pal['.']);
+    }
+  };
+  for (let y = 0; y < h; y++) {
+    const ty = f === 1 && y < legTop ? y - 1 : y;
+    drawRow(y, ty);
+  }
+  if (f === 1) drawRow(legTop - 1, legTop - 1);
+}
 
-  // neck + head to the right (renderer flips the whole sprite for facing)
-  const headTop = Y(alert ? (S.predator ? 8 : 3) : 5);
-  R(ctx, ox + 15, Y(alert && !S.predator ? 6 : 8), 4, 5, S.base); // neck
-  R(ctx, ox + 17, headTop, 6, 6, S.base); // head
-  R(ctx, ox + 17, headTop, 6, 1, S.highlight);
-  R(ctx, ox + 22, headTop + 2, 2, 3, S.base); // snout
-  R(ctx, ox + 22, headTop + 4, 2, 1, S.shadow);
-  R(ctx, ox + 20, headTop + 2, 1, 1, S.eye);
-  if (S.predator && alert) R(ctx, ox + 20, headTop + 1, 1, 1, '#ffffff'); // glint
+// ---- Deer / Boar / Jaguar ("Detailed Large-Frame"): grids + soft cluster shading ----
+interface LFSpec {
+  liftRow: number;
+  shadow: { x: number; w: number };
+  stand: string[];
+  alert: string[];
+  pal: Record<string, string>;
+}
+type LFKind = 'deer' | 'boar' | 'jaguar';
+// chars that never trigger the silhouette outline (thin appendages)
+const LF_NO_OUTLINE: Record<string, number> = { q: 1, k: 1, F: 1, h: 1, A: 1, a: 1, t: 1, T: 1, u: 1 };
+const LF_SHADOW = 'rgba(22,26,14,0.42)';
 
-  if (S.feature === 'antler') {
-    R(ctx, ox + 17, headTop - 3, 1, 3, S.featureColor);
-    R(ctx, ox + 16, headTop - 4, 1, 2, S.featureColor);
-    R(ctx, ox + 20, headTop - 4, 1, 4, S.featureColor);
-    R(ctx, ox + 21, headTop - 5, 1, 2, S.featureColor);
-    R(ctx, ox + 19, headTop - 2, 1, 1, S.featureColor);
-  } else if (S.feature === 'tusk') {
-    R(ctx, ox + 21, headTop + 5, 2, 1, S.featureColor); // tusk from the snout
-    R(ctx, ox + 22, headTop + 4, 1, 1, S.featureColor);
-    R(ctx, ox + 17, headTop - 2, 2, 2, S.base); // bristly ear
-    R(ctx, ox + 17, headTop - 2, 1, 1, S.outline);
-  } else {
-    R(ctx, ox + 17, headTop - 2, 2, 2, alert ? S.highlight : S.base); // ears
-    R(ctx, ox + 20, headTop - 2, 2, 2, alert ? S.highlight : S.base);
-    R(ctx, ox + 17, headTop - 2, 1, 1, S.outline);
+const LF_SPEC: Record<LFKind, LFSpec> = {
+  deer: {
+    liftRow: 17,
+    shadow: { x: 7, w: 16 },
+    stand: [
+      '..................................',
+      '.....................a.a.A...A....',
+      '......................a..A...A....',
+      '.......................a..A.A.....',
+      '........................a..A......',
+      '.....................dd.a..A......',
+      '......................dbbbbb......',
+      '.......................bebbbbn....',
+      '........................bbb.......',
+      '......................bbb.........',
+      '.....................bbb..........',
+      '....dww.lllllllllllllbbb..........',
+      '.....wbbbbbbbbbbbbbbbbb...........',
+      '.....dbbbbbbbbbbbbbbbbb...........',
+      '.....dbbbbbbbbbbbbbbbdd...........',
+      '......dbbbbbbbbbbbbbddd...........',
+      '.......wwwwddddwwwwdd.............',
+      '.......dqk..FF...FF.qk............',
+      '........qk..FF...FF.qk............',
+      '........qk..FF...FF.qk............',
+      '........qk..FF...FF.qk............',
+      '.........qk.FF...FF.qk............',
+      '.........qk.FF...FF.qk............',
+      '.........hh.hh...hh.hh............',
+    ],
+    alert: [
+      '.....................a.a.A...A....',
+      '......................a..A...A....',
+      '.......................a..A.A.....',
+      '........................a..A......',
+      '.....................dd.a..A......',
+      '......................dbbbbb......',
+      '.......................bebbbbn....',
+      '........................bbb.......',
+      '.......................bbb........',
+      '.......................bbb........',
+      '......................bbb.........',
+      '....dww..............bbb..........',
+      '.....wbblllllllllllllbbb..........',
+      '.....dbbbbbbbbbbbbbbbbb...........',
+      '.....dbbbbbbbbbbbbbbbdd...........',
+      '......dbbbbbbbbbbbbbddd...........',
+      '.......wwwwddddwwwwdd.............',
+      '.......dqk..FF...FF.qk............',
+      '........qk..FF...FF.qk............',
+      '........qk..FF...FF.qk............',
+      '........qk..FF...FF.qk............',
+      '.........qk.FF...FF.qk............',
+      '.........qk.FF...FF.qk............',
+      '.........hh.hh...hh.hh............',
+    ],
+    pal: {
+      o: '#3d2c1c', d: '#7d5c3a', b: '#a37e51', l: '#c2a173', w: '#d6c39a',
+      q: '#8f6a42', k: '#6f5232', F: '#59422a', h: '#2e2114',
+      A: '#d9c8a2', a: '#a98f68', e: '#171009', n: '#241a10',
+    },
+  },
+  boar: {
+    liftRow: 13,
+    shadow: { x: 3, w: 20 },
+    stand: [
+      '..............................',
+      '..............................',
+      '..........M..M.M..............',
+      '.........MMMMMMMM..d..........',
+      '.......MMlllllllMM.dd.........',
+      '.....MMbbblllllbbbbd..........',
+      '....Mbbbbbbbbbbbbbbbbb........',
+      '..ddbbbbbbbbbbbbbbbbbebb......',
+      '..dbbbbdbbbbbbbdbbbblbbd......',
+      '..Mdbbbbbbdbbbbbbdbbbbbbbnn...',
+      '...ddbbbbbbbbbbbbbbbbbbbtnn...',
+      '....ddddddddddddddddddbtt.....',
+      '....ddddddddddddddddd.........',
+      '.....qk..FF....FF..qk.........',
+      '.....qk..FF....FF..qk.........',
+      '.....qk..FF....FF..qk.........',
+      '.....qk..FF....FF..qk.........',
+      '.....qkk.FF....FF..qkk........',
+    ],
+    alert: [
+      '..............................',
+      '.........M.M.M................',
+      '........MMMMMMMMM.............',
+      '.......MMllllllMM..d..........',
+      '.....MMbbllllllbbb.dd.........',
+      '....Mbbbbbbbbbbbbbbd..........',
+      '...Mbbbbbbbbbbbbbbbbb.........',
+      '..ddbbbbbbbbbbbbbbbbbb........',
+      '..dbbbbdbbbbbbbdbbbbbebb......',
+      '..Mdbbbbbbbbbbbbbbbbbbbb......',
+      '...ddbbbbbbbbbbbbbbbbbbbbnn...',
+      '....dddddddddddddddddddtnn....',
+      '....ddddddddddddddddddtt......',
+      '.....qk..FF....FF...qk........',
+      '.....qk..FF....FF...qk........',
+      '.....qk..FF....FF...qk........',
+      '.....qk..FF....FF...qk........',
+      '.....qkk.FF....FF...qkk.......',
+    ],
+    pal: {
+      o: '#201812', d: '#3c2f20', b: '#52422e', l: '#6b5840', M: '#2a2114',
+      q: '#4a3a28', k: '#352a1c', F: '#292014',
+      t: '#e5d9bb', e: '#15100a', n: '#7d5f49',
+    },
+  },
+  jaguar: {
+    liftRow: 16,
+    shadow: { x: 5, w: 21 },
+    stand: [
+      '..................................',
+      '..................................',
+      '..................................',
+      '..................................',
+      '..................................',
+      '..........................bd..d...',
+      '..........................lllllb..',
+      '.........................bbbbbbbb.',
+      '.........................bbbebwwn.',
+      '.........................bbbbwww..',
+      '....T.lllllllllllllllllllbbbww....',
+      '.u..Tbbbbsbbsbbsbbbbbsbbbbd.......',
+      '.T.T.bbbslsbbbslsbbbslsbbbd.......',
+      '..T..dbbbsbbbbbsbbsbbsbbdd........',
+      '......dbbbbbbbbbbbbbbbbbdd........',
+      '.......dwwwwwwddwwwwwwdd..........',
+      '.......qk.FF......FF.qk...........',
+      '.......qk.FF......FF.qk...........',
+      '.......qk.FF......FF.qk...........',
+      '......qkk.FF......FF.qkk..........',
+    ],
+    alert: [
+      '..................................',
+      '..................................',
+      '..................................',
+      '..................................',
+      '..................................',
+      '..................................',
+      '..................................',
+      '..........................dd..dd..',
+      '..........................llllll..',
+      '.........................bbbbbbbb.',
+      '.........................bbbebwwn.',
+      '.uTTTT.llllllllllllllllllbbbww....',
+      '......bbbsbbsbbsbbbbbsbbbbb.......',
+      '......bbslsbbslsbbbslsbbbd........',
+      '......dbbsbbbbsbbbbsbbbdd.........',
+      '......ddwwwwwwddwwwwwwdd..........',
+      '......qk..FF......FF..qk..........',
+      '......qk..FF......FF..qk..........',
+      '......qk..FF......FF..qk..........',
+      '.....qkk..FF......FF..qkk.........',
+    ],
+    pal: {
+      o: '#38270f', d: '#a07c38', b: '#bb9750', l: '#d8bc7c', w: '#e4d6ae',
+      q: '#ab8944', k: '#8a6830', F: '#6f5326',
+      T: '#a07c38', u: '#45310f', s: '#45310f', e: '#2c1f0a', n: '#38270f',
+    },
+  },
+};
+
+function lfParseGrid(rows: string[], w: number, h: number, tag: string): string[][] {
+  if (rows.length > h - 1) throw new Error(tag + ': too many rows (' + rows.length + ')');
+  const cells: string[][] = [];
+  for (let y = 0; y < h; y++) {
+    const row = rows[y] || '';
+    if (row.length > w) throw new Error(tag + ' row ' + y + ': length ' + row.length + ' > ' + w);
+    const line = new Array(w).fill('');
+    for (let x = 0; x < row.length; x++) if (row[x] !== '.') line[x] = row[x];
+    cells.push(line);
+  }
+  return cells;
+}
+
+function lfLiftGrid(cells: string[][], liftRow: number): string[][] {
+  const H = cells.length, W = cells[0].length;
+  const out: string[][] = [];
+  for (let y = 0; y < H; y++) out.push(new Array(W).fill(''));
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const ch = cells[y][x];
+      if (!ch) continue;
+      if (y < liftRow) { if (y - 1 >= 0) out[y - 1][x] = ch; }
+      else out[y][x] = ch;
+    }
+  for (let x = 0; x < W; x++) {
+    if (!out[liftRow - 1][x] && out[liftRow][x] && cells[liftRow - 1][x]) {
+      out[liftRow - 1][x] = out[liftRow][x];
+    }
+  }
+  return out;
+}
+
+function lfPaint(ctx: Ctx, ox: number, cells: string[][], pal: Record<string, string>): void {
+  const H = cells.length, W = cells[0].length;
+  const solid = (ch: string) => !!ch && !LF_NO_OUTLINE[ch];
+  ctx.fillStyle = pal.o;
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      if (cells[y][x]) continue;
+      const n =
+        (y > 0 && solid(cells[y - 1][x])) || (y < H - 1 && solid(cells[y + 1][x])) ||
+        (x > 0 && solid(cells[y][x - 1])) || (x < W - 1 && solid(cells[y][x + 1]));
+      if (n) ctx.fillRect(ox + x, y, 1, 1);
+    }
+  for (let y = 0; y < H; y++) {
+    let x = 0;
+    while (x < W) {
+      const ch = cells[y][x];
+      if (!ch) { x++; continue; }
+      let x2 = x + 1;
+      while (x2 < W && cells[y][x2] === ch) x2++;
+      const c = pal[ch];
+      if (!c) throw new Error('missing palette char "' + ch + '"');
+      ctx.fillStyle = c;
+      ctx.fillRect(ox + x, y, x2 - x, 1);
+      x = x2;
+    }
   }
 }
 
-const CAPYBARA: BeastSpec = {
-  outline: '#2a1c12', shadow: '#4a3323', base: '#7a5638', highlight: '#9a7350', belly: '#5a3d28',
-  feature: 'plain', featureColor: '#9a7350', eye: '#1a120a', predator: false,
-};
-const DEER: BeastSpec = {
-  outline: '#33251a', shadow: '#5a4230', base: '#9a7a52', highlight: '#c0a074', belly: '#cbb48c',
-  feature: 'antler', featureColor: '#e0cfa8', eye: '#1a120a', predator: false,
-};
-const BOAR: BeastSpec = {
-  outline: '#1a140f', shadow: '#33261c', base: '#4a3a2c', highlight: '#63503c', belly: '#3a2c20',
-  feature: 'tusk', featureColor: '#eadfc4', eye: '#ff7a2a', predator: true,
-};
-const JAGUAR: BeastSpec = {
-  outline: '#2a1c08', shadow: '#7a5a20', base: '#c99a3e', highlight: '#e6c060', belly: '#e8dcc0',
-  feature: 'spots', featureColor: '#2a1c08', eye: '#ffd24a', predator: true,
-};
+const LF_CACHE: Record<LFKind, { stand: string[][]; alert: string[][]; heave: string[][] }> = {} as never;
+for (const kind of Object.keys(LF_SPEC) as LFKind[]) {
+  const s = LF_SPEC[kind];
+  const { w, h } = MOB_FRAME[kind];
+  const stand = lfParseGrid(s.stand, w, h, kind + '.stand');
+  const alert = lfParseGrid(s.alert, w, h, kind + '.alert');
+  LF_CACHE[kind] = { stand, alert, heave: lfLiftGrid(stand, s.liftRow) };
+}
+
+function drawLargeFrame(ctx: Ctx, ox: number, f: number, kind: LFKind): void {
+  const s = LF_SPEC[kind];
+  const { h } = MOB_FRAME[kind];
+  const cells = f === 2 ? LF_CACHE[kind].alert : f === 1 ? LF_CACHE[kind].heave : LF_CACHE[kind].stand;
+  ctx.fillStyle = LF_SHADOW;
+  ctx.fillRect(ox + s.shadow.x, h - 2, s.shadow.w, 1);
+  ctx.fillRect(ox + s.shadow.x + 2, h - 1, s.shadow.w - 4, 1);
+  lfPaint(ctx, ox, cells, s.pal);
+}
 
 const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
   grasp: drawGrasp,
@@ -423,10 +689,10 @@ const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
   cinder: (c, ox, f) => drawGrasp(c, ox, f, CINDER),
   ember: (c, ox, f) => drawSpit(c, ox, f, EMBER),
   forgeborn: (c, ox, f) => drawBoss(c, ox, f, FORGEBORN),
-  capybara: (c, ox, f) => drawBeast(c, ox, f, CAPYBARA),
-  deer: (c, ox, f) => drawBeast(c, ox, f, DEER),
-  boar: (c, ox, f) => drawBeast(c, ox, f, BOAR),
-  jaguar: (c, ox, f) => drawBeast(c, ox, f, JAGUAR),
+  capybara: (c, ox, f) => drawCapybara(c, ox, f),
+  deer: (c, ox, f) => drawLargeFrame(c, ox, f, 'deer'),
+  boar: (c, ox, f) => drawLargeFrame(c, ox, f, 'boar'),
+  jaguar: (c, ox, f) => drawLargeFrame(c, ox, f, 'jaguar'),
 };
 
 /** draw one mob frame at an x-offset — exported so it can be rasterized/previewed

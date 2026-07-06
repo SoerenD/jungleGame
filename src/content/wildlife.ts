@@ -217,6 +217,6 @@ export function planWildSpawn(anchor: { tx: number; ty: number }, ctx: WildSpawn
  * share one source of truth. A trophy to hang, a hide rug for the floor.
  */
 export const WILDLIFE_ART: Partial<Record<'trophy_mount' | 'hide_rug', StructureArt>> = {
-  trophy_mount: { body: '#6b4a2a', roof: '#e8dcc0', trim: '#b0472e', w: 1, h: 1, shape: 'monument' },
-  hide_rug: { body: '#b0895a', roof: '#8a5a2b', trim: '#3a2a18', w: 1, h: 1, shape: 'decor' },
+  trophy_mount: { kind: 'trophy', body: '#4c3826', roof: '#d8cdb2', trim: '#8f6a40', w: 1, h: 1, shape: 'monument' },
+  hide_rug: { kind: 'rug', body: '#b08a58', roof: '#8f6a40', trim: '#3a2a18', w: 1, h: 1, shape: 'decor' },
 };

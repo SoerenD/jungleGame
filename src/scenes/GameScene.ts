@@ -982,8 +982,9 @@ export class GameScene extends Phaser.Scene {
       const { w, h } = footprint(id as StructureId);
       const W = w * TILE;
       // buildings/monuments stand a tile (or two) taller than their footprint so
-      // the roof pokes up like every other object; decor stays low
-      const extra = art.shape === 'monument' ? 2 : art.shape === 'building' ? 1 : 1;
+      // the roof pokes up like every other object; decor stays low. `rise` overrides
+      // (the bell-towered hall rises 3 tiles so it out-scales the houses).
+      const extra = art.rise ?? (art.shape === 'monument' ? 2 : 1);
       const H = (h + extra) * TILE;
       const tex = this.textures.createCanvas(key, W, H);
       if (!tex) continue;

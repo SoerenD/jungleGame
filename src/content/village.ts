@@ -198,17 +198,31 @@ export interface StructureArt {
   shape: 'building' | 'monument' | 'decor';
   /** lit at night (adds a warm glow, like torches) */
   glow?: boolean;
+  /**
+   * which hand-drawn sprite the renderer uses (see drawStructureArt). Each id has
+   * its own recognizable silhouette — a well is a WELL, the hall a bell-towered hall.
+   */
+  kind:
+    | 'hall' | 'well' | 'market' | 'keep' | 'monument' | 'fountain' | 'archJungle'
+    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug';
+  /**
+   * tiles the sprite rises ABOVE its footprint (defaults from shape: monument 2,
+   * else 1). The bell-towered hall rises 3 so it out-scales the houses.
+   */
+  rise?: number;
 }
 
 export const VILLAGE_ART: Partial<Record<StructureId, StructureArt>> = {
-  village_hall: { body: '#8a5a2b', roof: '#b0472e', trim: '#ffcf6b', w: 2, h: 2, shape: 'building', glow: true },
-  village_well: { body: '#9aa0a8', roof: '#6b4a2a', trim: '#4a90d9', w: 2, h: 2, shape: 'building' },
-  market_square: { body: '#c08a3e', roof: '#3f8f52', trim: '#ffd166', w: 2, h: 2, shape: 'building' },
-  stone_keep: { body: '#8a9099', roof: '#5b616a', trim: '#c3c9cf', w: 2, h: 2, shape: 'monument' },
-  grand_monument: { body: '#cdb6f2', roof: '#8a6cc9', trim: '#ffd166', w: 2, h: 2, shape: 'monument', glow: true },
-  village_banner: { body: '#6b4a2a', roof: '#b0472e', trim: '#ffcf6b', w: 1, h: 1, shape: 'decor' },
-  lamp_post: { body: '#4a4a52', roof: '#2f2f36', trim: '#ffab52', w: 1, h: 1, shape: 'decor', glow: true },
-  fountain: { body: '#9aa0a8', roof: '#c3c9cf', trim: '#4a90d9', w: 2, h: 2, shape: 'monument' },
-  flower_bed: { body: '#3f8f52', roof: '#7cc96f', trim: '#ff8a70', w: 1, h: 1, shape: 'decor' },
-  victory_arch: { body: '#cdb6f2', roof: '#8a6cc9', trim: '#ffd166', w: 2, h: 1, shape: 'monument' },
+  // "Rustic Timber" set (with the Overgrown-Jungle vine arch). Each id has a
+  // distinct hand-drawn silhouette; body/roof/trim document the dominant hues.
+  village_hall: { kind: 'hall', body: '#96714a', roof: '#96543c', trim: '#e0b268', w: 2, h: 2, shape: 'building', glow: true, rise: 3 },
+  village_well: { kind: 'well', body: '#847e6d', roof: '#96543c', trim: '#537f8d', w: 2, h: 2, shape: 'building' },
+  market_square: { kind: 'market', body: '#96714a', roof: '#a65445', trim: '#cfc0a0', w: 2, h: 2, shape: 'building' },
+  stone_keep: { kind: 'keep', body: '#847e6d', roof: '#635e4f', trim: '#e0b268', w: 2, h: 2, shape: 'monument' },
+  grand_monument: { kind: 'monument', body: '#847e6d', roof: '#9e9782', trim: '#e0b268', w: 2, h: 2, shape: 'monument', glow: true },
+  village_banner: { kind: 'banner', body: '#4c3826', roof: '#a65445', trim: '#cfc0a0', w: 1, h: 1, shape: 'decor' },
+  lamp_post: { kind: 'lamp', body: '#4c3826', roof: '#2b2118', trim: '#e0b268', w: 1, h: 1, shape: 'decor', glow: true },
+  fountain: { kind: 'fountain', body: '#847e6d', roof: '#9e9782', trim: '#537f8d', w: 2, h: 2, shape: 'monument' },
+  flower_bed: { kind: 'flowers', body: '#4c3826', roof: '#5d7440', trim: '#a65445', w: 1, h: 1, shape: 'decor' },
+  victory_arch: { kind: 'archJungle', body: '#78806e', roof: '#5d6455', trim: '#4d6b3c', w: 2, h: 1, shape: 'monument' },
 };
