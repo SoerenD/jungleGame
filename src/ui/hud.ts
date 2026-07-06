@@ -1,4 +1,4 @@
-import { ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
+import { ITEMS, isBuilding, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { loadVolumes, type AudioChannel } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../content/guardian';
 import { itemIcon } from './icons';
@@ -20,8 +20,15 @@ let village: VillageRecord | null = null;
 let villageTier = 0;
 let journey: JourneyState | null = null;
 let placingNow = false;
-/** the open craft tab, mapped to the recipe kind — defaults to Tools & Weapons (B4) */
-let craftTab: 'tool' | 'structure' | 'consumable' = 'tool';
+/** the four craft tabs: Tools & Weapons, Buildings (≥2×2), Props (1×1), Consumables */
+type CraftTab = 'tool' | 'building' | 'prop' | 'consumable';
+/** the open craft tab — defaults to Tools & Weapons (B4) */
+let craftTab: CraftTab = 'tool';
+/** which tab a recipe belongs to: structures split by footprint into Building vs Prop */
+function recipeTab(r: (typeof RECIPES)[number]): CraftTab {
+  if (r.kind === 'structure') return isBuilding(r.output as StructureId) ? 'building' : 'prop';
+  return r.kind;
+}
 let fightTimer: number | undefined;
 let buffTimer: number | undefined;
 /** fog-of-war layer for the minimap: 1px per chunk, rebuilt on fog events */
@@ -134,7 +141,8 @@ export function initHud(name: string, muted: boolean): void {
       <h3>${t.panels.crafting}</h3>
       <div id="craft-tabs" data-testid="craft-tabs">
         <button class="craft-tab" data-tab="tool" data-testid="craft-tab-tool">${t.recipe.tabTool}</button>
-        <button class="craft-tab" data-tab="structure" data-testid="craft-tab-structure">${t.recipe.tabStructure}</button>
+        <button class="craft-tab" data-tab="building" data-testid="craft-tab-building">${t.recipe.tabBuilding}</button>
+        <button class="craft-tab" data-tab="prop" data-testid="craft-tab-prop">${t.recipe.tabProp}</button>
         <button class="craft-tab" data-tab="consumable" data-testid="craft-tab-consumable">${t.recipe.tabConsumable}</button>
       </div>
       <div id="recipe-list"></div>
@@ -1055,7 +1063,7 @@ function ingChip(id: ItemId, count: number, have: number, tool = false): HTMLEle
 }
 
 /** switch the open craft tab (B4) and re-render; highlights the active tab */
-function setCraftTab(tab: 'tool' | 'structure' | 'consumable'): void {
+function setCraftTab(tab: CraftTab): void {
   craftTab = tab;
   renderRecipes();
 }
@@ -1073,7 +1081,8 @@ function recipeCraftable(r: (typeof RECIPES)[number]): boolean {
  * The crafting menu is image-driven: every recipe is a card showing the output
  * sprite and its ingredient icons (with count badges). The whole card crafts on
  * click; names and full costs live in the hover tooltip. Recipes are split into
- * three tabs by `kind` (B4), craftable-first within the open tab.
+ * four tabs (Tools & Weapons, Buildings, Props, Consumables) via recipeTab(),
+ * craftable-first within the open tab.
  */
 function renderRecipes(): void {
   const box = el('recipe-list');
@@ -1086,7 +1095,7 @@ function renderRecipes(): void {
   const recipes = RECIPES.map((r, i) => ({ r, i }))
     // A3 (ADR-0010): a Village Building stays hidden until the Village reaches its
     // tier (villageMin). The Hall (villageMin 0) is always craftable.
-    .filter(({ r }) => r.kind === craftTab && (r.villageMin ?? 0) <= villageTier)
+    .filter(({ r }) => recipeTab(r) === craftTab && (r.villageMin ?? 0) <= villageTier)
     .sort((a, b) => Number(recipeCraftable(b.r)) - Number(recipeCraftable(a.r)) || a.i - b.i)
     .map(({ r }) => r);
   for (const r of recipes) {
@@ -1117,7 +1126,7 @@ function renderRecipes(): void {
     const countText = r.count > 1 ? ` ×${r.count}` : '';
     // weapons that can strike the Guardian get a combat stat line (ADR-0006 §6)
     const statLine = WEAPON_COMBAT[r.output as ToolId] ? `\n${weaponStatLine(r.output as ToolId, t.weapon)}` : '';
-    const kindLabel = r.kind === 'tool' ? t.recipe.kindTool : r.kind === 'structure' ? t.recipe.kindStructure : t.recipe.kindConsumable;
+    const kindLabel = { tool: t.recipe.kindTool, building: t.recipe.kindBuilding, prop: t.recipe.kindProp, consumable: t.recipe.kindConsumable }[recipeTab(r)];
     card.title = t.recipe.tooltip(`${def.name}${countText}`, kindLabel, def.desc, costText.join(', '), statLine);
 
     const out = document.createElement('div');
