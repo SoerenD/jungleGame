@@ -2165,6 +2165,46 @@ export class GameScene extends Phaser.Scene {
     return baseMs / (1 + villageBuff(this.village.tier).attackSpeed);
   }
 
+  /**
+   * The Victory Arch recalls the Player to the Village Hall — reuses the wake
+   * relocation position-write + a presence broadcast, with a camera fade so it
+   * reads as a ritual. Blocked while you are rostered in an ENGAGED Guardian
+   * fight, so it is never a combat escape. (The Arch is an overworld Structure
+   * and the Delve uses its own interaction resolver, so recall is unreachable
+   * from inside a Dungeon.)
+   */
+  private recallHome(): void {
+    const hall = this.village.hall;
+    if (!hall) {
+      bus.emit('toast', t.toast.recallNoHome, 'bad');
+      return;
+    }
+    if (this.fight?.roster.includes(this.me.name)) {
+      bus.emit('toast', t.toast.recallNoFight, 'bad');
+      return;
+    }
+    const { w, h } = footprint('village_hall');
+    const tx = hall.tx + Math.floor(w / 2);
+    const ty = hall.ty + h; // stand just below the Hall footprint
+    const cam = this.cameras.main;
+    cam.fadeOut(200, 0, 0, 0, (_c: Phaser.Cameras.Scene2D.Camera, progress: number) => {
+      if (progress < 1) return;
+      this.player.setVelocity(0, 0);
+      this.player.setPosition((tx + 0.5) * TILE, (ty + 0.5) * TILE);
+      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined);
+      cam.fadeIn(200, 0, 0, 0);
+      this.sfx('blip', 0.5);
+      bus.emit('toast', t.toast.recalled, 'good');
+    });
+  }
+
+  /** the Stone Keep's bell — a broadcast rally to every online Player (reuses chat, ADR-0013) */
+  private ringBell(): void {
+    void this.backend.sendChat(`🔔 ${this.me.name} rings the bell — gather at the Village!`);
+    this.sfx('blip', 0.6);
+    bus.emit('toast', t.toast.bellRung, 'good');
+  }
+
   private wireBus(): void {
     // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–3)
     bus.on('held', (id: ItemId | null) => {
@@ -2561,6 +2601,13 @@ export class GameScene extends Phaser.Scene {
     // the Player choose how much of each qualifying Resource/loot to give (ADR-0010)
     const hall = this.nearbyStructure(['village_hall']);
     if (hall) return { swing: false, run: () => this.openVillageContribute() };
+
+    // ADR-0013 building functions: the Victory Arch recalls you home; the Stone
+    // Keep rings the muster bell to call everyone to the Village.
+    const arch = this.nearbyStructure(['victory_arch']);
+    if (arch) return { swing: false, run: () => this.recallHome() };
+    const keep = this.nearbyStructure(['stone_keep']);
+    if (keep) return { swing: false, run: () => this.ringBell() };
 
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
