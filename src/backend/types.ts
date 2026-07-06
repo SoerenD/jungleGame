@@ -441,6 +441,10 @@ export interface Backend {
   contributeVillage(amounts?: Inventory): Promise<ContributeVillageResult>;
   /** market_square resource exchange (ADR-0013): swap a surplus raw for another at a tier-scaled tax */
   tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult>;
+  /** the Banner names the Village + picks a crest hue (ADR-0013) */
+  setVillageName(name: string, crest: number): Promise<{ village: VillageState }>;
+  /** the Well's chronicle: append a short player-written line (ADR-0013) */
+  addVillageNote(text: string): Promise<{ village: VillageState }>;
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
   /**

@@ -496,7 +496,15 @@ export class MockBackend implements Backend {
 
   private villageState(): VillageRecord {
     const v = (this.db.world!.village ??= emptyVillage());
-    return { tier: v.tier, pool: v.pool, hall: v.hall ? { ...v.hall } : null, milestonesBuilt: v.milestonesBuilt };
+    return {
+      tier: v.tier,
+      pool: v.pool,
+      hall: v.hall ? { ...v.hall } : null,
+      milestonesBuilt: v.milestonesBuilt,
+      name: v.name,
+      crest: v.crest,
+      chronicle: v.chronicle ? [...v.chronicle] : undefined,
+    };
   }
 
   /**
@@ -1136,6 +1144,25 @@ export class MockBackend implements Backend {
     p.inventory[getItem] = (p.inventory[getItem] ?? 0) + got;
     this.saveNow();
     return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...p.inventory } };
+  }
+
+  async setVillageName(name: string, crest: number): Promise<{ village: VillageRecord }> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    v.name = name.slice(0, 24);
+    v.crest = crest;
+    this.saveNow();
+    this.emit('villageChanged', this.villageState());
+    return { village: this.villageState() };
+  }
+
+  async addVillageNote(text: string): Promise<{ village: VillageRecord }> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    v.chronicle = [...(v.chronicle ?? []), `${this.me ?? '?'}: ${text.slice(0, 60)}`];
+    this.saveNow();
+    this.emit('villageChanged', this.villageState());
+    return { village: this.villageState() };
   }
 
   // ------------------------------------------------------------ v2: the Guardian

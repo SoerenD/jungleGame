@@ -169,6 +169,26 @@ const en = {
     nothing: 'Not enough for a whole unit.',
   },
 
+  trophy: {
+    title: '⛲ Fountain of Firsts',
+    none: 'No milestones yet — grow the Village.',
+  },
+
+  vname: {
+    title: '🚩 Name the Village',
+    placeholder: 'A name…',
+    cancel: 'Cancel',
+    save: 'Save',
+  },
+
+  chron: {
+    title: '📖 Village Chronicle',
+    placeholder: 'Add a line…',
+    close: 'Close',
+    add: 'Add',
+    empty: 'The chronicle is empty.',
+  },
+
   fight: {
     title: '⚔ The Guardian',
     stirs: '⚔ The Guardian stirs',
@@ -341,6 +361,8 @@ const en = {
     bellRung: 'You ring the Village bell — everyone is called to gather.',
     traded: (n: number, name: string) => `Traded for ${n} ${name}.`,
     tradeFailed: 'The market can’t make that trade.',
+    villageNamed: (name: string) => `The Village is now ${name}.`,
+    flowersTended: 'You tend the flowers — they brighten.',
     placing: (name: string) => `Placing ${name} — face a tile and press Enter`,
     tooFarDrop: 'Too far to reach — step closer to drop it there.',
     bridgesOnWater: 'Bridges must be placed on water.',
@@ -524,6 +546,26 @@ const de: Strings = {
     nothing: 'Nicht genug für eine ganze Einheit.',
   },
 
+  trophy: {
+    title: '⛲ Brunnen der Ersten',
+    none: 'Noch keine Meilensteine — lass das Dorf wachsen.',
+  },
+
+  vname: {
+    title: '🚩 Dorf benennen',
+    placeholder: 'Ein Name…',
+    cancel: 'Abbrechen',
+    save: 'Speichern',
+  },
+
+  chron: {
+    title: '📖 Dorfchronik',
+    placeholder: 'Zeile hinzufügen…',
+    close: 'Schließen',
+    add: 'Hinzufügen',
+    empty: 'Die Chronik ist leer.',
+  },
+
   fight: {
     title: '⚔ Der Wächter',
     stirs: '⚔ Der Wächter regt sich',
@@ -693,6 +735,8 @@ const de: Strings = {
     bellRung: 'Du läutest die Dorfglocke — alle werden zum Sammeln gerufen.',
     traded: (n, name) => `Für ${n} ${name} getauscht.`,
     tradeFailed: 'Der Markt kann diesen Tausch nicht machen.',
+    villageNamed: (name) => `Das Dorf heißt jetzt ${name}.`,
+    flowersTended: 'Du pflegst die Blumen — sie leuchten auf.',
     placing: (name) => `${name} wird platziert — blick auf ein Feld und drücke Enter`,
     tooFarDrop: 'Zu weit weg — geh näher heran, um es dort abzulegen.',
     bridgesOnWater: 'Brücken müssen auf Wasser platziert werden.',

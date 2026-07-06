@@ -575,6 +575,9 @@ export class SupabaseBackend implements Backend {
       pool: v.pool ?? 0,
       hall,
       milestonesBuilt: (v.milestonesBuilt ?? 0) as VillageRecord['milestonesBuilt'],
+      name: typeof v.name === 'string' ? v.name : undefined,
+      crest: typeof v.crest === 'number' ? v.crest : undefined,
+      chronicle: Array.isArray(v.chronicle) ? v.chronicle.filter((x: any) => typeof x === 'string') : undefined,
     };
   }
 
@@ -901,6 +904,20 @@ export class SupabaseBackend implements Backend {
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'INSUFFICIENT' };
     this.inv = res.inventory as Inventory;
     return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...this.inv } };
+  }
+
+  async setVillageName(name: string, crest: number): Promise<{ village: VillageRecord }> {
+    const res = await this.rpc<any>('jw_village_set_name', { p_name: name.slice(0, 24), p_crest: crest });
+    const village = this.villageFromJson(res?.village);
+    this.relay('villageChanged', village);
+    return { village };
+  }
+
+  async addVillageNote(text: string): Promise<{ village: VillageRecord }> {
+    const res = await this.rpc<any>('jw_village_add_note', { p_who: this.me, p_text: text.slice(0, 60) });
+    const village = this.villageFromJson(res?.village);
+    this.relay('villageChanged', village);
+    return { village };
   }
 
   // ---------------------------------------------------------------- Guardian

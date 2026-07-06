@@ -154,6 +154,12 @@ export interface VillageRecord {
    * means tier T's milestone has been completed. Founding sets it to ≥1.
    */
   milestonesBuilt: VillageTier;
+  /** ADR-0013: the group's chosen settlement name (Banner); falls back to the tier name */
+  name?: string;
+  /** ADR-0013: crest hue index (Banner) */
+  crest?: number;
+  /** ADR-0013: the Well's chronicle — short auto-seeded + player-written lines */
+  chronicle?: string[];
 }
 
 /** the fresh, unfounded record for a brand-new World */

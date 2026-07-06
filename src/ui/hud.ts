@@ -197,6 +197,28 @@ export function initHud(name: string, muted: boolean): void {
         <button class="ui-btn" id="trade-confirm" data-testid="trade-confirm">${t.trade.confirm}</button>
       </div>
     </div>
+
+    <div id="vname-panel" class="panel" data-testid="vname-panel">
+      <h3>${t.vname.title}</h3>
+      <input id="vname-input" type="text" maxlength="24" placeholder="${t.vname.placeholder}" />
+      <div id="vname-crests" class="vname-crests"></div>
+      <div class="village-give-btns">
+        <span class="village-give-spacer"></span>
+        <button class="ui-btn" id="vname-cancel">${t.vname.cancel}</button>
+        <button class="ui-btn" id="vname-save">${t.vname.save}</button>
+      </div>
+    </div>
+
+    <div id="chron-panel" class="panel" data-testid="chron-panel">
+      <h3>${t.chron.title}</h3>
+      <div id="chron-list" class="chron-list"></div>
+      <input id="chron-input" type="text" maxlength="60" placeholder="${t.chron.placeholder}" />
+      <div class="village-give-btns">
+        <span class="village-give-spacer"></span>
+        <button class="ui-btn" id="chron-close">${t.chron.close}</button>
+        <button class="ui-btn" id="chron-add">${t.chron.add}</button>
+      </div>
+    </div>
     <div id="sawmill-panel" class="panel" data-testid="sawmill-panel">
       <h3>${t.sawmill.title}</h3>
       <div id="sawmill-status"></div>
@@ -580,6 +602,81 @@ export function initHud(name: string, muted: boolean): void {
     renderTradeOut();
   });
 
+  // ---- ADR-0013: Banner name & crest
+  const CREST_HUES = ['#a65445', '#4d6b3c', '#537f8d', '#e0b268', '#8a4b39', '#6b4e8f'];
+  let vnameCrest = 0;
+  const renderCrests = () => {
+    const box = el('vname-crests');
+    box.innerHTML = '';
+    CREST_HUES.forEach((hue, i) => {
+      const b = document.createElement('button');
+      b.style.cssText = `background:${hue};width:18px;height:18px;border-radius:3px;margin:2px;cursor:pointer;border:2px solid ${i === vnameCrest ? '#fff' : 'transparent'}`;
+      b.onclick = () => {
+        vnameCrest = i;
+        renderCrests();
+      };
+      box.append(b);
+    });
+  };
+  const vnameInput = el<HTMLInputElement>('vname-input');
+  vnameInput.addEventListener('focus', () => bus.emit('chat-focus'));
+  vnameInput.addEventListener('blur', () => bus.emit('chat-blur'));
+  vnameInput.addEventListener('keydown', (e) => e.stopPropagation());
+  const closeVname = () => {
+    el('vname-panel').classList.remove('open');
+    vnameInput.blur();
+  };
+  el('vname-cancel').onclick = closeVname;
+  el('vname-save').onclick = () => {
+    const name = vnameInput.value.trim();
+    if (name) bus.emit('village-name-set', { name, crest: vnameCrest });
+    closeVname();
+  };
+  bus.on('village-name-open', (o: { name: string; crest: number }) => {
+    vnameInput.value = o.name;
+    vnameCrest = o.crest || 0;
+    renderCrests();
+    el('vname-panel').classList.add('open');
+    vnameInput.focus();
+  });
+
+  // ---- ADR-0013: Well chronicle
+  const chronInput = el<HTMLInputElement>('chron-input');
+  chronInput.addEventListener('focus', () => bus.emit('chat-focus'));
+  chronInput.addEventListener('blur', () => bus.emit('chat-blur'));
+  const addChron = () => {
+    const text = chronInput.value.trim();
+    if (text) {
+      bus.emit('village-note-add', text);
+      chronInput.value = '';
+    }
+  };
+  chronInput.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') addChron();
+  });
+  el('chron-add').onclick = addChron;
+  el('chron-close').onclick = () => {
+    el('chron-panel').classList.remove('open');
+    chronInput.blur();
+  };
+  bus.on('chronicle-open', (o: { lines: string[] }) => {
+    const list = el('chron-list');
+    list.innerHTML = '';
+    const lines = o.lines.slice(-15);
+    if (!lines.length) {
+      list.textContent = t.chron.empty;
+    } else {
+      for (const line of lines) {
+        const d = document.createElement('div');
+        d.className = 'chron-line';
+        d.textContent = line;
+        list.append(d);
+      }
+    }
+    el('chron-panel').classList.add('open');
+  });
+
   // ---- v3: Sawmill panel
   el('sawmill-close').onclick = () => {
     openSawmillId = null;
@@ -801,6 +898,24 @@ async function initMinimap(): Promise<void> {
     // unexplored chunks stay dark (landmarks hide until discovered; the
     // Players themselves and the treasure ✕ draw over the fog)
     if (fogLayer) ctx.drawImage(fogLayer, 0, 0, canvas.width, canvas.height);
+    // ADR-0013: the Grand Monument beacon — a home-star on the Hall, drawn OVER the
+    // fog so you can always find your way home
+    if (village?.hall) {
+      const hx = (village.hall.tx + 1) * 16 * sx;
+      const hy = (village.hall.ty + 1) * 16 * sy;
+      ctx.fillStyle = '#ffe9c9';
+      ctx.beginPath();
+      ctx.moveTo(hx, hy - 4);
+      ctx.lineTo(hx + 1.4, hy - 1.4);
+      ctx.lineTo(hx + 4, hy);
+      ctx.lineTo(hx + 1.4, hy + 1.4);
+      ctx.lineTo(hx, hy + 4);
+      ctx.lineTo(hx - 1.4, hy + 1.4);
+      ctx.lineTo(hx - 4, hy);
+      ctx.lineTo(hx - 1.4, hy - 1.4);
+      ctx.closePath();
+      ctx.fill();
+    }
     if (!pos) return;
     ctx.fillStyle = '#ffd166';
     for (const o of pos.others) ctx.fillRect(o.x * sx - 1, o.y * sy - 1, 3, 3);
