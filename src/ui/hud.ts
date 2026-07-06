@@ -1,5 +1,14 @@
 import { ITEMS, isBuilding, type ItemId, type StructureId, type ToolId } from '../content/items';
-import { loadVolumes, type AudioChannel } from '../config';
+import {
+  applyUiScale,
+  loadUiScale,
+  loadVolumes,
+  saveUiScale,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  UI_SCALE_STEP,
+  type AudioChannel,
+} from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../content/guardian';
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
@@ -195,6 +204,13 @@ export function initHud(name: string, muted: boolean): void {
           ${(['en', 'de'] as Lang[]).map((l) => `<option value="${l}"${getLang() === l ? ' selected' : ''}>${LANG_NAMES[l]}</option>`).join('')}
         </select>
       </div>
+      <div class="settings-section">${t.settings.textSize}</div>
+      <div class="settings-row">
+        <input type="range" id="settings-textsize" data-testid="settings-textsize"
+          min="${Math.round(UI_SCALE_MIN * 100)}" max="${Math.round(UI_SCALE_MAX * 100)}" step="${Math.round(UI_SCALE_STEP * 100)}"
+          value="${Math.round(loadUiScale() * 100)}" />
+        <span class="settings-val" id="settings-textsize-val">${Math.round(loadUiScale() * 100)}%</span>
+      </div>
       <div class="settings-section">${t.settings.audio}</div>
       <div id="settings-sliders"></div>
       <label class="settings-mute">
@@ -230,6 +246,15 @@ export function initHud(name: string, muted: boolean): void {
   // switching language persists the choice and reloads so every import-time
   // string table (items, lore, this HUD…) rebuilds in the new language
   el<HTMLSelectElement>('settings-lang').onchange = (e) => setLang((e.target as HTMLSelectElement).value as Lang);
+  // text-size slider: live-scales every HUD font via the --ui-scale CSS var and
+  // persists the choice (value is a percentage; the multiplier is value / 100)
+  const sizeSlider = el<HTMLInputElement>('settings-textsize');
+  sizeSlider.addEventListener('input', () => {
+    const pct = Number(sizeSlider.value);
+    el('settings-textsize-val').textContent = `${pct}%`;
+    applyUiScale(pct / 100);
+    saveUiScale(pct / 100);
+  });
   renderSettings();
 
   const input = el<HTMLInputElement>('chat-input');

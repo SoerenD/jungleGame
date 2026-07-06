@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import './ui/styles.css';
 import { createBackend } from './backend/createBackend';
-import { MUTE_KEY } from './config';
+import { applyUiScale, loadUiScale, MUTE_KEY } from './config';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { initHud } from './ui/hud';
@@ -84,5 +84,8 @@ async function start(): Promise<void> {
   game.scene.stop('BootScene');
   game.scene.start('GameScene', { backend, me });
 }
+
+// apply the Player's saved text size before any screen renders (join, intro, HUD)
+applyUiScale(loadUiScale());
 
 void start();

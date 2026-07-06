@@ -78,6 +78,49 @@ export function loadVolumes(): Record<AudioChannel, number> {
   return out;
 }
 
+// ---------------------------------------------------------------- UI text size
+// One multiplier scales every HUD font-size (see the `--ui-scale` CSS var in
+// styles.css), letting each Player enlarge or shrink all interface text to
+// taste. Persisted per browser like the audio mix; 1.0 leaves the design sizes
+// untouched. Applied by writing the var onto <html> (applyUiScale).
+export const UI_SCALE_KEY = 'jungle-world:uiscale';
+export const DEFAULT_UI_SCALE = 1;
+export const UI_SCALE_MIN = 0.8;
+export const UI_SCALE_MAX = 1.6;
+/** slider granularity (10% steps) */
+export const UI_SCALE_STEP = 0.1;
+
+const clampUiScale = (v: number) => Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, v));
+
+/** read the saved text-size multiplier, clamped to range (corrupt/missing → default) */
+export function loadUiScale(): number {
+  try {
+    const raw = Number(localStorage.getItem(UI_SCALE_KEY));
+    if (isFinite(raw) && raw > 0) return clampUiScale(raw);
+  } catch {
+    /* no storage (node/tests) — use default */
+  }
+  return DEFAULT_UI_SCALE;
+}
+
+/** persist the chosen multiplier (clamped) */
+export function saveUiScale(v: number): void {
+  try {
+    localStorage.setItem(UI_SCALE_KEY, String(clampUiScale(v)));
+  } catch {
+    /* storage unavailable — the runtime apply below still takes effect */
+  }
+}
+
+/** push the multiplier into the `--ui-scale` var every HUD font-size reads */
+export function applyUiScale(v: number): void {
+  try {
+    document.documentElement.style.setProperty('--ui-scale', String(clampUiScale(v)));
+  } catch {
+    /* not a browser — nothing to style */
+  }
+}
+
 // day/night cycle: short in dev so night is testable; ?night forces midnight
 export const DAY_CYCLE_MS = import.meta.env.DEV ? 180_000 : 1_200_000;
 export const FORCE_NIGHT = params.has('night');
