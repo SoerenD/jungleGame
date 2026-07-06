@@ -668,11 +668,11 @@ export class GameScene extends Phaser.Scene {
     cam.setZoom(ZOOM);
     cam.startFollow(this.player, true, 0.15, 0.15);
     this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
-      const target = Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 1 / 1.15 : 1.15), 1.25, 5);
-      // Snap so TILE*zoom is a whole pixel: a fractional tile size straddles
-      // device-pixel boundaries and opens ~1px black seams between tiles that
-      // flicker as the camera scrolls (roundPixels can't align internal edges).
-      cam.setZoom(Math.round(target * TILE) / TILE);
+      // Whole-number zoom only. The gutterless tileset bleeds thin dark seams
+      // between tiles at every fractional zoom (nearest-neighbour sampling
+      // straddles tile edges); integer zoom maps each texel to exactly N pixels
+      // so edges never straddle. Step in whole levels rather than *1.15.
+      cam.setZoom(Phaser.Math.Clamp(Math.round(cam.zoom) + (dy > 0 ? -1 : 1), 2, 5));
     });
     // B1: the left mouse button is alternative fire for the held-E swing loop
     // (harvest + combat) — held-to-repeat at weapon cadence. These fire only for

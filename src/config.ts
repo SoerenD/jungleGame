@@ -7,7 +7,11 @@ export const MAP_W = 300;
 export const MAP_H = 300;
 export const PLAYER_SPEED = 130;
 export const INTERACT_RANGE = 30;
-export const ZOOM = 2.5;
+// Whole-number zoom only: the tileset is packed edge-to-edge, so nearest-
+// neighbour sampling bleeds thin dark seams between tiles at any fractional
+// zoom. Integer zoom maps each texel to exactly N pixels — no seams. (Wheel
+// zoom in GameScene steps in whole levels for the same reason.)
+export const ZOOM = 3;
 /**
  * Holding E swings at this fixed cadence (harvesting Resource Nodes, hitting
  * the Guardian). The cadence also caps tapped E — mashing is never faster.
