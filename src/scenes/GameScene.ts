@@ -40,6 +40,9 @@ import {
   VOLUME_KEY,
   AMBIENT_BASE_VOLUME,
   FIGHT_MUSIC_BASE_VOLUME,
+  WATERFALL_BASE_VOLUME,
+  WATERFALL_NEAR_RADIUS,
+  WATERFALL_FAR_RADIUS,
   loadVolumes,
   type AudioChannel,
   PLAYER_SPEED,
@@ -324,6 +327,11 @@ export class GameScene extends Phaser.Scene {
   private volumes: Record<AudioChannel, number> = { master: 1, ambience: 1, music: 1, sfx: 1 };
   /** the looping jungle bed — kept so its volume can track the mix live */
   private ambientSound: Phaser.Sound.BaseSound | null = null;
+  /** the waterfall proximity bed. The falls are a tall COLUMN, not a point, so
+   *  the bed fades with distance to the nearest point on that vertical line —
+   *  a circular audible zone around the whole drop, heard equally from any side. */
+  private waterfallSound: Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound | null = null;
+  private waterfallSrc = { x: 0, yTop: 0, yBottom: 0 };
   private quest: QuestState | null = null;
   private tabletSpots: { id: string; x: number; y: number }[] = [];
   private altarPos = { x: 0, y: 0 };
@@ -777,6 +785,11 @@ export class GameScene extends Phaser.Scene {
           volume: AMBIENT_BASE_VOLUME * this.volumes.ambience * this.volumes.master,
         });
         this.ambientSound.play();
+      }
+      // the waterfall bed loops silently and swells with proximity (see update())
+      if (this.cache.audio.exists('waterfall')) {
+        this.waterfallSound = this.sound.add('waterfall', { loop: true, volume: 0 }) as typeof this.waterfallSound;
+        this.waterfallSound?.play();
       }
     };
     if (this.sound.locked) this.sound.once('unlocked', startAmbient);
@@ -2027,6 +2040,9 @@ export class GameScene extends Phaser.Scene {
         speed: { min: 8, max: 26 }, angle: { min: 245, max: 295 }, lifespan: 900, frequency: 80, quantity: 1,
       })
       .setDepth(band * TILE + rows * T2 + 1);
+    // the falls span a tall column (crest → pool); the bed measures distance to
+    // this vertical line, so it's heard equally from any side — not just below.
+    this.waterfallSrc = { x: midX, yTop: dropTop, yBottom: dropBottom };
   }
 
   /** depth added to an entity on a raised terrace — level × bonus (0 at the base),
@@ -4738,6 +4754,24 @@ export class GameScene extends Phaser.Scene {
       this.lastLeafAt = time;
       const v = cam.worldView;
       this.leaves.emitParticleAt(v.x + Math.random() * v.width, v.y - 6);
+    }
+
+    // waterfall proximity bed: silent afar, swelling as the Player nears the
+    // plunge pool. `prox²` keeps it faint at the edge and ramps up close; the
+    // lerp smooths the crossing and any live change to the ambience/master mix.
+    if (this.waterfallSound) {
+      // nearest point on the falls' vertical line → a circular audible zone
+      // around the whole column, so the sides are as loud as standing below it
+      const wy = Phaser.Math.Clamp(this.player.y, this.waterfallSrc.yTop, this.waterfallSrc.yBottom);
+      const wd = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.waterfallSrc.x, wy);
+      const prox = Phaser.Math.Clamp(
+        (WATERFALL_FAR_RADIUS - wd) / (WATERFALL_FAR_RADIUS - WATERFALL_NEAR_RADIUS),
+        0,
+        1,
+      );
+      const target = prox * prox * WATERFALL_BASE_VOLUME * this.volumes.ambience * this.volumes.master;
+      const cur = this.waterfallSound.volume;
+      this.waterfallSound.setVolume(cur + (target - cur) * Math.min(1, dt * 4));
     }
 
     // remote interpolation

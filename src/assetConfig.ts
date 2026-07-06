@@ -107,4 +107,6 @@ export const AUDIO: Record<string, string> = {
   guardian_drums: '/assets/audio/guardian-drums.wav',
   // v4 — pickaxe-on-stone clink for rock / obsidian
   pick: '/assets/audio/pick.wav',
+  // v5 — proximity bed: rushing water, fades in near the waterfall's plunge pool
+  waterfall: '/assets/audio/waterfall.wav',
 };

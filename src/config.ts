@@ -50,7 +50,7 @@ export const MUTE_KEY = 'jungle-world:muted';
 
 // ---------------------------------------------------------------- audio mix
 // The settings menu exposes four independent volume channels; each is a 0..1
-// multiplier. `master` scales the other three. The two looping beds carry an
+// multiplier. `master` scales the other three. The looping beds carry an
 // inherent base loudness (below) that their channel then scales; SFX pass their
 // own per-call level. All channels default to 1.0 so the mix is unchanged until
 // the Player touches a slider.
@@ -63,9 +63,14 @@ export const DEFAULT_VOLUMES: Record<AudioChannel, number> = {
   music: 1,
   sfx: 1,
 };
-/** inherent loudness of the two looping beds, before their channel + master scale */
+/** inherent loudness of the looping beds, before their channel + master scale */
 export const AMBIENT_BASE_VOLUME = 0.7;
 export const FIGHT_MUSIC_BASE_VOLUME = 0.45;
+/** waterfall proximity bed: peak loudness (at the pool) + fade radii, in px.
+ *  full volume within NEAR, silent past FAR, smooth in between. */
+export const WATERFALL_BASE_VOLUME = 0.8;
+export const WATERFALL_NEAR_RADIUS = 48;
+export const WATERFALL_FAR_RADIUS = 260;
 
 /** read the saved mix, clamped and merged over the defaults (corrupt → defaults) */
 export function loadVolumes(): Record<AudioChannel, number> {
