@@ -423,11 +423,13 @@ export interface Backend {
    */
   contributeSeal(): Promise<ContributeSealResult>;
   /**
-   * give every carried qualifying Resource/loot into the Village's communal pool
-   * at the Hall (ADR-0010) — additive, permanent, server-ordered. Crossing a
-   * tier threshold with its milestone built advances the whole Village.
+   * give carried qualifying Resource/loot into the Village's communal pool at the
+   * Hall (ADR-0010) — additive, permanent, server-ordered. Crossing a tier
+   * threshold with its milestone built advances the whole Village. `amounts`
+   * caps how much of each item to give (the per-resource slider choice); each is
+   * clamped to what is held. Omit it to pour in everything qualifying.
    */
-  contributeVillage(): Promise<ContributeVillageResult>;
+  contributeVillage(amounts?: Inventory): Promise<ContributeVillageResult>;
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
   /**

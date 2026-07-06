@@ -125,6 +125,42 @@ export function applyUiScale(v: number): void {
   }
 }
 
+// ---------------------------------------------------------------- world labels
+// A separate multiplier for the in-WORLD name tags drawn inside the Phaser
+// canvas — Resource-Node hover tooltips ("Jungle Tree") and the name over each
+// Player's head. These live on the game canvas, not the HTML HUD, so --ui-scale
+// can't reach them; GameScene reads this and re-scales the labels live. 1.0
+// leaves the design size (the WORLD_LABEL_BASE_SCALE in GameScene) untouched.
+export const WORLD_LABEL_SCALE_KEY = 'jungle-world:worldlabelscale';
+export const DEFAULT_WORLD_LABEL_SCALE = 1;
+export const WORLD_LABEL_SCALE_MIN = 0.8;
+export const WORLD_LABEL_SCALE_MAX = 2;
+/** slider granularity (10% steps) */
+export const WORLD_LABEL_SCALE_STEP = 0.1;
+
+const clampWorldLabelScale = (v: number) =>
+  Math.max(WORLD_LABEL_SCALE_MIN, Math.min(WORLD_LABEL_SCALE_MAX, v));
+
+/** read the saved world-label multiplier, clamped to range (corrupt/missing → default) */
+export function loadWorldLabelScale(): number {
+  try {
+    const raw = Number(localStorage.getItem(WORLD_LABEL_SCALE_KEY));
+    if (isFinite(raw) && raw > 0) return clampWorldLabelScale(raw);
+  } catch {
+    /* no storage (node/tests) — use default */
+  }
+  return DEFAULT_WORLD_LABEL_SCALE;
+}
+
+/** persist the chosen world-label multiplier (clamped) */
+export function saveWorldLabelScale(v: number): void {
+  try {
+    localStorage.setItem(WORLD_LABEL_SCALE_KEY, String(clampWorldLabelScale(v)));
+  } catch {
+    /* storage unavailable — GameScene still applies the live value */
+  }
+}
+
 // day/night cycle: short in dev so night is testable; ?night forces midnight
 export const DAY_CYCLE_MS = import.meta.env.DEV ? 180_000 : 1_200_000;
 export const FORCE_NIGHT = params.has('night');

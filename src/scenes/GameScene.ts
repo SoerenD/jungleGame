@@ -58,6 +58,7 @@ import {
   WILD_EXHAUSTION_KNOCKDOWNS,
   WILD_BROADCAST_MS,
   WILD_SPAWN_TICK_MS,
+  loadWorldLabelScale,
 } from '../config';
 import {
   ARENA_H,
@@ -102,6 +103,7 @@ import { NODE_TYPES } from '../content/nodeTypes';
 import {
   emptyVillage,
   inVillageZone,
+  villageContribution,
   VILLAGE_ART,
   VILLAGE_ZONE_RADIUS,
   type VillageRecord,
@@ -220,6 +222,14 @@ const HELD_HAND: Record<Dir, { x: number; y: number; flip: boolean; behind: bool
 /** warm, deep flame-orange cast by a held Hand Torch (dim — a small flame, not a floodlight) */
 const TORCH_TINT = 0xff5a0a;
 
+/**
+ * Design size for in-world name tags (Node hover tooltips + Player name plates):
+ * world-space text is magnified by the camera ZOOM, so this scales it back down
+ * to a small tag over the head. The Settings ▸ Name label size slider multiplies
+ * this (see `worldLabelScale`).
+ */
+const WORLD_LABEL_BASE_SCALE = 0.34;
+
 /** point a held-item Image at the in-hand Tool's texture, or hide it when nothing is held */
 function setHeldTexture(scene: Phaser.Scene, img: Phaser.GameObjects.Image, id: ItemId | null): void {
   const key = id ? `held-${id}` : null;
@@ -291,6 +301,8 @@ export class GameScene extends Phaser.Scene {
   private nodesByTile = new Map<string, string>();
   /** reusable tooltip showing the name of the Resource Node under the cursor */
   private nodeHoverLabel: Phaser.GameObjects.Text | null = null;
+  /** player-set multiplier on WORLD_LABEL_BASE_SCALE (Settings ▸ Name label size) */
+  private worldLabelScale = loadWorldLabelScale();
   private structuresByTile = new Map<string, Structure>();
   private structureIds = new Set<string>();
   /** per-structure display + collision objects, kept so a dismantle can tear them down */
@@ -1045,20 +1057,36 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** E at the Hall pours every carried qualifying Resource/loot into the communal pool */
-  private contributeVillage(hall: Structure): void {
-    void this.backend.contributeVillage().then((res) => {
+  /**
+   * E at the Hall opens the contribution panel (the HUD builds a slider per
+   * qualifying Resource from the current inventory). If nothing carried qualifies
+   * there is nothing to choose, so skip straight to the "nothing to give" toast.
+   */
+  private openVillageContribute(): void {
+    if (villageContribution(this.inventory).points <= 0) {
+      bus.emit('toast', t.toast.villageNothingToGive, 'bad');
+      return;
+    }
+    bus.emit('village-give-open', { ...this.inventory });
+  }
+
+  /**
+   * Pour the chosen amounts into the communal pool (the panel's Give button).
+   * `amounts` caps each item; omitted means "give it all" (kept for safety).
+   */
+  private contributeVillage(amounts?: Inventory): void {
+    void this.backend.contributeVillage(amounts).then((res) => {
       if (!res.ok) {
         if (res.reason === 'NOTHING_TO_GIVE') bus.emit('toast', t.toast.villageNothingToGive, 'bad');
         return;
       }
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
-      const hx = (hall.tx + 1) * TILE;
-      const hy = hall.ty * TILE;
-      this.floatText(hx, hy - 8, `+${res.gained}`, '#ffca7a');
+      const h = this.village.hall;
+      if (h) this.floatText((h.tx + 1) * TILE, h.ty * TILE - 8, `+${res.gained}`, '#ffca7a');
       bus.emit('toast', t.toast.villageContributed(res.gained), 'good');
       this.sfx('place', 0.6);
+      bus.emit('village-give-close');
     });
   }
 
@@ -2065,6 +2093,13 @@ export class GameScene extends Phaser.Scene {
       // broadcast promptly so every other Player's in-hand item updates now
       this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined);
     });
+    // Settings ▸ Name label size — re-scale every live in-world name tag now
+    bus.on('world-label-scale', (mult: number) => {
+      this.worldLabelScale = mult;
+      const s = WORLD_LABEL_BASE_SCALE * mult;
+      this.nodeHoverLabel?.setScale(s);
+      for (const r of this.remotes.values()) r.label.setScale(s);
+    });
     bus.on('send-chat', (text: string) => {
       void this.backend.sendChat(text);
     });
@@ -2105,6 +2140,8 @@ export class GameScene extends Phaser.Scene {
       });
     });
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
+    // the Village contribution panel's Give button: pour the chosen amounts in
+    bus.on('village-give', (amounts: Inventory) => this.contributeVillage(amounts));
     // crate storage / Sawmill ops requested by the HUD panels
     bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
       void this.backend.crateDeposit(crateId, item, count).then((res) => {
@@ -2253,8 +2290,9 @@ export class GameScene extends Phaser.Scene {
     sprite.setInteractive();
     sprite.on('pointerover', () => {
       if (!this.nodeHoverLabel) {
-        // same visual size as the remote-player name tags (fontSize 7, res 6,
-        // scale 0.34) so hover text reads consistently across the World
+        // same visual size as the remote-player name tags (fontSize 7, res 6)
+        // so hover text reads consistently across the World; the base scale is
+        // multiplied by the player's Name-label-size setting
         this.nodeHoverLabel = this.add
           .text(0, 0, '', {
             fontSize: '7px',
@@ -2266,7 +2304,7 @@ export class GameScene extends Phaser.Scene {
           })
           .setOrigin(0.5, 1)
           .setResolution(6)
-          .setScale(0.34)
+          .setScale(WORLD_LABEL_BASE_SCALE * this.worldLabelScale)
           .setDepth(999_995);
       }
       this.nodeHoverLabel
@@ -2441,9 +2479,10 @@ export class GameScene extends Phaser.Scene {
     const cook = this.cookAction();
     if (cook) return cook;
 
-    // the Village Hall: E pours qualifying Resources/loot into the communal pool (ADR-0010)
+    // the Village Hall: E opens the contribution panel — per-resource sliders let
+    // the Player choose how much of each qualifying Resource/loot to give (ADR-0010)
     const hall = this.nearbyStructure(['village_hall']);
-    if (hall) return { swing: false, run: () => this.contributeVillage(hall) };
+    if (hall) return { swing: false, run: () => this.openVillageContribute() };
 
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
@@ -2996,8 +3035,8 @@ export class GameScene extends Phaser.Scene {
       label.setOrigin(0.5, 1);
       label.setResolution(6);
       // world-space text is magnified by camera ZOOM — scale it well down so the
-      // name is a small tag over the head, not a billboard
-      label.setScale(0.34);
+      // name is a small tag over the head, not a billboard (× the player setting)
+      label.setScale(WORLD_LABEL_BASE_SCALE * this.worldLabelScale);
       label.setAlpha(0.9);
       // the item they hold, shown in their hand, synced through presence
       const heldSprite = this.add

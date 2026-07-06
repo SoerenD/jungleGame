@@ -863,12 +863,15 @@ export class SupabaseBackend implements Backend {
 
   // ---------------------------------------------------------------- A3: the Village (ADR-0010)
 
-  async contributeVillage(): Promise<ContributeVillageResult> {
+  async contributeVillage(amounts?: Inventory): Promise<ContributeVillageResult> {
     const res = await this.rpc<any>('jw_contribute_village', {
       p_who: this.me,
       p_values: VILLAGE_CONTRIB,
       p_thresholds: VILLAGE_THRESHOLDS,
       p_max: VILLAGE_MAX_TIER,
+      // per-resource caps (ADR-0010): the server clamps each to what is held.
+      // null pours in everything qualifying (migration 0006's 5-arg overload).
+      p_amounts: amounts ?? null,
     });
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING_TO_GIVE' };
     this.inv = res.inventory as Inventory;

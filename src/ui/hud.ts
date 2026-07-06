@@ -3,17 +3,22 @@ import {
   applyUiScale,
   loadUiScale,
   loadVolumes,
+  loadWorldLabelScale,
   saveUiScale,
+  saveWorldLabelScale,
   UI_SCALE_MAX,
   UI_SCALE_MIN,
   UI_SCALE_STEP,
+  WORLD_LABEL_SCALE_MAX,
+  WORLD_LABEL_SCALE_MIN,
+  WORLD_LABEL_SCALE_STEP,
   type AudioChannel,
 } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../content/guardian';
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
-import { milestoneForTier, tierThreshold, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
+import { milestoneForTier, tierThreshold, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 import { asset } from '../paths';
@@ -21,6 +26,10 @@ import { t, getLang, setLang, LANG_NAMES, zoneName, type Lang } from '../i18n';
 
 let meName = '';
 let inv: Inventory = {};
+// true once the Backend's first inventory snapshot has arrived; until then the loadout
+// must not be reconciled against the (still-empty) inv, or a reload would wipe the saved
+// arrangement before the real inventory shows up.
+let invReady = false;
 let treasureLoc: { tx: number; ty: number } | null = null;
 let quest: QuestState | null = null;
 let seal: SealState | null = null;
@@ -164,6 +173,18 @@ export function initHud(name: string, muted: boolean): void {
       </div>
       <button class="ui-btn" id="crate-close">${t.crate.close}</button>
     </div>
+    <div id="village-give-panel" class="panel" data-testid="village-give-panel">
+      <h3>${t.villageGive.title} <span class="sub-note">${t.villageGive.shared}</span></h3>
+      <div id="village-give-rows"></div>
+      <div id="village-give-total" class="village-give-total"></div>
+      <div class="village-give-btns">
+        <button class="ui-btn" id="village-give-all">${t.villageGive.all}</button>
+        <button class="ui-btn" id="village-give-none">${t.villageGive.none}</button>
+        <span class="village-give-spacer"></span>
+        <button class="ui-btn" id="village-give-cancel">${t.villageGive.cancel}</button>
+        <button class="ui-btn" id="village-give-confirm" data-testid="village-give-confirm">${t.villageGive.give}</button>
+      </div>
+    </div>
     <div id="sawmill-panel" class="panel" data-testid="sawmill-panel">
       <h3>${t.sawmill.title}</h3>
       <div id="sawmill-status"></div>
@@ -211,6 +232,13 @@ export function initHud(name: string, muted: boolean): void {
           value="${Math.round(loadUiScale() * 100)}" />
         <span class="settings-val" id="settings-textsize-val">${Math.round(loadUiScale() * 100)}%</span>
       </div>
+      <div class="settings-section">${t.settings.worldLabelSize}</div>
+      <div class="settings-row">
+        <input type="range" id="settings-worldlabel" data-testid="settings-worldlabel"
+          min="${Math.round(WORLD_LABEL_SCALE_MIN * 100)}" max="${Math.round(WORLD_LABEL_SCALE_MAX * 100)}" step="${Math.round(WORLD_LABEL_SCALE_STEP * 100)}"
+          value="${Math.round(loadWorldLabelScale() * 100)}" />
+        <span class="settings-val" id="settings-worldlabel-val">${Math.round(loadWorldLabelScale() * 100)}%</span>
+      </div>
       <div class="settings-section">${t.settings.audio}</div>
       <div id="settings-sliders"></div>
       <label class="settings-mute">
@@ -255,6 +283,16 @@ export function initHud(name: string, muted: boolean): void {
     applyUiScale(pct / 100);
     saveUiScale(pct / 100);
   });
+  // world-label-size slider: scales the in-canvas name tags (Node hover
+  // tooltips + Player name plates). GameScene listens for 'world-label-scale'
+  // and re-scales its live labels; the value persists like the text size.
+  const labelSlider = el<HTMLInputElement>('settings-worldlabel');
+  labelSlider.addEventListener('input', () => {
+    const pct = Number(labelSlider.value);
+    el('settings-worldlabel-val').textContent = `${pct}%`;
+    saveWorldLabelScale(pct / 100);
+    bus.emit('world-label-scale', pct / 100);
+  });
   renderSettings();
 
   const input = el<HTMLInputElement>('chat-input');
@@ -292,6 +330,7 @@ export function initHud(name: string, muted: boolean): void {
 
   bus.on('inventory', (next: Inventory) => {
     inv = next;
+    invReady = true; // the real inventory is now known — the loadout may reconcile safely
     renderInventory();
     renderRecipes();
     renderLoadout();
@@ -449,6 +488,37 @@ export function initHud(name: string, muted: boolean): void {
     renderCrate();
   });
 
+  // ---- A3: Village contribution panel (per-resource sliders, ADR-0010)
+  const closeVillageGive = () => el('village-give-panel').classList.remove('open');
+  el('village-give-cancel').onclick = closeVillageGive;
+  bus.on('village-give-close', closeVillageGive);
+  el('village-give-confirm').onclick = () => {
+    // hand the chosen amounts to GameScene; it closes the panel on success
+    bus.emit('village-give', { ...villageGiveChosen });
+  };
+  el('village-give-all').onclick = () => {
+    for (const item of Object.keys(villageGiveChosen) as ItemId[]) villageGiveChosen[item] = villageGiveHeld[item] ?? 0;
+    renderVillageGive();
+  };
+  el('village-give-none').onclick = () => {
+    for (const item of Object.keys(villageGiveChosen) as ItemId[]) villageGiveChosen[item] = 0;
+    renderVillageGive();
+  };
+  bus.on('village-give-open', (snapshot: Inventory) => {
+    // snapshot only the items the pool accepts; default each slider to "all"
+    villageGiveHeld = {};
+    villageGiveChosen = {};
+    for (const [item, per] of Object.entries(VILLAGE_CONTRIB)) {
+      const have = snapshot[item as ItemId] ?? 0;
+      if (per && have > 0) {
+        villageGiveHeld[item as ItemId] = have;
+        villageGiveChosen[item as ItemId] = have;
+      }
+    }
+    el('village-give-panel').classList.add('open');
+    renderVillageGive();
+  });
+
   // ---- v3: Sawmill panel
   el('sawmill-close').onclick = () => {
     openSawmillId = null;
@@ -509,6 +579,10 @@ let sawmill: SawmillState | null = null;
 let sawmillOpenedAt = 0;
 let sawmillTimer: number | undefined;
 let sawmillRefreshAt = 0;
+/** Village contribution panel: what the Player holds of each accepted item… */
+let villageGiveHeld: Inventory = {};
+/** …and how much of each the sliders currently choose to give (0..held) */
+let villageGiveChosen: Inventory = {};
 
 function crateRow(id: ItemId, count: number, action: 'take' | 'put', onClick: () => void): HTMLElement {
   const row = document.createElement('div');
@@ -542,6 +616,73 @@ function renderCrate(): void {
   for (const [item, n] of mine) {
     pack.appendChild(crateRow(item, n, 'put', () => bus.emit('crate-deposit', id, item, n)));
   }
+}
+
+/**
+ * The Village contribution panel (ADR-0010): one slider per accepted item the
+ * Player carries, so they pick how much of each to pour into the pool instead of
+ * always giving everything. The live point total and the Give button update as
+ * the sliders move; choosing nothing disables Give.
+ */
+function renderVillageGive(): void {
+  const box = el('village-give-rows');
+  box.innerHTML = '';
+  const items = (Object.keys(villageGiveHeld) as ItemId[]).filter((id) => (villageGiveHeld[id] ?? 0) > 0 && !!ITEMS[id]);
+  if (items.length === 0) {
+    box.innerHTML = `<div class="col-empty">${t.villageGive.nothing}</div>`;
+    updateVillageGiveTotal();
+    return;
+  }
+  for (const id of items) {
+    const held = villageGiveHeld[id] ?? 0;
+    const per = VILLAGE_CONTRIB[id] ?? 0;
+    const row = document.createElement('div');
+    row.className = 'vgive-row';
+    const icon = document.createElement('img');
+    icon.className = 'inv-icon';
+    icon.src = itemIcon(id);
+    icon.alt = ITEMS[id].name;
+    icon.draggable = false;
+    const name = document.createElement('span');
+    name.className = 'vgive-name';
+    name.textContent = ITEMS[id].name;
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = String(held);
+    slider.step = '1';
+    slider.value = String(Math.min(held, villageGiveChosen[id] ?? 0));
+    slider.className = 'vgive-slider';
+    slider.setAttribute('data-testid', `vgive-slider-${id}`);
+    const count = document.createElement('span');
+    count.className = 'vgive-count';
+    const pts = document.createElement('span');
+    pts.className = 'vgive-pts';
+    const paint = () => {
+      const chosen = Number(slider.value);
+      villageGiveChosen[id] = chosen;
+      count.textContent = `${chosen}/${held}`;
+      pts.textContent = t.villageGive.pts(chosen * per);
+    };
+    slider.addEventListener('input', () => {
+      paint();
+      updateVillageGiveTotal();
+    });
+    paint();
+    row.append(icon, name, slider, count, pts);
+    box.appendChild(row);
+  }
+  updateVillageGiveTotal();
+}
+
+/** live total points readout + enable/disable the Give button */
+function updateVillageGiveTotal(): void {
+  let total = 0;
+  for (const id of Object.keys(villageGiveChosen) as ItemId[]) {
+    total += (villageGiveChosen[id] ?? 0) * (VILLAGE_CONTRIB[id] ?? 0);
+  }
+  el('village-give-total').textContent = t.villageGive.total(total);
+  (el<HTMLButtonElement>('village-give-confirm')).disabled = total <= 0;
 }
 
 function renderSawmill(): void {
@@ -870,6 +1011,9 @@ function saveLoadout(): void {
 
 /** only Tools are equippable; drop unowned Tools and auto-seat newly-owned ones */
 function reconcileLoadout(): void {
+  // Before the first inventory snapshot the inv is empty; reconciling now would drop every
+  // saved slot (nothing looks owned) and the following renderLoadout would persist the wipe.
+  if (!invReady) return;
   const ownedTools = (Object.entries(inv) as [ItemId, number][])
     .filter(([id, n]) => (n ?? 0) > 0 && ITEMS[id]?.kind === 'tool')
     .map(([id]) => id);

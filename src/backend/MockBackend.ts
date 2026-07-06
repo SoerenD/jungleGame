@@ -1094,13 +1094,13 @@ export class MockBackend implements Backend {
 
   // ------------------------------------------------------------ A3: the Village (ADR-0010)
 
-  async contributeVillage(): Promise<ContributeVillageResult> {
+  async contributeVillage(amounts?: Inventory): Promise<ContributeVillageResult> {
     await this.lag();
     const v = (this.db.world!.village ??= emptyVillage());
     const p = this.me ? this.db.players[this.me] : null;
     if (!v.hall) return { ok: false, reason: 'NO_HALL' };
     if (!p) return { ok: false, reason: 'NOTHING_TO_GIVE' };
-    const { taken, points } = villageContribution(p.inventory);
+    const { taken, points } = villageContribution(p.inventory, amounts);
     if (points <= 0) return { ok: false, reason: 'NOTHING_TO_GIVE' };
     for (const [item, n] of Object.entries(taken)) {
       p.inventory[item as ItemId] = (p.inventory[item as ItemId] ?? 0) - n;

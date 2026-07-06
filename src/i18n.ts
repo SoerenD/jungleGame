@@ -102,6 +102,7 @@ const en = {
     audio: 'Audio',
     language: 'Language',
     textSize: 'Text size',
+    worldLabelSize: 'Name label size',
     muteAll: 'Mute all sound',
     close: 'Close',
     btnTitle: 'Settings',
@@ -144,6 +145,18 @@ const en = {
     milestoneDone: (name: string) => `✓ ${name} raised`,
     milestoneTodo: (name: string) => `○ Raise a ${name} in the zone`,
     capital: 'The grandest tier — decorate freely!',
+  },
+
+  villageGive: {
+    title: '🏛 Give to the Village',
+    shared: 'the shared pool',
+    nothing: 'You carry nothing the pool accepts.',
+    all: 'Max all',
+    none: 'None',
+    cancel: 'Cancel',
+    give: 'Give',
+    pts: (n: number) => `+${n}`,
+    total: (n: number) => `Total: +${n} to the pool`,
   },
 
   fight: {
@@ -427,6 +440,7 @@ const de: Strings = {
     audio: 'Audio',
     language: 'Sprache',
     textSize: 'Textgröße',
+    worldLabelSize: 'Namensschild-Größe',
     muteAll: 'Alle Geräusche stumm',
     close: 'Schließen',
     btnTitle: 'Einstellungen',
@@ -469,6 +483,18 @@ const de: Strings = {
     milestoneDone: (name: string) => `✓ ${name} errichtet`,
     milestoneTodo: (name: string) => `○ Errichte ${name} in der Zone`,
     capital: 'Die höchste Stufe — schmücke nach Herzenslust!',
+  },
+
+  villageGive: {
+    title: '🏛 Dem Dorf geben',
+    shared: 'der geteilte Vorrat',
+    nothing: 'Du trägst nichts, was der Vorrat annimmt.',
+    all: 'Alles',
+    none: 'Nichts',
+    cancel: 'Abbrechen',
+    give: 'Geben',
+    pts: (n: number) => `+${n}`,
+    total: (n: number) => `Gesamt: +${n} für den Vorrat`,
   },
 
   fight: {

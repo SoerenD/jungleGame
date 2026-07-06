@@ -157,15 +157,33 @@ export function recomputeTier(v: VillageRecord): VillageRecord {
   return tier === v.tier ? v : { ...v, tier: tier as VillageTier };
 }
 
-/** total points `inventory` would add to the pool if fully contributed */
-export function villageContribution(inventory: Partial<Record<string, number>>): { taken: Record<string, number>; points: number } {
+/** the pool points one unit of `item` is worth (0 if the pool doesn't accept it) */
+export function contributionValueOf(item: string): number {
+  return VILLAGE_CONTRIB[item] ?? 0;
+}
+
+/**
+ * The points `inventory` would add to the pool, and exactly what is taken.
+ * `amounts` optionally caps how much of each item to give (the per-resource
+ * slider choice, ADR-0010) — each is clamped to what is actually held and to
+ * whole units. Omitting `amounts` gives everything qualifying (the old
+ * one-tap "pour it all in" behaviour).
+ */
+export function villageContribution(
+  inventory: Partial<Record<string, number>>,
+  amounts?: Partial<Record<string, number>>,
+): { taken: Record<string, number>; points: number } {
   const taken: Record<string, number> = {};
   let points = 0;
   for (const [item, per] of Object.entries(VILLAGE_CONTRIB)) {
+    if (!per) continue;
     const have = inventory[item] ?? 0;
-    if (have > 0 && per) {
-      taken[item] = have;
-      points += have * per;
+    if (have <= 0) continue;
+    const want = amounts ? Math.max(0, Math.floor(amounts[item] ?? 0)) : have;
+    const give = Math.min(have, want);
+    if (give > 0) {
+      taken[item] = give;
+      points += give * per;
     }
   }
   return { taken, points };
