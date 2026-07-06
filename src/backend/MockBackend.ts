@@ -33,6 +33,7 @@ import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes
 import { RECIPES } from '../content/recipes';
 import {
   emptyVillage,
+  villageBuff,
   inVillageZone,
   isVillageStructure,
   milestoneForTier,
@@ -1284,7 +1285,7 @@ export class MockBackend implements Backend {
     // trust the claimed in-hand Tool only if owned; the SERVER rolls the weapon
     // band + crit (ADR-0006 §2/§3), supplying Math.random as the rng
     const owned = withTool && (p.inventory[withTool] ?? 0) > 0 ? withTool : undefined;
-    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random);
+    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.villageState().tier).critChance);
     f.hp = Math.max(0, f.hp - dmg);
     if (!f.participants.includes(me)) f.participants.push(me);
     this.emit('guardianHit', f.hp, me);

@@ -24,6 +24,7 @@ import { RECIPES } from '../content/recipes';
 import {
   emptyVillage,
   isVillageStructure,
+  villageBuff,
   milestoneTierOf,
   VILLAGE_CONTRIB,
   VILLAGE_MAX_TIER,
@@ -940,7 +941,7 @@ export class SupabaseBackend implements Backend {
     // ADR-0006 §3): the authoritative pool subtraction still happens in the
     // server-ordered jw_guardian_hit RPC, which just applies this p_dmg
     const owned = withTool && (this.inv[withTool] ?? 0) > 0 ? withTool : undefined;
-    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random);
+    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.village.tier).critChance);
     const engaging = f.engagedAt === null;
     let roster = f.roster;
     let maxHp = f.maxHp;

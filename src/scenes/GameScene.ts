@@ -106,8 +106,10 @@ import { NODE_TYPES } from '../content/nodeTypes';
 import {
   emptyVillage,
   inVillageZone,
+  villageBuff,
   villageContribution,
   VILLAGE_ART,
+  VILLAGE_MAX_TIER,
   VILLAGE_ZONE_RADIUS,
   type VillageRecord,
 } from '../content/village';
@@ -229,9 +231,10 @@ const TORCH_TINT = 0xff5a0a;
  * Design size for in-world name tags (Node hover tooltips + Player name plates):
  * world-space text is magnified by the camera ZOOM, so this scales it back down
  * to a small tag over the head. The Settings ▸ Name label size slider multiplies
- * this (see `worldLabelScale`).
+ * this (see `worldLabelScale`), and `labelScale()` counter-scales by the live
+ * zoom so a tag stays the SAME readable size on screen at every zoom level.
  */
-const WORLD_LABEL_BASE_SCALE = 0.34;
+const WORLD_LABEL_BASE_SCALE = 0.4;
 
 /** point a held-item Image at the in-hand Tool's texture, or hide it when nothing is held */
 function setHeldTexture(scene: Phaser.Scene, img: Phaser.GameObjects.Image, id: ItemId | null): void {
@@ -446,6 +449,8 @@ export class GameScene extends Phaser.Scene {
   // ---- v2: fishing, cooking, intro
   private fishing: FishingCast | null = null;
   private buffUntil = 0;
+  /** the standing Hall's sprite, re-textured to match the Village tier (ADR-0013) */
+  private hallImg?: Phaser.GameObjects.Image;
   private welcomeStonePos = { x: 0, y: 0 };
   private glows: { img: Phaser.GameObjects.Image; base: number; x: number; y: number }[] = [];
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
@@ -693,6 +698,8 @@ export class GameScene extends Phaser.Scene {
       // straddles tile edges); integer zoom maps each texel to exactly N pixels
       // so edges never straddle. Step in whole levels rather than *1.15.
       cam.setZoom(Phaser.Math.Clamp(Math.round(cam.zoom) + (dy > 0 ? -1 : 1), 2, 5));
+      // name tags are counter-scaled by zoom to stay readable — re-apply now
+      this.applyWorldLabelScale();
     });
     // B1: the left mouse button is alternative fire for the held-E swing loop
     // (harvest + combat) — held-to-repeat at weapon cadence. These fire only for
@@ -1020,6 +1027,23 @@ export class GameScene extends Phaser.Scene {
       drawStructureArt(tex.context, W, H, art);
       tex.refresh();
     }
+    // ADR-0013: the Hall re-sprites per Village tier (hut → grand bell-tower).
+    // Bake one texture per tier at the SAME size as st_village_hall so the
+    // standing sprite can be swapped in refreshVillageVisuals without moving.
+    const hallArt = VILLAGE_ART.village_hall;
+    if (hallArt) {
+      const { w, h } = footprint('village_hall');
+      const W = w * TILE;
+      const H = (h + (hallArt.rise ?? 1)) * TILE;
+      for (let tier = 1; tier <= VILLAGE_MAX_TIER; tier++) {
+        const key = `st_village_hall_${tier}`;
+        if (this.textures.exists(key)) continue;
+        const tex = this.textures.createCanvas(key, W, H);
+        if (!tex) continue;
+        drawStructureArt(tex.context, W, H, hallArt, tier);
+        tex.refresh();
+      }
+    }
   }
 
   private applyVillage(v: VillageRecord): void {
@@ -1040,12 +1064,15 @@ export class GameScene extends Phaser.Scene {
       this.villageAura = undefined;
       this.villageBanner?.destroy();
       this.villageBanner = undefined;
+      this.hallImg = undefined;
       return;
     }
     const { w, h } = footprint('village_hall');
     const cx = (hall.tx + w / 2) * TILE;
     const cy = (hall.ty + h / 2) * TILE;
     const tier = Math.max(1, this.village.tier);
+    // ADR-0013: the standing Hall re-sprites to match the current tier
+    if (this.hallImg?.active) this.hallImg.setTexture(`st_village_hall_${Math.min(VILLAGE_MAX_TIER, tier)}`);
     const warm = 0xffca7a;
     if (!this.villageAura) this.villageAura = this.add.graphics().setDepth(-3);
     const g = this.villageAura;
@@ -1525,8 +1552,8 @@ export class GameScene extends Phaser.Scene {
     }
     // each weapon carries its own COMBAT attack speed (ADR-0006 §4); harvesting
     // is untouched — resolveEAction only sets cadenceMs on Guardian swings
-    if (bow) return { swing: true, cadenceMs: weaponCombat('bow').attackMs, run: () => this.looseArrow() };
-    return { swing: true, cadenceMs: weaponCombat(this.heldTool()).attackMs, run: () => this.swingAtGuardian() };
+    if (bow) return { swing: true, cadenceMs: this.atkCadence(weaponCombat('bow').attackMs), run: () => this.looseArrow() };
+    return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.swingAtGuardian() };
   }
 
   private swingAtGuardian(): void {
@@ -2101,6 +2128,39 @@ export class GameScene extends Phaser.Scene {
     return 1 - (0.5 + 0.5 * Math.cos(phase * Math.PI * 2));
   }
 
+  /**
+   * On-screen scale for an in-world name tag. World-space text is magnified by
+   * the camera zoom, so a fixed scale shrinks to nothing when zoomed out (2×)
+   * and balloons when zoomed in (5×). Counter-scaling by `ZOOM / cam.zoom` keeps
+   * every tag the SAME readable size on screen at every zoom level — referenced
+   * to the default ZOOM so it looks unchanged at the starting zoom. × the
+   * player's Name-label-size setting.
+   */
+  private labelScale(): number {
+    return (WORLD_LABEL_BASE_SCALE * this.worldLabelScale * ZOOM) / this.cameras.main.zoom;
+  }
+
+  /** re-apply `labelScale()` to every live name tag (after a zoom or setting change) */
+  private applyWorldLabelScale(): void {
+    const s = this.labelScale();
+    this.nodeHoverLabel?.setScale(s);
+    for (const r of this.remotes.values()) r.label.setScale(s);
+  }
+
+  /**
+   * Combined move-speed multiplier: the cooked-food buff (ADR-0012) × the
+   * Village's collective tier bonus (ADR-0013). Both stack.
+   */
+  private moveSpeedFactor(): number {
+    const cooked = Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1;
+    return cooked * (1 + villageBuff(this.village.tier).moveSpeed);
+  }
+
+  /** combat swing cadence with the Village's attack-speed buff folded in (ADR-0013) */
+  private atkCadence(baseMs: number): number {
+    return baseMs / (1 + villageBuff(this.village.tier).attackSpeed);
+  }
+
   private wireBus(): void {
     // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–3)
     bus.on('held', (id: ItemId | null) => {
@@ -2112,9 +2172,7 @@ export class GameScene extends Phaser.Scene {
     // Settings ▸ Name label size — re-scale every live in-world name tag now
     bus.on('world-label-scale', (mult: number) => {
       this.worldLabelScale = mult;
-      const s = WORLD_LABEL_BASE_SCALE * mult;
-      this.nodeHoverLabel?.setScale(s);
-      for (const r of this.remotes.values()) r.label.setScale(s);
+      this.applyWorldLabelScale();
     });
     bus.on('send-chat', (text: string) => {
       void this.backend.sendChat(text);
@@ -2320,7 +2378,7 @@ export class GameScene extends Phaser.Scene {
           })
           .setOrigin(0.5, 1)
           .setResolution(6)
-          .setScale(WORLD_LABEL_BASE_SCALE * this.worldLabelScale)
+          .setScale(this.labelScale())
           .setDepth(999_995);
       }
       this.nodeHoverLabel
@@ -2622,7 +2680,10 @@ export class GameScene extends Phaser.Scene {
     // reserved-but-invisible (future-proofs removals without crashing).
     const def = ITEMS[s.type];
     if (!def) return;
-    const key = `st_${s.type}`;
+    const key =
+      s.type === 'village_hall'
+        ? `st_village_hall_${Math.max(1, Math.min(VILLAGE_MAX_TIER, this.village.tier))}`
+        : `st_${s.type}`;
     const x = (s.tx + w / 2) * TILE;
     const baseY = (s.ty + h) * TILE;
     const img = this.objImage(x, baseY, key);
@@ -2633,6 +2694,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const objects: Phaser.GameObjects.GameObject[] = [img];
+    if (s.type === 'village_hall') this.hallImg = img;
     const bodies: Phaser.GameObjects.Rectangle[] = [];
     let glowImg: Phaser.GameObjects.Image | null = null;
     if (s.type === 'bridge' || s.type === 'obsidian_path') {
@@ -3050,9 +3112,10 @@ export class GameScene extends Phaser.Scene {
       });
       label.setOrigin(0.5, 1);
       label.setResolution(6);
-      // world-space text is magnified by camera ZOOM — scale it well down so the
-      // name is a small tag over the head, not a billboard (× the player setting)
-      label.setScale(WORLD_LABEL_BASE_SCALE * this.worldLabelScale);
+      // world-space text is magnified by camera ZOOM — labelScale() scales it
+      // well down AND counter-scales by zoom so the name stays a constant-size
+      // readable tag over the head at any zoom (× the player setting)
+      label.setScale(this.labelScale());
       label.setAlpha(0.9);
       // the item they hold, shown in their hand, synced through presence
       const heldSprite = this.add
@@ -3745,7 +3808,7 @@ export class GameScene extends Phaser.Scene {
     }
     if (!best) return null;
     const target = best;
-    return { swing: true, cadenceMs: weaponCombat(this.heldTool()).attackMs, run: () => this.delveSwing(target) };
+    return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.delveSwing(target) };
   }
 
   private delveSwing(m: MobState): void {
@@ -3886,7 +3949,7 @@ export class GameScene extends Phaser.Scene {
         vx *= Math.SQRT1_2;
         vy *= Math.SQRT1_2;
       }
-      const speed = PLAYER_SPEED * (Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1);
+      const speed = PLAYER_SPEED * this.moveSpeedFactor();
       this.player.setVelocity(vx * speed, vy * speed);
       const moving = vx !== 0 || vy !== 0;
       if (moving) this.lastDir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'right' : 'left') : vy > 0 ? 'down' : 'up';
@@ -4639,7 +4702,7 @@ export class GameScene extends Phaser.Scene {
     const target = best;
     if (isWildKind(target.kind) && isPredator(target.kind as WildKind)) {
       // hunt: a repeatable weapon swing (Bow reaches; melee must close)
-      return { swing: true, cadenceMs: weaponCombat(this.heldTool()).attackMs, run: () => this.wildSwing(target) };
+      return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.wildSwing(target) };
     }
     // forage: a one-shot catch (bare hands fine — it is a moving Node, not a fight)
     return { swing: false, run: () => this.forageWild(target) };
@@ -4943,7 +5006,7 @@ export class GameScene extends Phaser.Scene {
       vx *= Math.SQRT1_2;
       vy *= Math.SQRT1_2;
     }
-    const speed = PLAYER_SPEED * (Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1);
+    const speed = PLAYER_SPEED * this.moveSpeedFactor();
     this.player.setVelocity(vx * speed, vy * speed);
     const moving = vx !== 0 || vy !== 0;
     if (moving) {

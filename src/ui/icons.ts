@@ -585,12 +585,20 @@ function bGable(R: Put, cxL: number, cxR: number, yTop: number, yBot: number, ha
   }
 }
 
-// grand bell-towered civic hall (32×80, rises 3 tiles above its 2×2 footprint)
-function drawHall(R: Put): void {
-  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
+// grand bell-towered civic hall (32×80, rises 3 tiles above its 2×2 footprint).
+// ADR-0013: the Hall re-sprites per Village tier. drawHall(R, tier) draws the
+// SAME building with blocks gated — Village (3) is the hall with no tower, Town
+// (4) raises the tower, Capital (5) crowns it with the finial flag — plus a
+// humbler hut/cottage for Camp/Hamlet. Tier 5 output is byte-identical to the
+// original single-stage art. The blocks below are that art, split so each tier
+// just chooses which run.
+function hallStone(R: Put): void {
   R(1, 71, 30, 9, B_OUT);
   bStones(R, 2, 72, 28, 7, true);
   R(2, 72, 28, 1, B_PAL.stone.hi);
+}
+function hallBody(R: Put): void {
+  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
   R(2, 44, 28, 28, B_OUT);
   bPlanks(R, 3, 45, 26, 26);
   R(3, 45, 2, 26, T); R(3, 45, 1, 26, TH);
@@ -606,6 +614,9 @@ function drawHall(R: Put): void {
     R(wx + 1, 54, 4, 1, B_OUT);
     R(wx, 61, 6, 1, TH);
   }
+}
+function hallDoor(R: Put): void {
+  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
   R(9, 53, 14, 1, B_OUT);
   R(9, 54, 14, 2, B_PAL.roof.base); R(9, 54, 14, 1, B_PAL.roof.hi);
   R(9, 56, 14, 1, B_PAL.roof.lo);
@@ -617,11 +628,17 @@ function drawHall(R: Put): void {
   for (const xx of [14, 18]) R(xx, 62, 1, 9, '#3c2c1d');
   R(15, 60, 1, 11, B_OUT); R(16, 60, 1, 11, B_OUT);
   R(14, 66, 1, 1, G); R(17, 66, 1, 1, G);
+}
+function hallGable(R: Put): void {
+  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
   bGable(R, 16, 16, 30, 44, 3, 15);
   R(11, 29, 10, 2, T); R(11, 29, 10, 1, TH);
   R(14, 35, 4, 5, B_OUT);
   R(15, 36, 2, 3, G); R(15, 36, 1, 1, GH);
   R(16, 35, 1, 1, B_OUT);
+}
+function hallTower(R: Put): void {
+  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
   R(11, 18, 10, 12, B_OUT);
   bPlanks(R, 12, 19, 8, 11);
   R(12, 19, 1, 11, TH); R(19, 19, 1, 11, T);
@@ -634,12 +651,47 @@ function drawHall(R: Put): void {
   R(15, 26, 2, 1, B_OUT);
   bGable(R, 16, 16, 7, 18, 1, 6);
   R(12, 18, 8, 1, B_OUT);
+}
+function hallFinial(R: Put): void {
+  const GH = B_PAL.glowHi;
   R(15, 3, 2, 5, B_OUT);
   R(15, 3, 1, 1, GH);
   R(17, 4, 4, 1, B_OUT); R(17, 5, 3, 1, B_PAL.cloth); R(17, 5, 1, 2, B_PAL.clothLo);
   R(17, 6, 3, 1, B_OUT);
+}
+function hallPennants(R: Put): void {
   R(1, 44, 1, 5, B_OUT); R(2, 45, 2, 1, B_PAL.cloth); R(2, 46, 1, 1, B_PAL.clothLo);
   R(30, 44, 1, 5, B_OUT); R(28, 45, 2, 1, B_PAL.cloth); R(29, 46, 1, 1, B_PAL.clothLo);
+}
+// Camp: a founder's hut — same timber/stone/gable materials, much smaller
+function drawHut(R: Put): void {
+  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
+  R(9, 72, 14, 8, B_OUT); bStones(R, 10, 73, 12, 6, true); R(10, 73, 12, 1, B_PAL.stone.hi);
+  R(9, 58, 14, 14, B_OUT); bPlanks(R, 10, 59, 12, 13);
+  R(10, 59, 1, 13, TH); R(21, 59, 1, 13, T); R(10, 59, 12, 1, TH); R(10, 70, 12, 1, T);
+  bGable(R, 16, 16, 48, 58, 2, 9);
+  R(13, 64, 6, 8, B_OUT); R(14, 65, 4, 7, '#3c2c1d'); R(14, 65, 1, 7, TH); R(17, 68, 1, 1, G);
+  R(11, 61, 4, 4, B_OUT); R(12, 62, 2, 2, G); R(12, 62, 2, 1, GH);
+  R(20, 52, 3, 7, B_OUT); bStones(R, 20, 53, 3, 6, false);
+}
+// Hamlet: a cottage — wider, two windows, a chimney, one pennant
+function drawCottage(R: Put): void {
+  const T = B_PAL.timber, TH = B_PAL.timberHi, G = B_PAL.glow, GH = B_PAL.glowHi;
+  R(6, 71, 20, 9, B_OUT); bStones(R, 7, 72, 18, 7, true); R(7, 72, 18, 1, B_PAL.stone.hi);
+  R(6, 53, 20, 18, B_OUT); bPlanks(R, 7, 54, 18, 17);
+  R(7, 54, 1, 17, TH); R(24, 54, 1, 17, T); R(7, 54, 18, 1, TH); R(7, 69, 18, 1, T); R(7, 62, 18, 1, T);
+  bGable(R, 16, 16, 40, 53, 3, 12);
+  for (const wx of [8, 20]) { R(wx, 57, 4, 5, B_OUT); R(wx + 1, 58, 2, 3, G); R(wx + 1, 58, 2, 1, GH); }
+  R(13, 63, 6, 8, B_OUT); R(14, 64, 4, 7, '#3c2c1d'); R(14, 64, 4, 1, G); R(14, 64, 1, 7, TH); R(17, 67, 1, 1, G);
+  R(21, 47, 3, 7, B_OUT); bStones(R, 21, 48, 3, 6, false);
+  R(6, 53, 1, 4, B_OUT); R(7, 54, 2, 1, B_PAL.cloth); R(7, 55, 1, 1, B_PAL.clothLo);
+}
+function drawHall(R: Put, tier = 5): void {
+  if (tier <= 1) { drawHut(R); return; }
+  if (tier === 2) { drawCottage(R); return; }
+  hallStone(R); hallBody(R); hallDoor(R); hallGable(R); hallPennants(R);
+  if (tier >= 4) hallTower(R);
+  if (tier >= 5) hallFinial(R);
 }
 
 function drawWell(R: Put, C: Clear): void {
@@ -1091,7 +1143,7 @@ const STRUCTURE_DRAWERS: Record<StructureArt['kind'], (R: Put, C: Clear) => void
  * At the 12×12 HUD size it draws a simplified glyph; at full baked size (authored
  * per kind) it draws the detailed sprite. Ships no PNG assets.
  */
-export function drawStructureArt(ctx: CanvasRenderingContext2D, W: number, H: number, art: StructureArt): void {
+export function drawStructureArt(ctx: CanvasRenderingContext2D, W: number, H: number, art: StructureArt, tier = 5): void {
   ctx.clearRect(0, 0, W, H);
   const R: Put = (x, y, w, h, c) => {
     ctx.fillStyle = c;
@@ -1099,6 +1151,8 @@ export function drawStructureArt(ctx: CanvasRenderingContext2D, W: number, H: nu
   };
   const C: Clear = (x, y, w, h) => ctx.clearRect(x | 0, y | 0, w | 0, h | 0);
   if (W <= 12) { drawStructureIcon(R, C, art.kind); return; }
+  // ADR-0013: the Hall draws a per-tier stage (hut / cottage / gated hall)
+  if (art.kind === 'hall') { drawHall(R, tier); return; }
   STRUCTURE_DRAWERS[art.kind](R, C);
 }
 

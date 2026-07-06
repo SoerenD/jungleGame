@@ -56,6 +56,35 @@ export const VILLAGE_TIERS: VillageTierDef[] = [
   { tier: 5, name: 'Capital', title: 'Citizens of the Capital', threshold: 12_000, milestone: 'grand_monument', unlocks: ['victory_arch'] },
 ];
 
+// ---------------------------------------------------------------- tier combat buffs
+// ADR-0013: the Village retires the one-buff rule and becomes a shared COMBAT
+// ladder. Each tier grants a small, COLLECTIVE buff to every Player in the World
+// — shared, not competitive (no per-player power gap). Numbers are playtest
+// tuning (the ladder is the surface to tune, like the tier thresholds).
+export interface VillageBuff {
+  /** fractional move-speed bonus (0.20 = +20%); stacks with the cooked-food buff */
+  moveSpeed: number;
+  /** fractional combat attack-speed bonus (a faster swing cadence) */
+  attackSpeed: number;
+  /** additive crit-chance bonus, applied only to weapons that can already crit */
+  critChance: number;
+}
+
+/** the buff AT each tier (index 0..5); each row is that tier's full bonus */
+export const VILLAGE_BUFFS: VillageBuff[] = [
+  { moveSpeed: 0, attackSpeed: 0, critChance: 0 }, // 0 Wildland — unfounded
+  { moveSpeed: 0.04, attackSpeed: 0, critChance: 0 }, // 1 Camp
+  { moveSpeed: 0.08, attackSpeed: 0.04, critChance: 0 }, // 2 Hamlet
+  { moveSpeed: 0.12, attackSpeed: 0.08, critChance: 0.04 }, // 3 Village
+  { moveSpeed: 0.16, attackSpeed: 0.12, critChance: 0.08 }, // 4 Town
+  { moveSpeed: 0.2, attackSpeed: 0.16, critChance: 0.12 }, // 5 Capital
+];
+
+/** the combat buff a Village at `tier` grants every Player (clamped, safe) */
+export function villageBuff(tier: number): VillageBuff {
+  return VILLAGE_BUFFS[Math.max(0, Math.min(VILLAGE_MAX_TIER, tier))] ?? VILLAGE_BUFFS[0];
+}
+
 /** the Village record: collective tier + additive pool + Hall location (tile-independent) */
 export interface VillageRecord {
   tier: VillageTier;

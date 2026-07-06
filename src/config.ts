@@ -137,9 +137,9 @@ export function applyUiScale(v: number): void {
 // can't reach them; GameScene reads this and re-scales the labels live. 1.0
 // leaves the design size (the WORLD_LABEL_BASE_SCALE in GameScene) untouched.
 export const WORLD_LABEL_SCALE_KEY = 'jungle-world:worldlabelscale';
-export const DEFAULT_WORLD_LABEL_SCALE = 1;
+export const DEFAULT_WORLD_LABEL_SCALE = 1.2;
 export const WORLD_LABEL_SCALE_MIN = 0.8;
-export const WORLD_LABEL_SCALE_MAX = 2;
+export const WORLD_LABEL_SCALE_MAX = 3;
 /** slider granularity (10% steps) */
 export const WORLD_LABEL_SCALE_STEP = 0.1;
 

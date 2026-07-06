@@ -33,8 +33,9 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
   only with tier-2 Tools.
 - **Fishing** — tier-2 rod; Fishing Spots are ordinary water-tile Resource Nodes with a
   client-side bite-and-reel rhythm.
-- **Cooking** — fish cooks at any campfire; eating cooked fish gives the game's only buff,
-  +20% move speed for ~3 min.
+- **Cooking** — fish cooks at any campfire; eating cooked fish gives a +20% move-speed food
+  buff for ~3 min. (Village tiers add collective combat buffs — ADR-0013 retired the old
+  "one buff only" rule.)
 - **Day/night** — real-clock-derived cycle; night darkens the screen and adds fireflies.
 - **Hand Torch** — tier-1 worn Tool; held, it lights the Player with a warm orange glow at
   night (there is no automatic player glow).

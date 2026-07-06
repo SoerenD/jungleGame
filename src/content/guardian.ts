@@ -96,10 +96,17 @@ export function weaponCombat(tool: ToolId | undefined): WeaponCombat {
  * multiplies the rolled band value. The Tool is already ownership-validated by
  * the caller. Replaces the retired flat guardianDamage().
  */
-export function rollGuardianDamage(tool: ToolId | undefined, rng: () => number): { damage: number; crit: boolean } {
+export function rollGuardianDamage(
+  tool: ToolId | undefined,
+  rng: () => number,
+  bonusCrit = 0,
+): { damage: number; crit: boolean } {
   const w = weaponCombat(tool);
   const base = w.min + Math.floor(rng() * (w.max - w.min + 1));
-  const crit = w.critChance > 0 && rng() < w.critChance;
+  // ADR-0013: the Village's collective crit buff sharpens weapons that can
+  // already crit; bare hands stay crit-less by design.
+  const chance = w.critChance > 0 ? Math.min(1, w.critChance + bonusCrit) : 0;
+  const crit = chance > 0 && rng() < chance;
   const damage = Math.max(1, Math.round(crit ? base * w.critMult : base));
   return { damage, crit };
 }
