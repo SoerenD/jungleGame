@@ -26,8 +26,6 @@ import {
   isVillageStructure,
   villageBuff,
   milestoneTierOf,
-  TRADEABLE,
-  tradeYield,
   VILLAGE_CONTRIB,
   VILLAGE_MAX_TIER,
   VILLAGE_THRESHOLDS,
@@ -44,7 +42,6 @@ import type {
   ChatMsg,
   ContributeSealResult,
   ContributeVillageResult,
-  TradeResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -575,9 +572,6 @@ export class SupabaseBackend implements Backend {
       pool: v.pool ?? 0,
       hall,
       milestonesBuilt: (v.milestonesBuilt ?? 0) as VillageRecord['milestonesBuilt'],
-      name: typeof v.name === 'string' ? v.name : undefined,
-      crest: typeof v.crest === 'number' ? v.crest : undefined,
-      chronicle: Array.isArray(v.chronicle) ? v.chronicle.filter((x: any) => typeof x === 'string') : undefined,
     };
   }
 
@@ -887,37 +881,6 @@ export class SupabaseBackend implements Backend {
     this.relay('villageChanged', village); // dispatch updates this.village + broadcasts
     if (village.tier > before) this.pushChat(t.system.sender, t.system.villageGrew(t.village.tierName(village.tier)));
     return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, village, gained: res.gained ?? 0 };
-  }
-
-  async tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult> {
-    if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return { ok: false, reason: 'NOT_TRADEABLE' };
-    const want = Math.max(0, Math.floor(giveCount));
-    const got = tradeYield(giveItem, want, getItem, this.village.tier);
-    if (got <= 0) return { ok: false, reason: want <= 0 ? 'INSUFFICIENT' : 'NO_YIELD' };
-    const res = await this.rpc<any>('jw_village_trade', {
-      p_who: this.me,
-      p_give: giveItem,
-      p_give_n: want,
-      p_get: getItem,
-      p_get_n: got,
-    });
-    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'INSUFFICIENT' };
-    this.inv = res.inventory as Inventory;
-    return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...this.inv } };
-  }
-
-  async setVillageName(name: string, crest: number): Promise<{ village: VillageRecord }> {
-    const res = await this.rpc<any>('jw_village_set_name', { p_name: name.slice(0, 24), p_crest: crest });
-    const village = this.villageFromJson(res?.village);
-    this.relay('villageChanged', village);
-    return { village };
-  }
-
-  async addVillageNote(text: string): Promise<{ village: VillageRecord }> {
-    const res = await this.rpc<any>('jw_village_add_note', { p_who: this.me, p_text: text.slice(0, 60) });
-    const village = this.villageFromJson(res?.village);
-    this.relay('villageChanged', village);
-    return { village };
   }
 
   // ---------------------------------------------------------------- Guardian

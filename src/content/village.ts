@@ -117,30 +117,6 @@ export function canAcceptItem(inv: Partial<Record<string, number>>, item: string
   return invKindCount(inv) < capacity;
 }
 
-// ---------------------------------------------------------------- Trade Post
-// ADR-0013: market_square (unlocked at Village, tier 3) is a resource EXCHANGE —
-// swap a surplus raw for one you're short on at value parity (VILLAGE_CONTRIB)
-// minus a tax that EVAPORATES (a sink, never a gain) and SHRINKS as the Village
-// grows. Only the common gatherables trade, so rare loot can't be laundered.
-export const TRADEABLE: readonly string[] = ['wood', 'stone', 'fiber', 'fruit', 'fish'];
-
-/** the market's cut at a Village tier (market opens at Village=3; a grander town trades better) */
-export function tradeTaxForTier(tier: number): number {
-  if (tier >= 5) return 0.15;
-  if (tier >= 4) return 0.25;
-  return 0.35;
-}
-
-/** whole units of `getItem` received for `giveCount` of `giveItem` at `tier` (0 if the trade is invalid) */
-export function tradeYield(giveItem: string, giveCount: number, getItem: string, tier: number): number {
-  if (giveItem === getItem || giveCount <= 0) return 0;
-  if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return 0;
-  const vGive = VILLAGE_CONTRIB[giveItem] ?? 0;
-  const vGet = VILLAGE_CONTRIB[getItem] ?? 0;
-  if (vGive <= 0 || vGet <= 0) return 0;
-  return Math.floor((giveCount * vGive * (1 - tradeTaxForTier(tier))) / vGet);
-}
-
 /** the Village record: collective tier + additive pool + Hall location (tile-independent) */
 export interface VillageRecord {
   tier: VillageTier;
@@ -154,12 +130,6 @@ export interface VillageRecord {
    * means tier T's milestone has been completed. Founding sets it to ≥1.
    */
   milestonesBuilt: VillageTier;
-  /** ADR-0013: the group's chosen settlement name (Banner); falls back to the tier name */
-  name?: string;
-  /** ADR-0013: crest hue index (Banner) */
-  crest?: number;
-  /** ADR-0013: the Well's chronicle — short auto-seeded + player-written lines */
-  chronicle?: string[];
 }
 
 /** the fresh, unfounded record for a brand-new World */

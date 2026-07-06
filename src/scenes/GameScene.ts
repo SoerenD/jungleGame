@@ -112,7 +112,6 @@ import {
   villageContribution,
   VILLAGE_ART,
   VILLAGE_MAX_TIER,
-  VILLAGE_TIERS,
   VILLAGE_ZONE_RADIUS,
   type VillageRecord,
 } from '../content/village';
@@ -1089,7 +1088,7 @@ export class GameScene extends Phaser.Scene {
     g.strokeCircle(cx, cy, radius);
     g.lineStyle(1, 0xffe9c9, 0.18); // the village zone: only in-zone builds advance the tier
     g.strokeCircle(cx, cy, VILLAGE_ZONE_RADIUS * TILE);
-    const label = `🏛 ${this.village.name?.trim() || t.village.tierName(tier)}`;
+    const label = `🏛 ${t.village.tierName(tier)}`;
     const by = hall.ty * TILE - 6;
     if (!this.villageBanner) {
       this.villageBanner = this.add
@@ -2206,63 +2205,6 @@ export class GameScene extends Phaser.Scene {
     bus.emit('toast', t.toast.bellRung, 'good');
   }
 
-  /** the Market Square Trade Post (ADR-0013): open the resource-exchange panel */
-  private openTradePost(): void {
-    bus.emit('trade-open', { inventory: { ...this.inventory }, tier: this.village.tier });
-  }
-
-  private doTrade(give: ItemId, count: number, get: ItemId): void {
-    void this.backend.tradeMarket(give, count, get).then((res) => {
-      if (!res.ok) {
-        bus.emit('toast', t.toast.tradeFailed, 'bad');
-        return;
-      }
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
-      bus.emit('toast', t.toast.traded(res.got.count, ITEMS[res.got.item]?.name ?? res.got.item), 'good');
-      this.sfx('craft', 0.6);
-      bus.emit('trade-close');
-    });
-  }
-
-  /** the Banner names the Village + picks a crest hue (ADR-0013) */
-  private setVillageName(name: string, crest: number): void {
-    void this.backend.setVillageName(name, crest).then((res) => {
-      this.applyVillage(res.village);
-      bus.emit('toast', t.toast.villageNamed(res.village.name ?? ''), 'good');
-    });
-  }
-
-  /** the Well's Chronicle: auto-seeded tier lines (derived) + persisted player notes */
-  private openChronicle(): void {
-    const auto = VILLAGE_TIERS.filter((d) => d.tier >= 1 && d.tier <= this.village.tier).map(
-      (d) => `— the Village became a ${t.village.tierName(d.tier)}`,
-    );
-    bus.emit('chronicle-open', { lines: [...auto, ...(this.village.chronicle ?? [])] });
-  }
-
-  private addVillageNote(text: string): void {
-    if (!text.trim()) return;
-    void this.backend.addVillageNote(text).then((res) => {
-      this.applyVillage(res.village);
-      this.openChronicle();
-    });
-  }
-
-  /** the Fountain of firsts: the Village milestones reached so far (read-only) */
-  private showTrophies(): void {
-    const trophies = VILLAGE_TIERS.filter((d) => d.tier >= 1 && d.tier <= this.village.tier).map(
-      (d) => `🏆 ${t.village.tierName(d.tier)} — “${d.title}”`,
-    );
-    bus.emit('lore', t.trophy.title, trophies.length ? trophies.join('\n') : t.trophy.none);
-  }
-
-  /** the Flower Bed: tend it (cosmetic bloom) */
-  private tendFlowers(): void {
-    this.sfx('harvest', 0.4);
-    bus.emit('toast', t.toast.flowersTended, 'good');
-  }
-
   private wireBus(): void {
     // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–3)
     bus.on('held', (id: ItemId | null) => {
@@ -2318,9 +2260,6 @@ export class GameScene extends Phaser.Scene {
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
     // the Village contribution panel's Give button: pour the chosen amounts in
     bus.on('village-give', (amounts: Inventory) => this.contributeVillage(amounts));
-    bus.on('trade-do', (o: { give: ItemId; count: number; get: ItemId }) => this.doTrade(o.give, o.count, o.get));
-    bus.on('village-name-set', (o: { name: string; crest: number }) => this.setVillageName(o.name, o.crest));
-    bus.on('village-note-add', (text: string) => this.addVillageNote(text));
     // crate storage / Sawmill ops requested by the HUD panels
     bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
       void this.backend.crateDeposit(crateId, item, count).then((res) => {
@@ -2669,16 +2608,6 @@ export class GameScene extends Phaser.Scene {
     if (arch) return { swing: false, run: () => this.recallHome() };
     const keep = this.nearbyStructure(['stone_keep']);
     if (keep) return { swing: false, run: () => this.ringBell() };
-    const market = this.nearbyStructure(['market_square']);
-    if (market) return { swing: false, run: () => this.openTradePost() };
-    const banner = this.nearbyStructure(['village_banner']);
-    if (banner) return { swing: false, run: () => bus.emit('village-name-open', { name: this.village.name ?? '', crest: this.village.crest ?? 0 }) };
-    const well = this.nearbyStructure(['village_well']);
-    if (well) return { swing: false, run: () => this.openChronicle() };
-    const fountain = this.nearbyStructure(['fountain']);
-    if (fountain) return { swing: false, run: () => this.showTrophies() };
-    const flowerBed = this.nearbyStructure(['flower_bed']);
-    if (flowerBed) return { swing: false, run: () => this.tendFlowers() };
 
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);

@@ -18,7 +18,7 @@ import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../conten
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
-import { inventoryCapacity, milestoneForTier, tierThreshold, TRADEABLE, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
+import { inventoryCapacity, milestoneForTier, tierThreshold, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 import { asset } from '../paths';
@@ -183,40 +183,6 @@ export function initHud(name: string, muted: boolean): void {
         <span class="village-give-spacer"></span>
         <button class="ui-btn" id="village-give-cancel">${t.villageGive.cancel}</button>
         <button class="ui-btn" id="village-give-confirm" data-testid="village-give-confirm">${t.villageGive.give}</button>
-      </div>
-    </div>
-
-    <div id="trade-panel" class="panel" data-testid="trade-panel">
-      <h3>${t.trade.title}</h3>
-      <div class="trade-row"><span class="trade-lbl">${t.trade.give}</span><select id="trade-give"></select><input id="trade-amt" type="number" min="1" value="1" /></div>
-      <div class="trade-row"><span class="trade-lbl">${t.trade.get}</span><select id="trade-get"></select></div>
-      <div id="trade-out" class="village-give-total"></div>
-      <div class="village-give-btns">
-        <span class="village-give-spacer"></span>
-        <button class="ui-btn" id="trade-cancel">${t.trade.cancel}</button>
-        <button class="ui-btn" id="trade-confirm" data-testid="trade-confirm">${t.trade.confirm}</button>
-      </div>
-    </div>
-
-    <div id="vname-panel" class="panel" data-testid="vname-panel">
-      <h3>${t.vname.title}</h3>
-      <input id="vname-input" type="text" maxlength="24" placeholder="${t.vname.placeholder}" />
-      <div id="vname-crests" class="vname-crests"></div>
-      <div class="village-give-btns">
-        <span class="village-give-spacer"></span>
-        <button class="ui-btn" id="vname-cancel">${t.vname.cancel}</button>
-        <button class="ui-btn" id="vname-save">${t.vname.save}</button>
-      </div>
-    </div>
-
-    <div id="chron-panel" class="panel" data-testid="chron-panel">
-      <h3>${t.chron.title}</h3>
-      <div id="chron-list" class="chron-list"></div>
-      <input id="chron-input" type="text" maxlength="60" placeholder="${t.chron.placeholder}" />
-      <div class="village-give-btns">
-        <span class="village-give-spacer"></span>
-        <button class="ui-btn" id="chron-close">${t.chron.close}</button>
-        <button class="ui-btn" id="chron-add">${t.chron.add}</button>
       </div>
     </div>
     <div id="sawmill-panel" class="panel" data-testid="sawmill-panel">
@@ -554,129 +520,6 @@ export function initHud(name: string, muted: boolean): void {
     renderVillageGive();
   });
 
-  // ---- ADR-0013: Trade Post (market_square) resource-exchange panel
-  let tradeTier = 0;
-  const tradeGive = () => el<HTMLSelectElement>('trade-give').value as ItemId;
-  const tradeGet = () => el<HTMLSelectElement>('trade-get').value as ItemId;
-  const tradeAmt = () => Math.max(0, Math.floor(Number(el<HTMLInputElement>('trade-amt').value) || 0));
-  const renderTradeOut = () => {
-    const out = tradeYield(tradeGive(), tradeAmt(), tradeGet(), tradeTier);
-    el('trade-out').textContent = out > 0 ? t.trade.youGet(out, ITEMS[tradeGet()]?.name ?? tradeGet()) : t.trade.nothing;
-    (el('trade-confirm') as HTMLButtonElement).disabled = out <= 0;
-  };
-  const closeTrade = () => el('trade-panel').classList.remove('open');
-  el('trade-cancel').onclick = closeTrade;
-  bus.on('trade-close', closeTrade);
-  el('trade-give').addEventListener('change', renderTradeOut);
-  el('trade-get').addEventListener('change', renderTradeOut);
-  el('trade-amt').addEventListener('input', renderTradeOut);
-  el('trade-confirm').onclick = () => bus.emit('trade-do', { give: tradeGive(), count: tradeAmt(), get: tradeGet() });
-  bus.on('trade-open', (o: { inventory: Inventory; tier: number }) => {
-    tradeTier = o.tier;
-    const gSel = el<HTMLSelectElement>('trade-give');
-    const rSel = el<HTMLSelectElement>('trade-get');
-    gSel.innerHTML = '';
-    rSel.innerHTML = '';
-    for (const it of TRADEABLE) {
-      const rOpt = document.createElement('option');
-      rOpt.value = it;
-      rOpt.textContent = ITEMS[it as ItemId]?.name ?? it;
-      rSel.append(rOpt);
-      const have = o.inventory[it as ItemId] ?? 0;
-      if (have > 0) {
-        const gOpt = document.createElement('option');
-        gOpt.value = it;
-        gOpt.textContent = `${ITEMS[it as ItemId]?.name ?? it} (${have})`;
-        gSel.append(gOpt);
-      }
-    }
-    if (rSel.value === gSel.value) {
-      for (let i = 0; i < rSel.options.length; i++)
-        if (rSel.options[i].value !== gSel.value) {
-          rSel.selectedIndex = i;
-          break;
-        }
-    }
-    el<HTMLInputElement>('trade-amt').value = '1';
-    el('trade-panel').classList.add('open');
-    renderTradeOut();
-  });
-
-  // ---- ADR-0013: Banner name & crest
-  const CREST_HUES = ['#a65445', '#4d6b3c', '#537f8d', '#e0b268', '#8a4b39', '#6b4e8f'];
-  let vnameCrest = 0;
-  const renderCrests = () => {
-    const box = el('vname-crests');
-    box.innerHTML = '';
-    CREST_HUES.forEach((hue, i) => {
-      const b = document.createElement('button');
-      b.style.cssText = `background:${hue};width:18px;height:18px;border-radius:3px;margin:2px;cursor:pointer;border:2px solid ${i === vnameCrest ? '#fff' : 'transparent'}`;
-      b.onclick = () => {
-        vnameCrest = i;
-        renderCrests();
-      };
-      box.append(b);
-    });
-  };
-  const vnameInput = el<HTMLInputElement>('vname-input');
-  vnameInput.addEventListener('focus', () => bus.emit('chat-focus'));
-  vnameInput.addEventListener('blur', () => bus.emit('chat-blur'));
-  vnameInput.addEventListener('keydown', (e) => e.stopPropagation());
-  const closeVname = () => {
-    el('vname-panel').classList.remove('open');
-    vnameInput.blur();
-  };
-  el('vname-cancel').onclick = closeVname;
-  el('vname-save').onclick = () => {
-    const name = vnameInput.value.trim();
-    if (name) bus.emit('village-name-set', { name, crest: vnameCrest });
-    closeVname();
-  };
-  bus.on('village-name-open', (o: { name: string; crest: number }) => {
-    vnameInput.value = o.name;
-    vnameCrest = o.crest || 0;
-    renderCrests();
-    el('vname-panel').classList.add('open');
-    vnameInput.focus();
-  });
-
-  // ---- ADR-0013: Well chronicle
-  const chronInput = el<HTMLInputElement>('chron-input');
-  chronInput.addEventListener('focus', () => bus.emit('chat-focus'));
-  chronInput.addEventListener('blur', () => bus.emit('chat-blur'));
-  const addChron = () => {
-    const text = chronInput.value.trim();
-    if (text) {
-      bus.emit('village-note-add', text);
-      chronInput.value = '';
-    }
-  };
-  chronInput.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') addChron();
-  });
-  el('chron-add').onclick = addChron;
-  el('chron-close').onclick = () => {
-    el('chron-panel').classList.remove('open');
-    chronInput.blur();
-  };
-  bus.on('chronicle-open', (o: { lines: string[] }) => {
-    const list = el('chron-list');
-    list.innerHTML = '';
-    const lines = o.lines.slice(-15);
-    if (!lines.length) {
-      list.textContent = t.chron.empty;
-    } else {
-      for (const line of lines) {
-        const d = document.createElement('div');
-        d.className = 'chron-line';
-        d.textContent = line;
-        list.append(d);
-      }
-    }
-    el('chron-panel').classList.add('open');
-  });
-
   // ---- v3: Sawmill panel
   el('sawmill-close').onclick = () => {
     openSawmillId = null;
@@ -898,24 +741,6 @@ async function initMinimap(): Promise<void> {
     // unexplored chunks stay dark (landmarks hide until discovered; the
     // Players themselves and the treasure ✕ draw over the fog)
     if (fogLayer) ctx.drawImage(fogLayer, 0, 0, canvas.width, canvas.height);
-    // ADR-0013: the Grand Monument beacon — a home-star on the Hall, drawn OVER the
-    // fog so you can always find your way home
-    if (village?.hall) {
-      const hx = (village.hall.tx + 1) * 16 * sx;
-      const hy = (village.hall.ty + 1) * 16 * sy;
-      ctx.fillStyle = '#ffe9c9';
-      ctx.beginPath();
-      ctx.moveTo(hx, hy - 4);
-      ctx.lineTo(hx + 1.4, hy - 1.4);
-      ctx.lineTo(hx + 4, hy);
-      ctx.lineTo(hx + 1.4, hy + 1.4);
-      ctx.lineTo(hx, hy + 4);
-      ctx.lineTo(hx - 1.4, hy + 1.4);
-      ctx.lineTo(hx - 4, hy);
-      ctx.lineTo(hx - 1.4, hy - 1.4);
-      ctx.closePath();
-      ctx.fill();
-    }
     if (!pos) return;
     ctx.fillStyle = '#ffd166';
     for (const o of pos.others) ctx.fillRect(o.x * sx - 1, o.y * sy - 1, 3, 3);
