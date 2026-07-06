@@ -159,6 +159,16 @@ const en = {
     total: (n: number) => `Total: +${n} to the pool`,
   },
 
+  trade: {
+    title: '🛖 Trade Post',
+    give: 'Give',
+    get: 'Get',
+    cancel: 'Cancel',
+    confirm: 'Trade',
+    youGet: (n: number, name: string) => `→ you get ${n} ${name}`,
+    nothing: 'Not enough for a whole unit.',
+  },
+
   fight: {
     title: '⚔ The Guardian',
     stirs: '⚔ The Guardian stirs',
@@ -329,6 +339,8 @@ const en = {
     recallNoHome: 'No Village yet — found the Hall first.',
     recallNoFight: 'You can’t recall during a Guardian fight.',
     bellRung: 'You ring the Village bell — everyone is called to gather.',
+    traded: (n: number, name: string) => `Traded for ${n} ${name}.`,
+    tradeFailed: 'The market can’t make that trade.',
     placing: (name: string) => `Placing ${name} — face a tile and press Enter`,
     tooFarDrop: 'Too far to reach — step closer to drop it there.',
     bridgesOnWater: 'Bridges must be placed on water.',
@@ -502,6 +514,16 @@ const de: Strings = {
     total: (n: number) => `Gesamt: +${n} für den Vorrat`,
   },
 
+  trade: {
+    title: '🛖 Handelsposten',
+    give: 'Geben',
+    get: 'Erhalten',
+    cancel: 'Abbrechen',
+    confirm: 'Tauschen',
+    youGet: (n, name) => `→ du erhältst ${n} ${name}`,
+    nothing: 'Nicht genug für eine ganze Einheit.',
+  },
+
   fight: {
     title: '⚔ Der Wächter',
     stirs: '⚔ Der Wächter regt sich',
@@ -669,6 +691,8 @@ const de: Strings = {
     recallNoHome: 'Noch kein Dorf — gründe zuerst die Halle.',
     recallNoFight: 'Während eines Wächterkampfs kannst du dich nicht zurückrufen.',
     bellRung: 'Du läutest die Dorfglocke — alle werden zum Sammeln gerufen.',
+    traded: (n, name) => `Für ${n} ${name} getauscht.`,
+    tradeFailed: 'Der Markt kann diesen Tausch nicht machen.',
     placing: (name) => `${name} wird platziert — blick auf ein Feld und drücke Enter`,
     tooFarDrop: 'Zu weit weg — geh näher heran, um es dort abzulegen.',
     bridgesOnWater: 'Brücken müssen auf Wasser platziert werden.',

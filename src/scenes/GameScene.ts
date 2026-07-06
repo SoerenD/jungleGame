@@ -2205,6 +2205,25 @@ export class GameScene extends Phaser.Scene {
     bus.emit('toast', t.toast.bellRung, 'good');
   }
 
+  /** the Market Square Trade Post (ADR-0013): open the resource-exchange panel */
+  private openTradePost(): void {
+    bus.emit('trade-open', { inventory: { ...this.inventory }, tier: this.village.tier });
+  }
+
+  private doTrade(give: ItemId, count: number, get: ItemId): void {
+    void this.backend.tradeMarket(give, count, get).then((res) => {
+      if (!res.ok) {
+        bus.emit('toast', t.toast.tradeFailed, 'bad');
+        return;
+      }
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      bus.emit('toast', t.toast.traded(res.got.count, ITEMS[res.got.item]?.name ?? res.got.item), 'good');
+      this.sfx('craft', 0.6);
+      bus.emit('trade-close');
+    });
+  }
+
   private wireBus(): void {
     // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–3)
     bus.on('held', (id: ItemId | null) => {
@@ -2260,6 +2279,7 @@ export class GameScene extends Phaser.Scene {
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
     // the Village contribution panel's Give button: pour the chosen amounts in
     bus.on('village-give', (amounts: Inventory) => this.contributeVillage(amounts));
+    bus.on('trade-do', (o: { give: ItemId; count: number; get: ItemId }) => this.doTrade(o.give, o.count, o.get));
     // crate storage / Sawmill ops requested by the HUD panels
     bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
       void this.backend.crateDeposit(crateId, item, count).then((res) => {
@@ -2608,6 +2628,8 @@ export class GameScene extends Phaser.Scene {
     if (arch) return { swing: false, run: () => this.recallHome() };
     const keep = this.nearbyStructure(['stone_keep']);
     if (keep) return { swing: false, run: () => this.ringBell() };
+    const market = this.nearbyStructure(['market_square']);
+    if (market) return { swing: false, run: () => this.openTradePost() };
 
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);

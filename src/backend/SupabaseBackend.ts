@@ -26,6 +26,8 @@ import {
   isVillageStructure,
   villageBuff,
   milestoneTierOf,
+  TRADEABLE,
+  tradeYield,
   VILLAGE_CONTRIB,
   VILLAGE_MAX_TIER,
   VILLAGE_THRESHOLDS,
@@ -42,6 +44,7 @@ import type {
   ChatMsg,
   ContributeSealResult,
   ContributeVillageResult,
+  TradeResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -881,6 +884,23 @@ export class SupabaseBackend implements Backend {
     this.relay('villageChanged', village); // dispatch updates this.village + broadcasts
     if (village.tier > before) this.pushChat(t.system.sender, t.system.villageGrew(t.village.tierName(village.tier)));
     return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, village, gained: res.gained ?? 0 };
+  }
+
+  async tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult> {
+    if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return { ok: false, reason: 'NOT_TRADEABLE' };
+    const want = Math.max(0, Math.floor(giveCount));
+    const got = tradeYield(giveItem, want, getItem, this.village.tier);
+    if (got <= 0) return { ok: false, reason: want <= 0 ? 'INSUFFICIENT' : 'NO_YIELD' };
+    const res = await this.rpc<any>('jw_village_trade', {
+      p_who: this.me,
+      p_give: giveItem,
+      p_give_n: want,
+      p_get: getItem,
+      p_get_n: got,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'INSUFFICIENT' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...this.inv } };
   }
 
   // ---------------------------------------------------------------- Guardian

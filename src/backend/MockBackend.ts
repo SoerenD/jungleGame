@@ -38,6 +38,8 @@ import {
   isVillageStructure,
   milestoneForTier,
   recomputeTier,
+  TRADEABLE,
+  tradeYield,
   villageContribution,
   VILLAGE_MAX_TIER,
   type VillageRecord,
@@ -54,6 +56,7 @@ import type {
   ChatMsg,
   ContributeSealResult,
   ContributeVillageResult,
+  TradeResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -1116,6 +1119,23 @@ export class MockBackend implements Backend {
     this.saveNow();
     this.emit('villageChanged', this.villageState());
     return { ok: true, taken: taken as Inventory, inventory: { ...p.inventory }, village: this.villageState(), gained: points };
+  }
+
+  async tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p || v.tier < 3) return { ok: false, reason: 'NO_MARKET' };
+    if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return { ok: false, reason: 'NOT_TRADEABLE' };
+    const want = Math.max(0, Math.floor(giveCount));
+    if (want <= 0 || (p.inventory[giveItem] ?? 0) < want) return { ok: false, reason: 'INSUFFICIENT' };
+    const got = tradeYield(giveItem, want, getItem, v.tier);
+    if (got <= 0) return { ok: false, reason: 'NO_YIELD' };
+    p.inventory[giveItem] = (p.inventory[giveItem] ?? 0) - want;
+    if ((p.inventory[giveItem] ?? 0) <= 0) delete p.inventory[giveItem];
+    p.inventory[getItem] = (p.inventory[getItem] ?? 0) + got;
+    this.saveNow();
+    return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...p.inventory } };
   }
 
   // ------------------------------------------------------------ v2: the Guardian
