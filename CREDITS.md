@@ -5,6 +5,13 @@ verified on each source page before integration. Adapted crops/recolors are note
 the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*.ts`
 (remaining placeholders).
 
+> **Art refresh (2026-07):** the four stone-node sprites `objects/rock.png`,
+> `rock-depleted.png`, `obsidian-rock.png`, `obsidian-rubble.png` were replaced with
+> **original procedurally-generated pixel art** (no third-party assets, no license
+> concerns); the ArMM1998 derivations noted below for those four no longer apply. The
+> Village Buildings and open-world Wildlife are likewise original code-drawn art
+> (`src/ui/icons.ts`, `src/mobSprites.ts`) — no PNGs, no external sources.
+
 ## Zelda-like tilesets and sprites — ArMM1998
 
 - Source: https://opengameart.org/content/zelda-like-tilesets-and-sprites
