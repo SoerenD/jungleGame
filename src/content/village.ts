@@ -70,19 +70,51 @@ export interface VillageBuff {
   critChance: number;
 }
 
-/** the buff AT each tier (index 0..5); each row is that tier's full bonus */
+/**
+ * The buff AT each tier (cumulative — each row is that tier's full bonus). One
+ * NEW thing per stage, kept deliberately small: Camp grants a non-combat utility
+ * (handled outside this combat table), then +4% to a SINGLE combat attribute per
+ * stage, and +2% to everything at Capital.
+ */
 export const VILLAGE_BUFFS: VillageBuff[] = [
   { moveSpeed: 0, attackSpeed: 0, critChance: 0 }, // 0 Wildland — unfounded
-  { moveSpeed: 0.04, attackSpeed: 0, critChance: 0 }, // 1 Camp
-  { moveSpeed: 0.08, attackSpeed: 0.04, critChance: 0 }, // 2 Hamlet
-  { moveSpeed: 0.12, attackSpeed: 0.08, critChance: 0.04 }, // 3 Village
-  { moveSpeed: 0.16, attackSpeed: 0.12, critChance: 0.08 }, // 4 Town
-  { moveSpeed: 0.2, attackSpeed: 0.16, critChance: 0.12 }, // 5 Capital
+  { moveSpeed: 0, attackSpeed: 0, critChance: 0 }, // 1 Camp — perk is a non-combat utility
+  { moveSpeed: 0.04, attackSpeed: 0, critChance: 0 }, // 2 Hamlet — +4% move speed
+  { moveSpeed: 0.04, attackSpeed: 0.04, critChance: 0 }, // 3 Village — +4% attack speed
+  { moveSpeed: 0.04, attackSpeed: 0.04, critChance: 0.04 }, // 4 Town — +4% crit
+  { moveSpeed: 0.06, attackSpeed: 0.06, critChance: 0.06 }, // 5 Capital — +2% to everything
 ];
 
 /** the combat buff a Village at `tier` grants every Player (clamped, safe) */
 export function villageBuff(tier: number): VillageBuff {
   return VILLAGE_BUFFS[Math.max(0, Math.min(VILLAGE_MAX_TIER, tier))] ?? VILLAGE_BUFFS[0];
+}
+
+// ---------------------------------------------------------------- pack capacity
+// ADR-0013: the pack is a slot grid capped by distinct item KINDS (the inventory
+// is a kind→count map, so a "slot" is one kind; stacks are unlimited). Founding
+// the Village (Camp, the tier-1 perk) adds one row. Enforced client-side on
+// harvest (ADR-0005): a full pack leaves the resource in the world, so no HELD
+// item is ever lost — the no-loss contract holds.
+export const INVENTORY_BASE_SLOTS = 18; // 6 columns × 3 rows
+export const INVENTORY_ROW_SLOTS = 6;
+
+/** the pack's slot capacity at a Village tier — Camp (tier ≥ 1) adds one row */
+export function inventoryCapacity(tier: number): number {
+  return INVENTORY_BASE_SLOTS + (tier >= 1 ? INVENTORY_ROW_SLOTS : 0);
+}
+
+/** distinct item kinds currently held (each is one slot) */
+export function invKindCount(inv: Partial<Record<string, number>>): number {
+  let n = 0;
+  for (const k in inv) if ((inv[k] ?? 0) > 0) n++;
+  return n;
+}
+
+/** can the pack take `item`? always if a kind is already held (its stack just grows), else it needs a free slot */
+export function canAcceptItem(inv: Partial<Record<string, number>>, item: string, capacity: number): boolean {
+  if ((inv[item] ?? 0) > 0) return true;
+  return invKindCount(inv) < capacity;
 }
 
 /** the Village record: collective tier + additive pool + Hall location (tile-independent) */

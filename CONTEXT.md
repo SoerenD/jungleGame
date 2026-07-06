@@ -134,7 +134,7 @@ A craftable Structure that sets its builder's personal wake point: Exhaustion an
 _Avoid_: bed, spawn point, home
 
 **Village**:
-The one communal settlement the whole group raises together — the game's ongoing shared goal and **meta-loop**, successor to the one-time **Seal**. A single collective **tier** (Camp → Hamlet → Village → Town → Capital) rises from a permanent, additive contribution pool at its **Hall** plus a signature milestone build per tier; each tier unlocks new building types, visible grandeur (the **Hall itself re-sprites, hut → grand hall**), and a **collective combat buff** — move speed, attack speed, crit, shared by every Player (ADR-0013). Collective-only (no individual tracking), optional (gates nothing), never decays.
+The one communal settlement the whole group raises together — the game's ongoing shared goal and **meta-loop**, successor to the one-time **Seal**. A single collective **tier** (Camp → Hamlet → Village → Town → Capital) rises from a permanent, additive contribution pool at its **Hall** plus a signature milestone build per tier; each tier unlocks new building types, visible grandeur (the **Hall itself re-sprites, hut → grand hall**), and a **collective combat buff** — move speed, attack speed, crit, shared by every Player (ADR-0013). Founding (Camp) also adds an **inventory row** (pack capacity 18→24 — the pack is slot-capped, but a full pack simply leaves a resource in the world, so no held item is lost). Collective-only (no individual tracking), optional (gates nothing), never decays.
 _Avoid_: base, colony, town (informal)
 
 **Hall**:

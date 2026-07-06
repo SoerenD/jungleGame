@@ -104,7 +104,9 @@ import { footprint, isBuilding, ITEMS, type ItemId, type ResourceId, type Struct
 import { TABLETS } from '../content/lore';
 import { NODE_TYPES } from '../content/nodeTypes';
 import {
+  canAcceptItem,
   emptyVillage,
+  inventoryCapacity,
   inVillageZone,
   villageBuff,
   villageContribution,
@@ -451,6 +453,8 @@ export class GameScene extends Phaser.Scene {
   private buffUntil = 0;
   /** the standing Hall's sprite, re-textured to match the Village tier (ADR-0013) */
   private hallImg?: Phaser.GameObjects.Image;
+  /** throttle for the "pack full" harvest toast (ADR-0013) */
+  private packFullToastAt = 0;
   private welcomeStonePos = { x: 0, y: 0 };
   private glows: { img: Phaser.GameObjects.Image; base: number; x: number; y: number }[] = [];
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
@@ -2598,6 +2602,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private swingAtNode(view: NodeView): void {
+    // ADR-0013: client-side pack cap — a full pack leaves the resource in the
+    // world (no held item is ever lost). Block only when the node's yield needs
+    // a NEW slot we lack room for; stacks of kinds already held always grow.
+    const cap = inventoryCapacity(this.village.tier);
+    const yields = Object.keys(NODE_TYPES[view.state.type]?.yield ?? {});
+    if (yields.some((it) => !canAcceptItem(this.inventory, it, cap))) {
+      const now = Date.now();
+      if (now - this.packFullToastAt > 1500) {
+        bus.emit('toast', t.toast.packFull, 'bad');
+        this.packFullToastAt = now;
+      }
+      return;
+    }
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
     const nodeType = view.state.type;
     const swingSfx = nodeType === 'tree' || nodeType === 'hardwood_tree' ? 'chop' : nodeType === 'rock' || nodeType === 'obsidian_rock' ? 'pick' : 'harvest';

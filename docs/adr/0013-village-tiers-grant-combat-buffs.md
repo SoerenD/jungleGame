@@ -10,10 +10,13 @@ prettier. This ADR records that reversal and its blast radius.
 ## Decision
 
 1. **The Village becomes a shared combat ladder.** Each collective **tier** (Camp → … → Capital)
-   grants an escalating buff to **move speed, combat attack speed, and crit chance** — the ladder lives
-   in `VILLAGE_BUFFS` / `villageBuff(tier)` in `content/village.ts` (node-pure, the tuning surface,
-   like the tier thresholds). Starting values (playtest tuning): move speed +4→+20%, attack speed
-   0→+16%, crit +0→+12% across tiers 1–5.
+   grants **one new thing per stage**, kept deliberately small — the ladder lives in `VILLAGE_BUFFS`
+   / `villageBuff(tier)` in `content/village.ts` (node-pure, the tuning surface). **Camp** grants an
+   extra **inventory row** (pack capacity 18→24, `inventoryCapacity` in `content/village.ts`,
+   enforced client-side on harvest — a full pack leaves the resource in the world, no loss);
+   **Hamlet/Village/Town** each add **+4% to a single combat attribute** (move
+   speed / attack speed / crit); **Capital** adds **+2% to everything** (→ +6% each). An earlier, much
+   larger all-three-at-once ladder (up to +20% move) was cut as too strong.
 2. **Collective, not competitive.** The tier is **shared by the whole World**, so every Player gets the
    **same** buffs at the same time — there is no per-player power gap and no individual tracking. This
    keeps the anti-competitive, no-leaderboard ethos (ADR-0010 §5) intact even though the Village now
