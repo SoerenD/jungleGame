@@ -616,10 +616,29 @@ export function initHud(name: string, muted: boolean): void {
     el<HTMLInputElement>('trade-amt').value = String(held > 0 ? Math.min(held, cost) : cost);
     renderTradeOut();
   };
+  // rebuild the "Get" list to exclude whatever's in "Give" — a same-item swap is
+  // meaningless, so it's never offered (keeps the prior pick when still valid).
+  const rebuildTradeGet = () => {
+    const rSel = el<HTMLSelectElement>('trade-get');
+    const give = tradeGive();
+    const prev = rSel.value;
+    rSel.innerHTML = '';
+    for (const it of TRADEABLE) {
+      if (it === give) continue;
+      const opt = document.createElement('option');
+      opt.value = it;
+      opt.textContent = ITEMS[it as ItemId]?.name ?? it;
+      rSel.append(opt);
+    }
+    if (prev && prev !== give && Array.from(rSel.options).some((o) => o.value === prev)) rSel.value = prev;
+  };
   const closeTrade = () => el('trade-panel').classList.remove('open');
   el('trade-cancel').onclick = closeTrade;
   bus.on('trade-close', closeTrade);
-  el('trade-give').addEventListener('change', syncTradeAmt);
+  el('trade-give').addEventListener('change', () => {
+    rebuildTradeGet();
+    syncTradeAmt();
+  });
   el('trade-get').addEventListener('change', syncTradeAmt);
   el('trade-amt').addEventListener('input', renderTradeOut);
   el('trade-max').onclick = () => {
@@ -632,14 +651,8 @@ export function initHud(name: string, muted: boolean): void {
     tradeTier = o.tier;
     tradeHeld = { ...o.inventory };
     const gSel = el<HTMLSelectElement>('trade-give');
-    const rSel = el<HTMLSelectElement>('trade-get');
     gSel.innerHTML = '';
-    rSel.innerHTML = '';
     for (const it of TRADEABLE) {
-      const rOpt = document.createElement('option');
-      rOpt.value = it;
-      rOpt.textContent = ITEMS[it as ItemId]?.name ?? it;
-      rSel.append(rOpt);
       const have = o.inventory[it as ItemId] ?? 0;
       if (have > 0) {
         const gOpt = document.createElement('option');
@@ -648,13 +661,7 @@ export function initHud(name: string, muted: boolean): void {
         gSel.append(gOpt);
       }
     }
-    if (rSel.value === gSel.value) {
-      for (let i = 0; i < rSel.options.length; i++)
-        if (rSel.options[i].value !== gSel.value) {
-          rSel.selectedIndex = i;
-          break;
-        }
-    }
+    rebuildTradeGet();
     el('trade-panel').classList.add('open');
     syncTradeAmt();
   });
