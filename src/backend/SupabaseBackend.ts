@@ -40,6 +40,7 @@ import {
 } from '../content/village';
 import { sanitizeAppearance } from '../avatars';
 import { asset } from '../paths';
+import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
 import { t } from '../i18n';
 import type {
   Appearance,
@@ -129,6 +130,12 @@ export class SupabaseBackend implements Backend {
   private channel: RealtimeChannel | null = null;
   private wd!: WorldData;
   private me: string | null = null;
+  /**
+   * The World this client is in (ADR-0014). Set from the join-screen field before
+   * the first RPC / channel subscribe; scopes every jw_* RPC (injected in `rpc`)
+   * and the Realtime channel name. Defaults to the shared `default` World.
+   */
+  private worldId: string = WORLD_ID_DEFAULT;
   private appearance: Appearance = { skin: 1, hair: 1, shirt: 1, pants: 0 };
 
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
@@ -249,7 +256,10 @@ export class SupabaseBackend implements Backend {
   }
 
   private async rpc<T = any>(fn: string, args: Record<string, unknown>): Promise<T | null> {
-    const { data, error } = await this.supa.rpc(fn, args);
+    // every jw_* gameplay function is World-scoped (ADR-0014): inject the current
+    // world-id as p_world so no call site has to thread it. The pure helpers
+    // (jw_num/jw_add/…) are never called from here, so there is no clash.
+    const { data, error } = await this.supa.rpc(fn, { p_world: this.worldId, ...args });
     if (error) {
       console.error(`[jw] rpc ${fn} failed:`, error.message);
       return null;
@@ -265,10 +275,13 @@ export class SupabaseBackend implements Backend {
 
   // ---------------------------------------------------------------- join / realtime
 
-  async join(name: string, pin: string, appearance: Appearance): Promise<JoinResult> {
+  async join(name: string, pin: string, appearance: Appearance, world: string): Promise<JoinResult> {
     name = name.trim();
     if (!/^[\w :-]{2,16}$/.test(name)) return { ok: false, reason: 'BAD_NAME' };
     if (!/^\d{4}$/.test(pin)) return { ok: false, reason: 'BAD_PIN' };
+    // fix the World before any RPC or channel subscribe — everything below is
+    // scoped to it (rpc() injects p_world, the channel name carries the slug)
+    this.worldId = normalizeWorldId(world);
     const appr = sanitizeAppearance(appearance);
     const spawnX = (this.wd.spawn.tx + 0.5) * TILE;
     const spawnY = (this.wd.spawn.ty + 0.5) * TILE;
@@ -326,7 +339,10 @@ export class SupabaseBackend implements Backend {
 
   /** every world-channel binding in one place, so a rebuilt channel is identical */
   private buildChannel(): RealtimeChannel {
-    const ch = this.supa.channel('jw-world', {
+    // one channel per World (ADR-0014): presence, the position stream, the chat
+    // relay, and the Delve/Wildlife peer-host traffic are all isolated per World
+    // for free — a client only ever sees its own World's peers and events.
+    const ch = this.supa.channel(`jw-world-${this.worldId}`, {
       config: { broadcast: { self: false }, presence: { key: this.me! } },
     });
     ch.on('broadcast', { event: 'evt' }, ({ payload }) => this.dispatch(payload.event, payload.args));
@@ -507,12 +523,13 @@ export class SupabaseBackend implements Backend {
     // reconcile a fight that timed out while no one was around (mirrors Mock)
     await this.rpc('jw_guardian_reconcile', { p_awake_ms: GUARDIAN_AWAKE_MS, p_dormant_ms: DORMANT_TIMEOUT_MS });
 
+    // every read is scoped to this World (ADR-0014); the world row is keyed by slug
     const [nodesR, structR, chatR, worldR, meR] = await Promise.all([
-      this.supa.from('nodes').select('id,type,tx,ty,hp,harvested_at'),
-      this.supa.from('structures').select('id,type,tx,ty,placed_by,placed_at,text'),
-      this.supa.from('chat').select('from_name,text,ts').order('ts', { ascending: false }).limit(50),
-      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight,village').eq('id', 1).single(),
-      this.me ? this.supa.from('players').select('inventory,tablets').eq('name', this.me).single() : Promise.resolve({ data: null } as any),
+      this.supa.from('nodes').select('id,type,tx,ty,hp,harvested_at').eq('world_id', this.worldId),
+      this.supa.from('structures').select('id,type,tx,ty,placed_by,placed_at,text').eq('world_id', this.worldId),
+      this.supa.from('chat').select('from_name,text,ts').eq('world_id', this.worldId).order('ts', { ascending: false }).limit(50),
+      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight,village').eq('id', this.worldId).maybeSingle(),
+      this.me ? this.supa.from('players').select('inventory,tablets').eq('world_id', this.worldId).eq('name', this.me).single() : Promise.resolve({ data: null } as any),
     ]);
 
     if (meR?.data) {

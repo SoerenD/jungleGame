@@ -14,8 +14,8 @@ ADR-0012: the *core* stays inviolate, the *wilds* gain natural teeth.)
 ## Language
 
 **World**:
-The single persistent jungle map shared by all players; it lives on the backend and survives everyone logging off.
-_Avoid_: map, level, room, session
+One persistent jungle instance shared by its group of Players; it lives on the backend and survives everyone logging off. The backend can host **several isolated Worlds at once** (ADR-0014) — each its own Players, builds, Seal, Village, and Guardian — scoped by a **world-id** slug chosen on the join screen (blank = the `default` World, the original shared one); all Worlds share the same static map. Every rule below speaks of "the World" and holds within each World independently.
+_Avoid_: map, level, room, session (and "server instance" — it is one backend hosting many Worlds, not many servers)
 
 **Player**:
 A friend's avatar in the World, present only while they are connected.
@@ -147,7 +147,7 @@ _Avoid_: altar (that is the Seal/Guardian Offering point), spawn point
 - The **frontier** (the expanded far-edge Zones — Highland Crags, Overgrown Temple, Mangrove Coast, the Cavern Mouth) is sparser than the core, but every frontier **Zone** carries a payoff — a tier-2 grove, treasure, lore, or a **Dungeon** entrance — so distance trades boredom for reward; no Zone is mere terrain. Highland Crags raises a **hill** by faux-elevation (cliff edges block, a ramp climbs, the plateau renders above the base — the World's "fake depth" taken vertical); reaching its **vista** lifts the surrounding minimap fog.
 - The **World** is mutated by **Players** (gathering, building); mutations persist forever.
 - A **Player** joins and leaves the **World** freely; the **World** does not depend on any Player being online.
-- A **Player** is identified by a unique name and reclaimed on any device with a PIN; entry to the World is guarded by a shared invite link. (Accepted risk: weak security, fine for a trusted friend group.)
+- A **Player** is identified by a name unique **within a World** and reclaimed on any device with a PIN; the same name is a separate Player (its own save) in each **World** (ADR-0014). Entry is guarded by a shared invite link, and the world-id slug is an isolation boundary, not a secret. (Accepted risk: weak security, fine for a trusted friend group.)
 - The World supports up to ~8 concurrent **Players**.
 - **Players** harvest **Resource Nodes**; a harvested Node regrows after a real-time delay — the jungle always heals, but is locally scarce in the moment.
 - **Recipes** convert **Resources** into **Tools** (carried) or **Structures** (placed into the World).

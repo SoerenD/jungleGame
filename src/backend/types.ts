@@ -403,8 +403,13 @@ export interface BackendEvents {
 export interface Backend {
   /** Load world data + start internal machinery. Call once before join. */
   init(): Promise<void>;
-  /** the sent Appearance becomes the Player's look — editable at every join */
-  join(name: string, pin: string, appearance: Appearance): Promise<JoinResult>;
+  /**
+   * Join a World (ADR-0014). `world` is the world-id slug the Player typed on the
+   * join screen — an unknown slug creates that World, a known one joins it; blank
+   * resolves to the `default` World. The sent Appearance becomes the Player's
+   * look, editable at every join.
+   */
+  join(name: string, pin: string, appearance: Appearance, world: string): Promise<JoinResult>;
   loadWorld(): Promise<WorldSnapshot>;
   /** fire-and-forget, like a Realtime broadcast; `held` is the in-hand Loadout item */
   sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId): void;

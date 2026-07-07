@@ -52,6 +52,7 @@ import {
 } from '../content/village';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
 import { asset } from '../paths';
+import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
 import { t } from '../i18n';
 import type {
   Appearance,
@@ -219,6 +220,8 @@ const tileKey = (tx: number, ty: number) => `${tx},${ty}`;
 export class MockBackend implements Backend {
   private world!: WorldData;
   private db!: Db;
+  /** the World this single-player save belongs to (ADR-0014); namespaces storage */
+  private worldId: string = WORLD_ID_DEFAULT;
   private me: string | null = null;
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
   private nodesByTile = new Map<string, StaticNode>();
@@ -241,7 +244,17 @@ export class MockBackend implements Backend {
       this.nodesByTile.set(tileKey(n.tx, n.ty), n);
       this.nodesById.set(n.id, n);
     }
-    const raw = localStorage.getItem(STORAGE_KEY);
+    this.loadDb();
+    window.addEventListener('beforeunload', () => this.saveNow());
+  }
+
+  /**
+   * Load (and normalise + dev-seed) the current World's save from localStorage
+   * into `this.db`. Split out of init() so switching Worlds (useWorld) can reload
+   * without re-fetching the shared static map or re-wiring the beforeunload hook.
+   */
+  private loadDb(): void {
+    const raw = localStorage.getItem(this.storageKey());
     this.db = raw
       ? (JSON.parse(raw) as Db)
       : { players: {}, nodes: {}, structures: {}, chatLog: [] };
@@ -272,7 +285,19 @@ export class MockBackend implements Backend {
     if (DEV_FIGHT) this.db.world.seal.broken = true; // ?fight — jump straight to the Guardian
     if (DEV_VILLAGE) this.seedDevVillage(); // ?village — founded Capital + the ADR-0013 buildings
     this.scheduleSlumberCheck();
-    window.addEventListener('beforeunload', () => this.saveNow());
+  }
+
+  /**
+   * Switch to the World the Player picked on the join screen (ADR-0014). Each
+   * World is its own save, namespaced in localStorage; the default World keeps
+   * the original key. A no-op when already on that World.
+   */
+  private useWorld(world: string): void {
+    const slug = normalizeWorldId(world);
+    if (slug === this.worldId) return;
+    this.saveNow(); // persist the World we are leaving (still under its own key)
+    this.worldId = slug;
+    this.loadDb();
   }
 
   // ---------------------------------------------------------------- events
@@ -292,19 +317,25 @@ export class MockBackend implements Backend {
 
   // ---------------------------------------------------------------- persistence
 
+  /** localStorage key for the current World (ADR-0014): the default World keeps
+   *  the original key, so existing single-player saves are untouched */
+  private storageKey(): string {
+    return this.worldId === WORLD_ID_DEFAULT ? STORAGE_KEY : `${STORAGE_KEY}:${this.worldId}`;
+  }
+
   private saveNow(): void {
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
+    localStorage.setItem(this.storageKey(), JSON.stringify(this.db));
   }
 
   private saveSoon(): void {
     if (this.saveTimer !== null) return;
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
+      localStorage.setItem(this.storageKey(), JSON.stringify(this.db));
     }, 400);
   }
 
@@ -402,11 +433,12 @@ export class MockBackend implements Backend {
 
   // ---------------------------------------------------------------- join / snapshot
 
-  async join(name: string, pin: string, appearance: Appearance): Promise<JoinResult> {
+  async join(name: string, pin: string, appearance: Appearance, world: string): Promise<JoinResult> {
     await this.lag();
     name = name.trim();
     if (!/^[\w :-]{2,16}$/.test(name)) return { ok: false, reason: 'BAD_NAME' };
     if (!/^\d{4}$/.test(pin)) return { ok: false, reason: 'BAD_PIN' };
+    this.useWorld(world); // load this World's save before reading/creating the Player
     let p = this.db.players[name];
     let isNew = false;
     if (p) {

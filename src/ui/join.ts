@@ -1,5 +1,6 @@
 import { SESSION_KEY } from '../config';
 import { t } from '../i18n';
+import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
 import type { Appearance, Backend, JoinResult } from '../backend/types';
 import {
   AVATAR_H,
@@ -16,6 +17,8 @@ type OkJoin = Extract<JoinResult, { ok: true }>;
 interface StoredSession {
   name: string;
   pin: string;
+  /** the last World this Player joined (ADR-0014); absent → the default World */
+  world?: string;
   /** legacy sessions stored a tint-preset index instead */
   avatar?: number;
   appearance?: Appearance;
@@ -56,6 +59,10 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
           <label for="join-pin">${t.join.pinLabel}</label>
           <input id="join-pin" data-testid="join-pin" maxlength="4" inputmode="numeric" placeholder="0000" />
         </div>
+        <div>
+          <label for="join-world">${t.join.worldLabel}</label>
+          <input id="join-world" data-testid="join-world" maxlength="24" placeholder="${t.join.worldPlaceholder}" />
+        </div>
         <div id="customizer">
           <div id="preview-box"><canvas id="avatar-preview" data-testid="avatar-preview" width="${AVATAR_W}" height="${AVATAR_H}"></canvas></div>
           <div id="palette-rows"></div>
@@ -68,6 +75,7 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
 
     const nameInput = overlay.querySelector<HTMLInputElement>('#join-name')!;
     const pinInput = overlay.querySelector<HTMLInputElement>('#join-pin')!;
+    const worldInput = overlay.querySelector<HTMLInputElement>('#join-world')!;
     const errorBox = overlay.querySelector<HTMLElement>('#join-error')!;
     const rows = overlay.querySelector<HTMLElement>('#palette-rows')!;
     const preview = overlay.querySelector<HTMLCanvasElement>('#avatar-preview')!;
@@ -120,11 +128,17 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
     }
     refresh();
 
-    const finish = (result: OkJoin) => {
+    const finish = (result: OkJoin, world: string) => {
       localStorage.setItem(
         SESSION_KEY,
-        JSON.stringify({ name: result.name, pin: pinInput.value || session?.pin, appearance: result.appearance }),
+        JSON.stringify({ name: result.name, pin: pinInput.value || session?.pin, world, appearance: result.appearance }),
       );
+      // mirror the World into the URL so a refresh / shared link rejoins the same
+      // one; drop the param for the default World to keep clean links
+      const url = new URL(window.location.href);
+      if (world === WORLD_ID_DEFAULT) url.searchParams.delete('world');
+      else url.searchParams.set('world', world);
+      window.history.replaceState(null, '', url);
       window.clearInterval(previewTimer);
       overlay.remove();
       resolve(result);
@@ -132,9 +146,10 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
 
     const attempt = async () => {
       errorBox.textContent = '';
-      const result = await backend.join(nameInput.value, pinInput.value, { ...appearance });
+      const world = normalizeWorldId(worldInput.value);
+      const result = await backend.join(nameInput.value, pinInput.value, { ...appearance }, world);
       if (result.ok) {
-        finish(result);
+        finish(result, world);
       } else {
         errorBox.textContent =
           result.reason === 'WRONG_PIN'
@@ -156,5 +171,10 @@ export function showJoin(backend: Backend): Promise<OkJoin> {
       nameInput.value = session.name;
       pinInput.value = session.pin;
     }
+    // World field: an explicit ?world= link wins, else the last World joined. The
+    // default World shows blank (its placeholder reads "default").
+    const urlWorld = new URLSearchParams(window.location.search).get('world');
+    const preWorld = normalizeWorldId(urlWorld ?? session?.world);
+    if (preWorld !== WORLD_ID_DEFAULT) worldInput.value = preWorld;
   });
 }
