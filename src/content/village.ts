@@ -117,6 +117,30 @@ export function canAcceptItem(inv: Partial<Record<string, number>>, item: string
   return invKindCount(inv) < capacity;
 }
 
+// ---------------------------------------------------------------- Trade Post
+// ADR-0013: market_square (unlocked at Village, tier 3) is a resource EXCHANGE —
+// swap a surplus raw for one you're short on at value parity (VILLAGE_CONTRIB)
+// minus a tax that EVAPORATES (a sink, never a gain) and SHRINKS as the Village
+// grows. Only the common gatherables trade, so rare loot can't be laundered.
+export const TRADEABLE: readonly string[] = ['wood', 'stone', 'fiber', 'fruit', 'fish'];
+
+/** the market's cut at a Village tier (market opens at Village=3; a grander town trades better) */
+export function tradeTaxForTier(tier: number): number {
+  if (tier >= 5) return 0.15;
+  if (tier >= 4) return 0.25;
+  return 0.35;
+}
+
+/** whole units of `getItem` received for `giveCount` of `giveItem` at `tier` (0 if the trade is invalid) */
+export function tradeYield(giveItem: string, giveCount: number, getItem: string, tier: number): number {
+  if (giveItem === getItem || giveCount <= 0) return 0;
+  if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return 0;
+  const vGive = VILLAGE_CONTRIB[giveItem] ?? 0;
+  const vGet = VILLAGE_CONTRIB[getItem] ?? 0;
+  if (vGive <= 0 || vGet <= 0) return 0;
+  return Math.floor((giveCount * vGive * (1 - tradeTaxForTier(tier))) / vGet);
+}
+
 /** the Village record: collective tier + additive pool + Hall location (tile-independent) */
 export interface VillageRecord {
   tier: VillageTier;
@@ -130,11 +154,36 @@ export interface VillageRecord {
    * means tier T's milestone has been completed. Founding sets it to ≥1.
    */
   milestonesBuilt: VillageTier;
+  /** ADR-0013: the group's chosen settlement name (Banner); falls back to the tier name */
+  name?: string;
+  /** ADR-0013: crest hue index (Banner) */
+  crest?: number;
+  /** ADR-0013: the Well's chronicle — short auto-seeded + player-written lines */
+  chronicle?: string[];
+  /** ADR-0013 (Wishing Well): fruit pooled toward the next Dorffest, shared/additive */
+  wishes?: number;
+  /** ADR-0013 (Wishing Well): epoch-ms the current Dorffest runs until (0/undef = none) */
+  festivalUntil?: number;
 }
 
 /** the fresh, unfounded record for a brand-new World */
 export function emptyVillage(): VillageRecord {
   return { tier: 0, pool: 0, hall: null, milestonesBuilt: 0 };
+}
+
+// ---------------------------------------------------------------- Wishing Well
+// ADR-0013: the fountain is a communal WISHING WELL — Players toss fruit toward a
+// shared meter; when it fills, a village-wide Dorffest runs for a fixed span,
+// granting everyone a move-speed boost. A pure timestamp mechanic (ADR-0001/0002):
+// the festival is a function of `festivalUntil`, computed lazily, no server tick.
+export const FOUNTAIN_WISH_ITEM = 'fruit';
+export const FOUNTAIN_WISH_THRESHOLD = 30; // fruit pooled to trigger a Dorffest
+export const FESTIVAL_MS = 5 * 60_000; // a Dorffest runs 5 real minutes
+export const FESTIVAL_SPEED_FACTOR = 1.1; // +10% move speed for everyone while it runs
+
+/** is a Dorffest running at `now`? */
+export function festivalActive(v: VillageRecord, now: number): boolean {
+  return (v.festivalUntil ?? 0) > now;
 }
 
 export function tierDef(tier: VillageTier): VillageTierDef {

@@ -586,6 +586,8 @@ button.ui-btn:disabled {
   line-height: 1.55;
   color: var(--text);
   font-style: italic;
+  /* honour explicit newlines: the Trophy list is one string joined by "\n" */
+  white-space: pre-line;
 }
 
 /* ---------------- v2: the Seal ---------------- */
@@ -875,6 +877,116 @@ button.ui-btn:disabled {
   flex: 1;
 }
 
+/* ---------------- ADR-0013: the Village-building panels ----------------
+   Trade Post (market_square), Name & Crest (banner), Chronicle (well) — centered
+   modals matched to the crate/contribution panels. Without these each is a
+   full-width, top-left, always-visible block (only `.panel` sets bg/border). */
+#trade-panel,
+#vname-panel,
+#chron-panel,
+#fountain-panel {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 45;
+  max-width: 92vw;
+  max-height: 72vh;
+  overflow-y: auto;
+}
+#trade-panel.open,
+#vname-panel.open,
+#chron-panel.open,
+#fountain-panel.open {
+  display: block;
+}
+#trade-panel {
+  width: 320px;
+}
+#vname-panel {
+  width: 300px;
+}
+#chron-panel {
+  width: 340px;
+}
+#fountain-panel {
+  width: 320px;
+}
+/* Wishing Well: status line + the shared-meter progress bar */
+.fountain-status {
+  font-size: calc(13px * var(--ui-scale));
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.fountain-bar {
+  height: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.fountain-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+/* Trade Post: label | select | amount on one line */
+.trade-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.trade-lbl {
+  font-size: calc(13px * var(--ui-scale));
+  color: var(--dim);
+}
+#trade-panel select,
+#trade-panel input,
+#vname-input,
+#chron-input {
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 5px 6px;
+  font-family: inherit;
+  font-size: calc(13px * var(--ui-scale));
+  min-width: 0;
+}
+#trade-amt {
+  width: 60px;
+}
+#vname-input,
+#chron-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+}
+/* Name & Crest: the crest-hue picker */
+.vname-crests {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 10px 0;
+}
+/* Chronicle: a scrollable list of lines */
+.chron-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.chron-line {
+  padding: 4px 2px;
+  font-size: calc(12px * var(--ui-scale));
+  color: var(--dim);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 /* ---------------- v3: the Journey tracker ---------------- */
 #journey-panel {
   position: absolute;
@@ -885,6 +997,33 @@ button.ui-btn:disabled {
 }
 #journey-panel.open {
   display: block;
+}
+/* header row: title on the left, the minimize toggle on the right */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.panel-head h3 {
+  margin: 0;
+}
+.panel-min {
+  pointer-events: auto;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: calc(14px * var(--ui-scale));
+  line-height: 1;
+  padding: 2px 4px;
+}
+.panel-min:hover {
+  color: var(--accent);
+}
+/* minimized: keep the header, fold the step list away */
+#journey-panel.collapsed #journey-steps {
+  display: none;
 }
 .journey-step {
   padding: 3px 0;
@@ -914,6 +1053,27 @@ button.ui-btn:disabled {
   display: none;
 }
 #buff-label.open {
+  display: block;
+}
+
+/* ADR-0013: the Dorffest badge — a celebratory top-centre banner while a Wishing
+   Well festival runs (distinct spot so it never collides with the side panels) */
+#festival-label {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 12px;
+  background: var(--panel);
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  font-size: calc(12px * var(--ui-scale));
+  color: var(--accent);
+  font-weight: 700;
+  display: none;
+  z-index: 20;
+}
+#festival-label.open {
   display: block;
 }
 

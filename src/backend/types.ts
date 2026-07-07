@@ -217,6 +217,24 @@ export type ContributeVillageResult =
   | { ok: false; reason: 'NO_HALL' | 'NOTHING_TO_GIVE' }
   | { ok: true; taken: Inventory; inventory: Inventory; village: VillageState; gained: number };
 
+/**
+ * The market_square Trade Post (ADR-0013): swap a surplus tradeable Resource for
+ * another at a tier-scaled tax. The client computes the yield (deterministic);
+ * the backend validates the give and applies the swap.
+ */
+export type TradeResult =
+  | { ok: false; reason: 'NO_MARKET' | 'NOT_TRADEABLE' | 'INSUFFICIENT' | 'NO_YIELD' }
+  | { ok: true; gave: { item: ItemId; count: number }; got: { item: ItemId; count: number }; inventory: Inventory };
+
+/**
+ * The fountain Wishing Well (ADR-0013): toss fruit toward a shared meter; when it
+ * fills, a village-wide Dorffest starts. `festivalStarted` is true only on the
+ * throw that crossed the threshold. The festival window lives in `village`.
+ */
+export type WishResult =
+  | { ok: false; reason: 'NO_FOUNTAIN' | 'INSUFFICIENT' | 'FESTIVAL_ACTIVE' }
+  | { ok: true; inventory: Inventory; village: VillageState; festivalStarted: boolean };
+
 export type SummonResult =
   | { ok: false; reason: 'SEAL_INTACT' | 'FIGHT_IN_PROGRESS' | 'NO_TOTEM' }
   | { ok: true; fight: FightState; inventory: Inventory };
@@ -430,6 +448,14 @@ export interface Backend {
    * clamped to what is held. Omit it to pour in everything qualifying.
    */
   contributeVillage(amounts?: Inventory): Promise<ContributeVillageResult>;
+  /** market_square resource exchange (ADR-0013): swap a surplus raw for another at a tier-scaled tax */
+  tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult>;
+  /** fountain Wishing Well (ADR-0013): toss fruit toward the shared meter; fills → a Dorffest starts */
+  wishFountain(count: number): Promise<WishResult>;
+  /** the Banner names the Village + picks a crest hue (ADR-0013) */
+  setVillageName(name: string, crest: number): Promise<{ village: VillageState }>;
+  /** the Well's chronicle: append a short player-written line (ADR-0013) */
+  addVillageNote(text: string): Promise<{ village: VillageState }>;
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
   /**

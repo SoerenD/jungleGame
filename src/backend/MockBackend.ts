@@ -2,6 +2,7 @@ import {
   ARENA_EMPTY_SLUMBER_MS,
   DEV_FIGHT,
   DEV_FIGHT_HP,
+  DEV_VILLAGE,
   DORMANT_TIMEOUT_MS,
   GUARDIAN_AWAKE_MS,
   HP_PER_HEAD,
@@ -34,10 +35,16 @@ import { RECIPES } from '../content/recipes';
 import {
   emptyVillage,
   villageBuff,
+  festivalActive,
+  FESTIVAL_MS,
+  FOUNTAIN_WISH_ITEM,
+  FOUNTAIN_WISH_THRESHOLD,
   inVillageZone,
   isVillageStructure,
   milestoneForTier,
   recomputeTier,
+  TRADEABLE,
+  tradeYield,
   villageContribution,
   VILLAGE_MAX_TIER,
   type VillageRecord,
@@ -54,6 +61,8 @@ import type {
   ChatMsg,
   ContributeSealResult,
   ContributeVillageResult,
+  TradeResult,
+  WishResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -261,6 +270,7 @@ export class MockBackend implements Backend {
     }
     this.saveSoon();
     if (DEV_FIGHT) this.db.world.seal.broken = true; // ?fight — jump straight to the Guardian
+    if (DEV_VILLAGE) this.seedDevVillage(); // ?village — founded Capital + the ADR-0013 buildings
     this.scheduleSlumberCheck();
     window.addEventListener('beforeunload', () => this.saveNow());
   }
@@ -349,6 +359,47 @@ export class MockBackend implements Backend {
     }
   }
 
+  /**
+   * ?village dev seed (DEV only, MockBackend): stand up a founded Capital-tier
+   * Village at spawn with the five ADR-0013 building-function Structures — Trade
+   * Post, Banner, Well, Fountain, Flower Bed — laid out in a plaza just south of
+   * the wake tile, so the resource-exchange / Name & Crest / Chronicle / Trophy
+   * panels can be reached on foot for solo UI verification. Idempotent: fixed
+   * ids keyed by tile, so re-loading overwrites rather than accumulates.
+   */
+  private seedDevVillage(): void {
+    const spawn = this.world.spawn; // {tx:100, ty:100} in the shipped map
+    // a founded Capital (max tier) so every building is unlocked and the market trades
+    this.db.world!.village = {
+      tier: 5,
+      pool: 12_000,
+      hall: { tx: spawn.tx, ty: spawn.ty },
+      milestonesBuilt: 5,
+      name: 'Alt-Grünhain',
+      crest: 2,
+      chronicle: [
+        'Wir gruben den ersten Brunnen bei Sonnenaufgang.',
+        'Der Wächter fiel — drei von uns trugen Narben davon.',
+      ],
+    };
+    // Hall at spawn + the five demo Buildings in a tidy row 3 tiles south of the
+    // wake tile, spaced so no single player tile is adjacent to two of them.
+    const row = spawn.ty + footprint('village_hall').h + 3;
+    const seed: { id: string; type: StructureId; tx: number; ty: number }[] = [
+      { id: 'dev_hall', type: 'village_hall', tx: spawn.tx, ty: spawn.ty },
+      { id: 'dev_market', type: 'market_square', tx: spawn.tx - 8, ty: row },
+      { id: 'dev_banner', type: 'village_banner', tx: spawn.tx - 4, ty: row },
+      { id: 'dev_well', type: 'village_well', tx: spawn.tx - 1, ty: row },
+      { id: 'dev_fountain', type: 'fountain', tx: spawn.tx + 3, ty: row },
+      { id: 'dev_flowers', type: 'flower_bed', tx: spawn.tx + 7, ty: row },
+    ];
+    for (const s of seed) {
+      this.db.structures[tileKey(s.tx, s.ty)] = { ...s, placedBy: 'dev', placedAt: Date.now() };
+    }
+    this.rebuildStructTiles();
+    this.saveNow();
+  }
+
   // ---------------------------------------------------------------- join / snapshot
 
   async join(name: string, pin: string, appearance: Appearance): Promise<JoinResult> {
@@ -379,6 +430,14 @@ export class MockBackend implements Backend {
     this.me = name;
     if (DEV_FIGHT && (p.inventory.summon_totem ?? 0) === 0) {
       p.inventory.summon_totem = 1; // ?fight — instant summon ready
+      this.saveNow();
+    }
+    if (DEV_VILLAGE) {
+      // ?village — keep a stock of tradeables so the Trade Post has surplus to swap
+      const stock: Partial<Record<ItemId, number>> = { wood: 40, stone: 40, fiber: 40, fruit: 40, fish: 8 };
+      for (const [it, n] of Object.entries(stock)) {
+        if ((p.inventory[it as ItemId] ?? 0) < n!) p.inventory[it as ItemId] = n!;
+      }
       this.saveNow();
     }
     this.normalizeJourney(name, p);
@@ -493,7 +552,17 @@ export class MockBackend implements Backend {
 
   private villageState(): VillageRecord {
     const v = (this.db.world!.village ??= emptyVillage());
-    return { tier: v.tier, pool: v.pool, hall: v.hall ? { ...v.hall } : null, milestonesBuilt: v.milestonesBuilt };
+    return {
+      tier: v.tier,
+      pool: v.pool,
+      hall: v.hall ? { ...v.hall } : null,
+      milestonesBuilt: v.milestonesBuilt,
+      name: v.name,
+      crest: v.crest,
+      chronicle: v.chronicle ? [...v.chronicle] : undefined,
+      wishes: v.wishes,
+      festivalUntil: v.festivalUntil,
+    };
   }
 
   /**
@@ -1116,6 +1185,66 @@ export class MockBackend implements Backend {
     this.saveNow();
     this.emit('villageChanged', this.villageState());
     return { ok: true, taken: taken as Inventory, inventory: { ...p.inventory }, village: this.villageState(), gained: points };
+  }
+
+  async tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p || v.tier < 3) return { ok: false, reason: 'NO_MARKET' };
+    if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return { ok: false, reason: 'NOT_TRADEABLE' };
+    const want = Math.max(0, Math.floor(giveCount));
+    if (want <= 0 || (p.inventory[giveItem] ?? 0) < want) return { ok: false, reason: 'INSUFFICIENT' };
+    const got = tradeYield(giveItem, want, getItem, v.tier);
+    if (got <= 0) return { ok: false, reason: 'NO_YIELD' };
+    p.inventory[giveItem] = (p.inventory[giveItem] ?? 0) - want;
+    if ((p.inventory[giveItem] ?? 0) <= 0) delete p.inventory[giveItem];
+    p.inventory[getItem] = (p.inventory[getItem] ?? 0) + got;
+    this.saveNow();
+    return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...p.inventory } };
+  }
+
+  async wishFountain(count: number): Promise<WishResult> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    const p = this.me ? this.db.players[this.me] : null;
+    const item = FOUNTAIN_WISH_ITEM as ItemId;
+    if (!p || !v.hall) return { ok: false, reason: 'NO_FOUNTAIN' };
+    if (festivalActive(v, Date.now())) return { ok: false, reason: 'FESTIVAL_ACTIVE' };
+    const want = Math.max(0, Math.floor(count));
+    if (want <= 0 || (p.inventory[item] ?? 0) < want) return { ok: false, reason: 'INSUFFICIENT' };
+    p.inventory[item] = (p.inventory[item] ?? 0) - want;
+    if ((p.inventory[item] ?? 0) <= 0) delete p.inventory[item];
+    v.wishes = (v.wishes ?? 0) + want;
+    let festivalStarted = false;
+    if (v.wishes >= FOUNTAIN_WISH_THRESHOLD) {
+      v.wishes = 0;
+      v.festivalUntil = Date.now() + FESTIVAL_MS;
+      festivalStarted = true;
+      this.pushChat({ from: t.system.sender, text: t.system.festivalStarted, ts: Date.now() });
+    }
+    this.saveNow();
+    this.emit('villageChanged', this.villageState());
+    return { ok: true, inventory: { ...p.inventory }, village: this.villageState(), festivalStarted };
+  }
+
+  async setVillageName(name: string, crest: number): Promise<{ village: VillageRecord }> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    v.name = name.slice(0, 24);
+    v.crest = crest;
+    this.saveNow();
+    this.emit('villageChanged', this.villageState());
+    return { village: this.villageState() };
+  }
+
+  async addVillageNote(text: string): Promise<{ village: VillageRecord }> {
+    await this.lag();
+    const v = (this.db.world!.village ??= emptyVillage());
+    v.chronicle = [...(v.chronicle ?? []), `${this.me ?? '?'}: ${text.slice(0, 60)}`];
+    this.saveNow();
+    this.emit('villageChanged', this.villageState());
+    return { village: this.villageState() };
   }
 
   // ------------------------------------------------------------ v2: the Guardian

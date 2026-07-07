@@ -211,6 +211,12 @@ export const DEV_DEEP = params.has('deep');
 // Zone (ADR-0012) with Wildlife already roaming, for solo verification. The lone
 // Player IS the creature host, so everything host-side runs locally.
 export const DEV_WILD = params.has('wild');
+// ?village = seed a founded Capital-tier Village (MockBackend only) with a Hall
+// at spawn and the five ADR-0013 building-function structures — Trade Post,
+// Banner, Well, Fountain, Flower Bed — laid out in a plaza just south of the wake
+// point, plus a stock of tradeables. Lets the resource-exchange / Name & Crest /
+// Chronicle / Trophy panels be reached on foot for solo UI verification.
+export const DEV_VILLAGE = params.has('village');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006

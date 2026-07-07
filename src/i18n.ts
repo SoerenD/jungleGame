@@ -159,6 +159,43 @@ const en = {
     total: (n: number) => `Total: +${n} to the pool`,
   },
 
+  trade: {
+    title: '🛖 Trade Post',
+    give: 'Give',
+    get: 'Get',
+    cancel: 'Cancel',
+    confirm: 'Trade',
+    youGet: (n: number, name: string) => `→ you get ${n} ${name}`,
+    nothing: 'Not enough for a whole unit.',
+  },
+
+  fountain: {
+    title: '⛲ Wishing Well',
+    progress: (have: number, need: number) => `Wishes: ${have} / ${need} fruit`,
+    festival: '🎉 A festival is under way!',
+    have: (n: number) => `you have ${n}`,
+    amount: 'Toss',
+    toss: 'Toss in',
+    cancel: 'Close',
+    badge: (m: number, s: string) => `🎉 Festival ${m}:${s}`,
+  },
+
+  vname: {
+    title: '🚩 Name the Village',
+    placeholder: 'A name…',
+    cancel: 'Cancel',
+    save: 'Save',
+  },
+
+  chron: {
+    title: '📖 Village Chronicle',
+    placeholder: 'Add a line…',
+    close: 'Close',
+    add: 'Add',
+    empty: 'The chronicle is empty.',
+    became: (name: string) => `— the Village reached “${name}”`,
+  },
+
   fight: {
     title: '⚔ The Guardian',
     stirs: '⚔ The Guardian stirs',
@@ -179,6 +216,7 @@ const en = {
     intoDelve: '⛏ Into the Delve',
     crafting: 'Crafting',
     inventory: 'Inventory',
+    toggle: 'Collapse / expand',
   },
 
   crate: {
@@ -329,6 +367,14 @@ const en = {
     recallNoHome: 'No Village yet — found the Hall first.',
     recallNoFight: 'You can’t recall during a Guardian fight.',
     bellRung: 'You ring the Village bell — everyone is called to gather.',
+    traded: (n: number, name: string) => `Traded for ${n} ${name}.`,
+    tradeFailed: 'The market can’t make that trade.',
+    villageNamed: (name: string) => `The Village is now ${name}.`,
+    flowersTended: 'You tend the flowers — they brighten.',
+    wished: (n: number) => `You toss ${n} fruit into the well.`,
+    wishFailed: 'The well won’t take that.',
+    festivalRunning: 'A festival is already under way.',
+    festivalStarted: '🎉 The wishes are answered — a festival begins!',
     placing: (name: string) => `Placing ${name} — face a tile and press Enter`,
     tooFarDrop: 'Too far to reach — step closer to drop it there.',
     bridgesOnWater: 'Bridges must be placed on water.',
@@ -406,6 +452,7 @@ const en = {
       `🏆 THE GUARDIAN IS BESTED! ${who} carried the day — ${scales} Guardian Scales to every fighter. It sinks back into slumber.`,
     villageFounded: (who: string) => `🏛 ${who} founded the Village! Everyone without a Hammock now wakes at the Hall.`,
     villageGrew: (name: string) => `🏛 the Village has grown into a ${name}!`,
+    festivalStarted: '🎉 The village wishes are answered — a Dorffest begins! Everyone is swift.',
     exhaustionCollapse: (who: string, atHammock: boolean) =>
       `${who} collapses from Exhaustion — out for this fight, waking ${atHammock ? 'in their Hammock' : 'at the spawn'}. Hits already landed still count toward the loot.`,
   },
@@ -502,6 +549,43 @@ const de: Strings = {
     total: (n: number) => `Gesamt: +${n} für den Vorrat`,
   },
 
+  trade: {
+    title: '🛖 Handelsposten',
+    give: 'Geben',
+    get: 'Erhalten',
+    cancel: 'Abbrechen',
+    confirm: 'Tauschen',
+    youGet: (n, name) => `→ du erhältst ${n} ${name}`,
+    nothing: 'Nicht genug für eine ganze Einheit.',
+  },
+
+  fountain: {
+    title: '⛲ Wunschbrunnen',
+    progress: (have, need) => `Wünsche: ${have} / ${need} Frucht`,
+    festival: '🎉 Ein Dorffest läuft!',
+    have: (n) => `du hast ${n}`,
+    amount: 'Werfen',
+    toss: 'Hineinwerfen',
+    cancel: 'Schließen',
+    badge: (m, s) => `🎉 Dorffest ${m}:${s}`,
+  },
+
+  vname: {
+    title: '🚩 Dorf benennen',
+    placeholder: 'Ein Name…',
+    cancel: 'Abbrechen',
+    save: 'Speichern',
+  },
+
+  chron: {
+    title: '📖 Dorfchronik',
+    placeholder: 'Zeile hinzufügen…',
+    close: 'Schließen',
+    add: 'Hinzufügen',
+    empty: 'Die Chronik ist leer.',
+    became: (name) => `— Das Dorf erreichte die Stufe „${name}“`,
+  },
+
   fight: {
     title: '⚔ Der Wächter',
     stirs: '⚔ Der Wächter regt sich',
@@ -522,6 +606,7 @@ const de: Strings = {
     intoDelve: '⛏ In den Schacht',
     crafting: 'Herstellung',
     inventory: 'Inventar',
+    toggle: 'Ein-/Ausklappen',
   },
 
   crate: {
@@ -669,6 +754,14 @@ const de: Strings = {
     recallNoHome: 'Noch kein Dorf — gründe zuerst die Halle.',
     recallNoFight: 'Während eines Wächterkampfs kannst du dich nicht zurückrufen.',
     bellRung: 'Du läutest die Dorfglocke — alle werden zum Sammeln gerufen.',
+    traded: (n, name) => `Für ${n} ${name} getauscht.`,
+    tradeFailed: 'Der Markt kann diesen Tausch nicht machen.',
+    villageNamed: (name) => `Das Dorf heißt jetzt ${name}.`,
+    flowersTended: 'Du pflegst die Blumen — sie leuchten auf.',
+    wished: (n) => `Du wirfst ${n} Frucht in den Brunnen.`,
+    wishFailed: 'Der Brunnen nimmt das nicht.',
+    festivalRunning: 'Es läuft bereits ein Dorffest.',
+    festivalStarted: '🎉 Die Wünsche sind erhört — ein Dorffest beginnt!',
     placing: (name) => `${name} wird platziert — blick auf ein Feld und drücke Enter`,
     tooFarDrop: 'Zu weit weg — geh näher heran, um es dort abzulegen.',
     bridgesOnWater: 'Brücken müssen auf Wasser platziert werden.',
@@ -745,6 +838,7 @@ const de: Strings = {
       `🏆 DER WÄCHTER IST BEZWUNGEN! ${who} haben den Sieg errungen — ${scales} Wächterschuppen für jeden Kämpfer. Er sinkt zurück in den Schlummer.`,
     villageFounded: (who: string) => `🏛 ${who} hat das Dorf gegründet! Jeder ohne Hängematte erwacht nun an der Halle.`,
     villageGrew: (name: string) => `🏛 das Dorf ist zu ${name} herangewachsen!`,
+    festivalStarted: '🎉 Die Dorfwünsche sind erhört — ein Dorffest beginnt! Alle sind schneller.',
     exhaustionCollapse: (who, atHammock) =>
       `${who} bricht vor Erschöpfung zusammen — raus aus diesem Kampf, erwacht ${atHammock ? 'in der Hängematte' : 'am Startpunkt'}. Bereits gelandete Treffer zählen weiter zur Beute.`,
   },

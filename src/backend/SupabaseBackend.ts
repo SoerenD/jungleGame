@@ -23,9 +23,15 @@ import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes
 import { RECIPES } from '../content/recipes';
 import {
   emptyVillage,
+  festivalActive,
+  FESTIVAL_MS,
+  FOUNTAIN_WISH_ITEM,
+  FOUNTAIN_WISH_THRESHOLD,
   isVillageStructure,
   villageBuff,
   milestoneTierOf,
+  TRADEABLE,
+  tradeYield,
   VILLAGE_CONTRIB,
   VILLAGE_MAX_TIER,
   VILLAGE_THRESHOLDS,
@@ -40,8 +46,10 @@ import type {
   Backend,
   BackendEvents,
   ChatMsg,
+  WishResult,
   ContributeSealResult,
   ContributeVillageResult,
+  TradeResult,
   CookResult,
   CraftResult,
   CrateResult,
@@ -572,6 +580,11 @@ export class SupabaseBackend implements Backend {
       pool: v.pool ?? 0,
       hall,
       milestonesBuilt: (v.milestonesBuilt ?? 0) as VillageRecord['milestonesBuilt'],
+      name: typeof v.name === 'string' ? v.name : undefined,
+      crest: typeof v.crest === 'number' ? v.crest : undefined,
+      chronicle: Array.isArray(v.chronicle) ? v.chronicle.filter((x: any) => typeof x === 'string') : undefined,
+      wishes: typeof v.wishes === 'number' ? v.wishes : undefined,
+      festivalUntil: typeof v.festivalUntil === 'number' ? v.festivalUntil : undefined,
     };
   }
 
@@ -881,6 +894,51 @@ export class SupabaseBackend implements Backend {
     this.relay('villageChanged', village); // dispatch updates this.village + broadcasts
     if (village.tier > before) this.pushChat(t.system.sender, t.system.villageGrew(t.village.tierName(village.tier)));
     return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, village, gained: res.gained ?? 0 };
+  }
+
+  async tradeMarket(giveItem: ItemId, giveCount: number, getItem: ItemId): Promise<TradeResult> {
+    if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return { ok: false, reason: 'NOT_TRADEABLE' };
+    const want = Math.max(0, Math.floor(giveCount));
+    const got = tradeYield(giveItem, want, getItem, this.village.tier);
+    if (got <= 0) return { ok: false, reason: want <= 0 ? 'INSUFFICIENT' : 'NO_YIELD' };
+    const res = await this.rpc<any>('jw_village_trade', {
+      p_who: this.me,
+      p_give: giveItem,
+      p_give_n: want,
+      p_get: getItem,
+      p_get_n: got,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'INSUFFICIENT' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, gave: { item: giveItem, count: want }, got: { item: getItem, count: got }, inventory: { ...this.inv } };
+  }
+
+  async wishFountain(count: number): Promise<WishResult> {
+    const item = FOUNTAIN_WISH_ITEM as ItemId;
+    if (festivalActive(this.village, Date.now())) return { ok: false, reason: 'FESTIVAL_ACTIVE' };
+    const want = Math.max(0, Math.floor(count));
+    if (want <= 0 || (this.inv[item] ?? 0) < want) return { ok: false, reason: 'INSUFFICIENT' };
+    const res = await this.rpc<any>('jw_village_wish', { p_who: this.me, p_n: want });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'INSUFFICIENT' };
+    this.inv = res.inventory as Inventory;
+    const village = this.villageFromJson(res.village);
+    this.village = village;
+    this.relay('villageChanged', village);
+    return { ok: true, inventory: { ...this.inv }, village, festivalStarted: !!res.festivalStarted };
+  }
+
+  async setVillageName(name: string, crest: number): Promise<{ village: VillageRecord }> {
+    const res = await this.rpc<any>('jw_village_set_name', { p_name: name.slice(0, 24), p_crest: crest });
+    const village = this.villageFromJson(res?.village);
+    this.relay('villageChanged', village);
+    return { village };
+  }
+
+  async addVillageNote(text: string): Promise<{ village: VillageRecord }> {
+    const res = await this.rpc<any>('jw_village_add_note', { p_who: this.me, p_text: text.slice(0, 60) });
+    const village = this.villageFromJson(res?.village);
+    this.relay('villageChanged', village);
+    return { village };
   }
 
   // ---------------------------------------------------------------- Guardian
