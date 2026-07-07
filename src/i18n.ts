@@ -331,9 +331,6 @@ const en = {
     crit: 'crit',
     noCrit: 'no crit',
     dps: 'DPS',
-  },
-
-  toast: {
     // full-length row labels for the inventory hover popup (Codex Card)
     physDmg: 'Physical damage',
     critChance: 'Critical strike chance',
@@ -344,6 +341,9 @@ const en = {
     rarReward: 'Reward',
     rarAncient: 'Ancient',
     rarBasic: 'Basic',
+  },
+
+  toast: {
     sealBroken: '⚡ The Seal is broken — the arena stands open, forever!',
     guardianBested: '🏆 The Guardian sinks into slumber — every fighter earns its Scales!',
     guardianUnbeaten: 'The Guardian returns to slumber, unbeaten. The totem is spent.',
@@ -672,12 +672,12 @@ const de: Strings = {
     slotHold: (name, i) => `${name} — drücke ${i}, um es in die Hand zu nehmen`,
     slotEmpty: (i) => `Ausrüstungsplatz ${i} — zieh ein Werkzeug hierher, drücke ${i} zum Auswählen`,
     minimapTitle: 'Minikarte — weiß: du, gelb: andere',
+    // kind subtitle on the hover popup for non-weapon items
+    kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung' },
   },
 
   recipe: {
     tooltip: (name, kind, desc, cost, stats) => `${name} (${kind})\n${desc}\nKosten: ${cost}${stats}`,
-    // kind subtitle on the hover popup for non-weapon items
-    kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung' },
     needsTool: (name) => `benötigt ${name}`,
     atForge: 'an einer Schmiede',
     forgeTip: (near) =>
@@ -739,13 +739,6 @@ const de: Strings = {
     crit: 'Krit',
     noCrit: 'kein Krit',
     dps: 'DPS',
-  },
-
-  toast: {
-    sealBroken: '⚡ Das Siegel ist gebrochen — die Arena steht offen, für immer!',
-    guardianBested: '🏆 Der Wächter sinkt in den Schlummer — jeder Kämpfer erhält seine Schuppen!',
-    guardianUnbeaten: 'Der Wächter kehrt in den Schlummer zurück, unbesiegt. Das Totem ist verbraucht.',
-    knockedDown: (n) => `Niedergeschlagen! (${n}/3 — der dritte bedeutet Erschöpfung)`,
     // full-length row labels for the inventory hover popup (Codex Card)
     physDmg: 'Physischer Schaden',
     critChance: 'Kritische Trefferchance',
@@ -756,6 +749,13 @@ const de: Strings = {
     rarReward: 'Belohnung',
     rarAncient: 'Uralt',
     rarBasic: 'Einfach',
+  },
+
+  toast: {
+    sealBroken: '⚡ Das Siegel ist gebrochen — die Arena steht offen, für immer!',
+    guardianBested: '🏆 Der Wächter sinkt in den Schlummer — jeder Kämpfer erhält seine Schuppen!',
+    guardianUnbeaten: 'Der Wächter kehrt in den Schlummer zurück, unbesiegt. Das Totem ist verbraucht.',
+    knockedDown: (n) => `Niedergeschlagen! (${n}/3 — der dritte bedeutet Erschöpfung)`,
     exhaustionHammock:
       'Erschöpfung übermannt dich — raus aus diesem Kampf, du erwachst in deiner Hängematte. Frühere Treffer zählen weiter.',
     exhaustionSpawn:
