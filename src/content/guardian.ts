@@ -345,12 +345,25 @@ export interface GuardianPose {
 export function guardianPoseAt(elapsedMs: number, awakeMs: number, home: ArenaSpot, entrance?: ArenaSpot): GuardianPose {
   const w = waveInfoAt(elapsedMs, awakeMs);
   if (w.index === 0 && entrance) {
-    if (w.msIntoWave >= w.phase.telegraphMs) {
-      return { spot: entrance, target: null, windup: false, airborne: false, leapT: 1 }; // Ward slammed
+    const teleg = w.phase.telegraphMs;
+    // OUT: rear up at home, then leap home → entrance, crashing the Ward shut at `teleg`
+    if (w.msIntoWave < teleg) {
+      const t0 = w.msIntoWave / teleg;
+      if (t0 < 0.35) return { spot: home, target: entrance, windup: true, airborne: false, leapT: 0 };
+      return { spot: home, target: entrance, windup: false, airborne: true, leapT: (t0 - 0.35) / 0.65 };
     }
-    const t0 = w.msIntoWave / w.phase.telegraphMs;
-    if (t0 < 0.35) return { spot: home, target: entrance, windup: true, airborne: false, leapT: 0 };
-    return { spot: home, target: entrance, windup: false, airborne: true, leapT: (t0 - 0.35) / 0.65 };
+    // landed on the entrance (Ward slammed). Hold a beat at the gate, then LEAP
+    // BACK home — a visible bound, not a teleport — settling just as wave 0's
+    // first Eye Window opens. Purely the engage-leap's return arc; wave ≥1 and
+    // every authored number stay untouched.
+    const sinceSlam = w.msIntoWave - teleg;
+    const holdMs = 220;
+    const returnMs = 560;
+    if (sinceSlam < holdMs) return { spot: entrance, target: null, windup: false, airborne: false, leapT: 1 };
+    if (sinceSlam < holdMs + returnMs) {
+      return { spot: entrance, target: home, windup: false, airborne: true, leapT: (sinceSlam - holdMs) / returnMs };
+    }
+    return { spot: home, target: null, windup: false, airborne: false, leapT: 0 };
   }
   const from = guardianSpotAt(w.lungeCount, home);
   if (w.kind !== 'lunge') return { spot: from, target: null, windup: false, airborne: false, leapT: 0 };

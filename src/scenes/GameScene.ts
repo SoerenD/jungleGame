@@ -371,6 +371,10 @@ export class GameScene extends Phaser.Scene {
   private landedWave = -1;
   private furyIndex = -1;
   private eyeOpenShown = false;
+  /** live first-strike: the Ward is deferred until wave 0's leap slams the gate */
+  private wardPending = false;
+  /** slain: left a broken wreck (angle/tint/dead glow) until summoned anew */
+  private guardianBroken = false;
   private stunnedUntil = 0;
   private stunMarker: Phaser.GameObjects.Text | null = null;
   /** melee-ring shove cooldown: one push per contact so the tween can't restack (no stun) */
@@ -1198,6 +1202,7 @@ export class GameScene extends Phaser.Scene {
    */
   private startFight(fight: FightState, fresh: boolean): void {
     this.exhaustedThisFight = false;
+    this.restoreGuardianWhole(); // a summon rekindles the runes: rebuild any slain wreck
     if (fight.engagedAt === null) {
       this.fight = fight;
       this.renderedWave = -1;
@@ -1243,7 +1248,17 @@ export class GameScene extends Phaser.Scene {
     this.furyIndex = furyPhaseAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS).index;
     this.guardianGlow.setTint(FURY_TINTS[this.furyIndex]);
     this.guardianSprite.anims.play('guardian-idle');
-    this.raiseWard(dramatic);
+    // The Ward is SLAMMED shut by the engage-leap, not raised on contact. For a
+    // live first-strike (dramatic) that is still winding up wave 0, defer it to
+    // the moment the leap crashes on the entrance (see slamWave); a quiet
+    // mid-fight join finds the Ward already standing, so raise it at once.
+    const preSlam = w.index === 0 && w.msIntoWave < w.phase.telegraphMs;
+    if (dramatic && preSlam) {
+      this.wardPending = true;
+    } else {
+      this.wardPending = false;
+      this.raiseWard(dramatic);
+    }
     if (dramatic) {
       this.sfx('roar', 0.7);
       this.cameras.main.shake(700, 0.01);
@@ -1311,6 +1326,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.fight) return;
     this.fight = null;
     this.exhaustedThisFight = false;
+    this.wardPending = false;
     this.dropWard(); // the Ward falls — the arena opens again
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
@@ -1318,25 +1334,105 @@ export class GameScene extends Phaser.Scene {
     this.meleeRingRects = [];
     this.renderedWave = -1;
     this.furyIndex = -1;
-    this.guardianSprite.anims.stop();
-    this.guardianSprite.setFrame(0);
-    // it sinks back onto its resting place — collision returns home with it
+    // collision settles back onto its resting place either way
     this.placeGuardian(this.guardianHomeSpot, 0);
     this.positionGuardianBlockers(this.guardianHomeSpot);
     this.setGuardianBlockersEnabled(true);
-    this.guardianGlow.setTint(0xb478ff);
     this.guardianEyeGlow.setAlpha(0);
     this.fightMusic?.stop();
     bus.emit('fight-end');
     if (kind === 'victory') {
+      // slain: it doesn't just close its eyes — it BREAKS. Death throes now, then
+      // a darkened wreck left on its resting place until it is summoned anew and
+      // rebuilt (startFight → restoreGuardianWhole). See shatterGuardian.
       this.sfx('seal_gong', 0.6);
       this.cameras.main.shake(500, 0.006);
       this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, t.fight.bestedFloat, '#ffd166');
       bus.emit('toast', t.toast.guardianBested, 'good');
+      this.shatterGuardian();
     } else {
+      // unbeaten: it simply re-slumbers, whole, ready to be roused again
+      this.restoreGuardianWhole();
+      this.guardianSprite.anims.stop();
+      this.guardianSprite.setFrame(0);
       this.sfx('roar', 0.35);
       bus.emit('toast', t.toast.guardianUnbeaten, 'bad');
     }
+  }
+
+  /**
+   * The slain Guardian's death throes: a blown-out flash and a heavy topple, a
+   * burst of stone shards and dust, the runic glow snuffed out — leaving a
+   * darkened, broken wreck on its resting place until it is summoned anew
+   * (restoreGuardianWhole). Purely client-side spectacle; the fight is resolved.
+   */
+  private shatterGuardian(): void {
+    this.guardianBroken = true;
+    const spr = this.guardianSprite;
+    const cx = spr.x;
+    const feetY = spr.y; // origin is bottom-centre — this is its base
+    spr.anims.stop();
+    spr.setFrame(7); // the crash pose, caught mid-collapse
+    spr.setTintFill(0xffffff); // blown-out flash...
+    this.time.delayedCall(90, () => spr.setTint(0x4a4650)); // ...settling to dead grey stone
+    this.tweens.add({ targets: spr, angle: -24, duration: 640, ease: 'Bounce.out' }); // heavy topple on its base
+    // the runes gutter out: implode + snuff the glow. Its night-smoulder is
+    // driven every frame by the glows pool from `base`, so zero that too.
+    const ge = this.glows.find((g) => g.img === this.guardianGlow);
+    if (ge) ge.base = 0;
+    this.tweens.add({
+      targets: this.guardianGlow,
+      scale: 0.3,
+      duration: 320,
+      ease: 'Quad.in',
+      onComplete: () => this.guardianGlow.setVisible(false),
+    });
+    this.guardianEyeGlow.setAlpha(0);
+    // stone shards flung outward
+    const bodyY = feetY - 34;
+    for (let i = 0; i < 16; i++) {
+      const ang = (Math.PI * 2 * i) / 16 + (i % 3) * 0.4;
+      const dist = 30 + (i % 5) * 13;
+      const sz = 3 + (i % 4) * 2;
+      const shard = this.add
+        .rectangle(cx + Math.cos(ang) * 6, bodyY, sz, sz, i % 3 === 0 ? 0x6f5da0 : 0x50515e)
+        .setDepth(feetY + 40);
+      this.tweens.add({
+        targets: shard,
+        x: cx + Math.cos(ang) * dist,
+        y: bodyY + Math.sin(ang) * dist * 0.5 + 30,
+        angle: 140 + i * 22,
+        alpha: 0,
+        duration: 520 + i * 18,
+        ease: 'Quad.out',
+        onComplete: () => shard.destroy(),
+      });
+    }
+    // dust kicked up at the base
+    for (let i = 0; i < 5; i++) {
+      const puff = this.add.ellipse(cx + (i - 2) * 15, feetY - 6, 20, 11, 0x241f30, 0.5).setDepth(feetY + 30);
+      this.tweens.add({
+        targets: puff,
+        scaleX: 2.6,
+        scaleY: 2.1,
+        alpha: 0,
+        y: feetY - 18,
+        duration: 720 + i * 70,
+        ease: 'Quad.out',
+        onComplete: () => puff.destroy(),
+      });
+    }
+    this.sfx('chop', 0.5);
+  }
+
+  /** rebuild the slain wreck into the whole, slumbering Guardian (summon / re-slumber) */
+  private restoreGuardianWhole(): void {
+    this.guardianBroken = false;
+    this.guardianSprite.setAngle(0);
+    this.guardianSprite.clearTint();
+    this.guardianGlow.setVisible(true).setTint(0xb478ff).setScale(2.6);
+    const ge = this.glows.find((g) => g.img === this.guardianGlow);
+    if (ge) ge.base = 0.5;
   }
 
   /** world position of an arena spot (the Guardian's feet on its bottom row) */
@@ -1408,6 +1504,12 @@ export class GameScene extends Phaser.Scene {
   /** the slam/landing moment: flash, shake, and adjudicate the local Player */
   private slamWave(w: WaveInfo): void {
     this.slammedWave = w.index;
+    if (w.index === 0 && this.wardPending) {
+      // the engage-leap has crashed on the entrance — the Ward slams shut NOW,
+      // in lockstep with the Guardian landing (not raised early on first contact)
+      this.wardPending = false;
+      this.raiseWard(true);
+    }
     const lunge = w.kind === 'lunge';
     for (const r of this.dangerRects) r.setFillStyle(lunge ? 0xffa02f : 0xff2211, 0.55);
     this.sfx('chop', lunge ? 0.6 : 0.35);
@@ -2407,6 +2509,10 @@ export class GameScene extends Phaser.Scene {
   private makeNodeHoverable(sprite: Phaser.GameObjects.Image, type: NodeState['type']): void {
     sprite.setInteractive();
     sprite.on('pointerover', () => {
+      // World Nodes stay interactive under the Delve overlay (only their physics
+      // colliders are disabled on entry); without this guard their hover label
+      // would surface over the Dungeon. No label while we're below.
+      if (this.inDelve) return;
       if (!this.nodeHoverLabel) {
         // same visual size as the remote-player name tags (fontSize 7, res 6)
         // so hover text reads consistently across the World; the base scale is

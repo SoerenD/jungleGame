@@ -39,7 +39,7 @@ export const DEEP_CORE_DROP = 1;
  * to east. Everything not carved is wall (blocks movement); the host builds
  * collision from `isDelveWall`. Regenerated identically everywhere — pure data.
  */
-export const DELVE_W = 68;
+export const DELVE_W = 60;
 export const DELVE_H = 22;
 
 export interface Rect {
@@ -53,22 +53,25 @@ export interface Rect {
  * Floor rectangles (inclusive origin, w/h in tiles) — the walkable rooms. Room A
  * is a deliberately SAFE antechamber: the first Husks live in room B, 13+ tiles
  * away down a long corridor — beyond their aggro range — so a party is never
- * swarmed at the spawn and can pick its moment to advance.
+ * swarmed at the spawn and can pick its moment to advance. The run climbs at the
+ * end: the boss room E is stacked directly ABOVE the last Husk room D (reached by
+ * a vertical corridor), not out on the eastern edge.
  */
 export const DELVE_ROOMS: Rect[] = [
   { x: 2, y: 8, w: 8, h: 6 }, // A — safe entrance      x2..9   y8..13
   { x: 18, y: 3, w: 11, h: 16 }, // B — Husk room 1     x18..28 y3..18
   { x: 33, y: 6, w: 10, h: 10 }, // C — Husk room 2     x33..42 y6..15
-  { x: 47, y: 4, w: 11, h: 14 }, // D — Husk room 3     x47..57 y4..17
-  { x: 60, y: 3, w: 6, h: 16 }, // E — boss room        x60..65 y3..18
+  { x: 45, y: 12, w: 13, h: 8 }, // D — Husk room 3     x45..57 y12..19 (lower band)
+  { x: 45, y: 2, w: 13, h: 8 }, // E — boss room        x45..57 y2..9  (stacked above D)
 ];
 
-/** 2-tile-tall corridors joining consecutive rooms along y10..11 */
+/** corridors joining consecutive rooms — the A→B→C spine runs y10..11, then the
+ *  run drops onto D's lower band and climbs a vertical shaft up into boss room E */
 export const DELVE_CORRIDORS: Rect[] = [
   { x: 10, y: 10, w: 8, h: 2 }, // A↔B — the long safe-entrance buffer
   { x: 29, y: 10, w: 4, h: 2 }, // B↔C
-  { x: 43, y: 10, w: 4, h: 2 }, // C↔D
-  { x: 58, y: 10, w: 2, h: 2 }, // D↔E
+  { x: 43, y: 13, w: 4, h: 2 }, // C↔D — drops onto D's lower band
+  { x: 50, y: 9, w: 2, h: 4 }, // D↔E — vertical shaft up into the boss room
 ];
 
 /** where the party lands on entry (the entrance room), and the tile you leave from */
@@ -166,7 +169,7 @@ export const PROP_LIGHT: Partial<Record<PropKind, { color: number; scale: number
 
 /** standalone light pools not tied to a prop (the boss's own violet ambient) */
 export const DELVE_LIGHTS: { tx: number; ty: number; color: number; scale: number; alpha: number }[] = [
-  { tx: 62, ty: 10, color: 0xb478ff, scale: 4.2, alpha: 0.3 }, // Deep Guardian chamber
+  { tx: 51, ty: 5, color: 0xb478ff, scale: 4.2, alpha: 0.3 }, // Deep Guardian chamber (above D)
 ];
 
 function buildProps(): DelveProp[] {
@@ -202,28 +205,30 @@ function buildProps(): DelveProp[] {
   add('rubble_pile', 34, 7);
   add('rubble_pile', 41, 15);
   add('glyph_stone', 41, 8);
-  // Room D — ancient ruins: a staggered obsidian colonnade breaks Spit sightlines
-  add('obsidian_pillar', 50, 7);
-  add('obsidian_pillar', 53, 11);
-  add('obsidian_pillar', 51, 15);
-  add('brazier_violet', 49, 8);
-  add('brazier_violet', 54, 12);
-  add('glyph_stone', 57, 7);
+  // Room D — ancient ruins (lower band): a staggered obsidian colonnade breaks
+  // Spit sightlines; the entry mouths (C↔D at x45-46 y13-14, the climb to E at
+  // x50-51 y12) are kept clear
+  add('obsidian_pillar', 48, 15);
+  add('obsidian_pillar', 54, 15);
+  add('obsidian_pillar', 52, 18);
+  add('brazier_violet', 46, 17);
+  add('brazier_violet', 56, 17);
+  add('glyph_stone', 45, 19);
   add('glyph_stone', 57, 13);
-  add('bone_pile', 50, 9);
-  add('bone_pile', 53, 15);
-  add('rubble_pile', 48, 5);
-  add('rubble_pile', 56, 16);
-  add('brazier_violet', 45, 11); // C↔D breadcrumb
-  // Room E — the Deep Guardian's chamber: only rim framing, boss glow dominates
-  add('obsidian_pillar', 61, 7);
-  add('obsidian_pillar', 64, 7);
-  add('brazier_violet', 60, 4);
-  add('brazier_violet', 65, 4);
-  add('glyph_stone', 60, 17);
-  add('glyph_stone', 65, 17);
-  add('bone_pile', 61, 15);
-  add('bone_pile', 64, 15);
+  add('bone_pile', 49, 16);
+  add('bone_pile', 53, 17);
+  add('rubble_pile', 47, 13);
+  add('rubble_pile', 55, 19);
+  // Room E — the Deep Guardian's chamber, stacked ABOVE D: only rim framing, the
+  // boss glow dominates; the centre (boss spawn) and the door are left clear
+  add('obsidian_pillar', 47, 4);
+  add('obsidian_pillar', 55, 6);
+  add('brazier_violet', 46, 3);
+  add('brazier_violet', 56, 3);
+  add('glyph_stone', 45, 8);
+  add('glyph_stone', 57, 8);
+  add('bone_pile', 48, 7);
+  add('bone_pile', 54, 7);
   return p;
 }
 
@@ -489,19 +494,19 @@ export function bossHp(heads: number): number {
 const GRASP_ANCHORS = [
   { x: 25, y: 6 }, // B
   { x: 38, y: 10 }, // C
-  { x: 52, y: 6 }, // D
+  { x: 48, y: 14 }, // D (lower band)
   { x: 26, y: 15 }, // B
-  { x: 53, y: 15 }, // D
-  { x: 50, y: 9 }, // D
+  { x: 55, y: 15 }, // D
+  { x: 50, y: 16 }, // D
   { x: 36, y: 13 }, // C
 ];
 const SPIT_ANCHORS = [
   { x: 24, y: 10 }, // B
-  { x: 51, y: 10 }, // D
+  { x: 51, y: 17 }, // D (lower band)
   { x: 39, y: 12 }, // C
   { x: 27, y: 7 }, // B
 ];
-export const BOSS_SPAWN = { x: 62, y: 10 };
+export const BOSS_SPAWN = { x: 51, y: 5 };
 
 export interface MobSpawn {
   kind: MobKind;
@@ -1103,7 +1108,7 @@ const STAGE_1: StageDef = {
   bossHpPerHead: BOSS_HP_PER_HEAD,
   zone: 'The Delve',
   loot: { common: HUSK_SHARD, rare: DEEP_CORE },
-  door: { tx: 63, ty: 15 }, // in the Deep Guardian's room E, clear of the boss + props
+  door: { tx: 55, ty: 3 }, // top-east of the boss room E (above D), clear of the boss + props
 };
 
 const STAGE_2: StageDef = {
