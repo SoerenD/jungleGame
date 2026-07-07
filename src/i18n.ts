@@ -261,6 +261,8 @@ const en = {
     slotHold: (name: string, i: number) => `${name} — press ${i} to hold it`,
     slotEmpty: (i: number) => `Loadout slot ${i} — drag a Tool here, press ${i} to select`,
     minimapTitle: 'Minimap — white: you, yellow: others',
+    // kind subtitle on the hover popup for non-weapon items
+    kind: { resource: 'Resource', tool: 'Tool', structure: 'Structure', consumable: 'Consumable', food: 'Food' },
   },
 
   recipe: {
@@ -329,6 +331,16 @@ const en = {
   },
 
   toast: {
+    // full-length row labels for the inventory hover popup (Codex Card)
+    physDmg: 'Physical damage',
+    critChance: 'Critical strike chance',
+    critMult: 'Critical strike multiplier',
+    atkSpeed: 'Attacks per second',
+    dpsFull: 'Damage per second',
+    weaponKind: 'weapon',
+    rarReward: 'Reward',
+    rarAncient: 'Ancient',
+    rarBasic: 'Basic',
     sealBroken: '⚡ The Seal is broken — the arena stands open, forever!',
     guardianBested: '🏆 The Guardian sinks into slumber — every fighter earns its Scales!',
     guardianUnbeaten: 'The Guardian returns to slumber, unbeaten. The totem is spent.',
@@ -660,6 +672,8 @@ const de: Strings = {
 
   recipe: {
     tooltip: (name, kind, desc, cost, stats) => `${name} (${kind})\n${desc}\nKosten: ${cost}${stats}`,
+    // kind subtitle on the hover popup for non-weapon items
+    kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung' },
     needsTool: (name) => `benötigt ${name}`,
     kindTool: 'Werkzeug',
     kindBuilding: 'Gebäude',
@@ -725,6 +739,16 @@ const de: Strings = {
     guardianBested: '🏆 Der Wächter sinkt in den Schlummer — jeder Kämpfer erhält seine Schuppen!',
     guardianUnbeaten: 'Der Wächter kehrt in den Schlummer zurück, unbesiegt. Das Totem ist verbraucht.',
     knockedDown: (n) => `Niedergeschlagen! (${n}/3 — der dritte bedeutet Erschöpfung)`,
+    // full-length row labels for the inventory hover popup (Codex Card)
+    physDmg: 'Physischer Schaden',
+    critChance: 'Kritische Trefferchance',
+    critMult: 'Kritischer Schadensmultiplikator',
+    atkSpeed: 'Angriffe pro Sekunde',
+    dpsFull: 'Schaden pro Sekunde',
+    weaponKind: 'Waffe',
+    rarReward: 'Belohnung',
+    rarAncient: 'Uralt',
+    rarBasic: 'Einfach',
     exhaustionHammock:
       'Erschöpfung übermannt dich — raus aus diesem Kampf, du erwachst in deiner Hängematte. Frühere Treffer zählen weiter.',
     exhaustionSpawn:

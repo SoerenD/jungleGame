@@ -359,6 +359,93 @@
   margin: 2px 0 6px;
 }
 
+/* ---- item hover popup: the Path-of-Exile "Codex Card" (see hud.ts) ---- */
+#item-tooltip {
+  position: fixed;
+  z-index: 100;
+  pointer-events: none;
+  display: none;
+  width: 232px;
+  max-width: calc(100vw - 24px);
+  font-size: calc(12.5px * var(--ui-scale));
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.6));
+}
+#item-tooltip.show {
+  display: block;
+}
+.tt-card {
+  /* --tt-rar: the rarity accent; overridden by the .tt-rar-* classes below */
+  --tt-rar: var(--accent);
+  background: rgba(9, 20, 12, 0.97);
+  border: 2px solid #b8862f;
+  border-radius: 4px;
+  padding: 2px;
+}
+.tt-inner {
+  border: 1px solid #5c451f;
+  border-radius: 2px;
+}
+.tt-head {
+  text-align: center;
+  padding: 7px 8px 6px;
+  background: rgba(255, 209, 102, 0.06);
+}
+.tt-name {
+  font-size: calc(15px * var(--ui-scale));
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--tt-rar);
+}
+.tt-kind {
+  font-size: calc(10.5px * var(--ui-scale));
+  color: var(--dim);
+  margin-top: 1px;
+}
+.tt-div {
+  height: 1px;
+  background: #5c451f;
+}
+.tt-stats {
+  padding: 8px 11px;
+}
+.tt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  line-height: 1.55;
+}
+.tt-lbl {
+  color: var(--dim);
+}
+.tt-val {
+  font-weight: 600;
+}
+.tt-mod {
+  color: #7db8ff; /* Path-of-Exile blue mod values */
+}
+.tt-dps {
+  color: var(--accent);
+}
+.tt-flavor {
+  padding: 7px 11px 9px;
+  font-size: calc(11px * var(--ui-scale));
+  font-style: italic;
+  line-height: 1.45;
+  color: #c9a86a;
+}
+.tt-rar-reward {
+  --tt-rar: #ff9f45;
+}
+.tt-rar-reward .tt-head {
+  background: rgba(255, 159, 69, 0.1);
+}
+.tt-rar-ancient {
+  --tt-rar: #5dccc0;
+}
+.tt-rar-ancient .tt-head {
+  background: rgba(93, 204, 192, 0.1);
+}
+
 button.ui-btn {
   background: #2e5638;
   color: var(--text);

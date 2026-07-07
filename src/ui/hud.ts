@@ -14,7 +14,7 @@ import {
   WORLD_LABEL_SCALE_STEP,
   type AudioChannel,
 } from '../config';
-import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../content/guardian';
+import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine, weaponStatParts } from '../content/guardian';
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
@@ -305,6 +305,7 @@ export function initHud(name: string, muted: boolean): void {
       <button class="ui-btn" id="btn-mute" data-testid="btn-mute">${muted ? t.bottomBar.muted : t.bottomBar.sound}</button>
       <button class="ui-btn" id="btn-settings" data-testid="btn-settings" title="${t.settings.btnTitle}">⚙</button>
     </div>
+    <div id="item-tooltip" role="tooltip" aria-hidden="true" data-testid="item-tooltip"></div>
   `;
   document.body.appendChild(hud);
 
@@ -1380,6 +1381,89 @@ function renderLoadout(): void {
   }
 }
 
+// ------------------------------------------------------------ item hover popup
+// A Path-of-Exile-style "Codex Card" shown while hovering an inventory slot:
+// a rarity-tinted name, a kind subtitle and — for weapons that strike the
+// Guardian (WEAPON_COMBAT) — a damage / crit / attack-speed / DPS stat block,
+// closing with the item's flavour line. Replaces the old native `title` box.
+type ItemRarity = 'reward' | 'ancient' | 'basic';
+
+/** three name colours: Delve/Deep rewards, tier-2 ancients, everything else */
+function itemRarity(id: ItemId): ItemRarity {
+  if (id === 'sword' || id === 'forgebrand') return 'reward';
+  if (id === 'ancient_axe' || id === 'ancient_pickaxe') return 'ancient';
+  return 'basic';
+}
+
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** one "Label ……… value" stat row of the Codex Card */
+function ttRow(label: string, value: string, cls: 'mod' | 'dps' = 'mod'): string {
+  return `<div class="tt-row"><span class="tt-lbl">${escHtml(label)}</span><span class="tt-val tt-${cls}">${escHtml(value)}</span></div>`;
+}
+
+/** the Codex-Card markup for one inventory item */
+function itemTooltipHtml(id: ItemId): string {
+  const def = ITEMS[id];
+  const rar = itemRarity(id);
+  const combat = WEAPON_COMBAT[id as ToolId];
+  const rarLabel = rar === 'reward' ? t.weapon.rarReward : rar === 'ancient' ? t.weapon.rarAncient : t.weapon.rarBasic;
+  const subtitle = combat ? `${rarLabel} ${t.weapon.weaponKind}` : t.inv.kind[def.kind];
+  let stats = '';
+  if (combat) {
+    const p = weaponStatParts(id as ToolId);
+    stats =
+      '<div class="tt-div"></div><div class="tt-stats">' +
+      ttRow(t.weapon.physDmg, p.band) +
+      (p.canCrit
+        ? ttRow(t.weapon.critChance, `${p.critPct}%`) + ttRow(t.weapon.critMult, `×${p.critMult.toFixed(1)}`)
+        : ttRow(t.weapon.critChance, t.weapon.noCrit)) +
+      ttRow(t.weapon.atkSpeed, p.aps) +
+      ttRow(t.weapon.dpsFull, String(p.dps), 'dps') +
+      '</div>';
+  }
+  return (
+    `<div class="tt-card tt-rar-${rar}"><div class="tt-inner">` +
+    `<div class="tt-head"><div class="tt-name">${escHtml(def.name)}</div><div class="tt-kind">${escHtml(subtitle)}</div></div>` +
+    stats +
+    '<div class="tt-div"></div>' +
+    `<div class="tt-flavor">${escHtml(def.desc)}</div>` +
+    '</div></div>'
+  );
+}
+
+function showItemTooltip(id: ItemId, anchor: HTMLElement): void {
+  const tip = el('item-tooltip');
+  tip.innerHTML = itemTooltipHtml(id);
+  tip.classList.add('show');
+  tip.setAttribute('aria-hidden', 'false');
+  positionItemTooltip(anchor); // measure only once it's laid out
+}
+
+function hideItemTooltip(): void {
+  const tip = document.getElementById('item-tooltip');
+  if (!tip) return;
+  tip.classList.remove('show');
+  tip.setAttribute('aria-hidden', 'true');
+}
+
+/** sit the popup beside the hovered slot — left of the right-docked pack, clamped on-screen */
+function positionItemTooltip(anchor: HTMLElement): void {
+  const tip = el('item-tooltip');
+  const r = anchor.getBoundingClientRect();
+  const gap = 10;
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  let left = r.left - tw - gap; // inventory panel is docked right → open to the left
+  if (left < gap) left = r.right + gap; // no room? flip to the slot's right
+  // clamp on-screen, lower bound last so a viewport narrower than the popup still
+  // pins it to the left edge instead of running off it
+  left = Math.max(gap, Math.min(left, window.innerWidth - tw - gap));
+  const top = Math.max(gap, Math.min(r.top, window.innerHeight - th - gap));
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
 /** what a slot's item does on double-click / via the detail-bar button */
 function invUse(id: ItemId): void {
   const kind = ITEMS[id].kind;
@@ -1390,6 +1474,7 @@ function invUse(id: ItemId): void {
 function renderInventory(): void {
   const grid = el('inv-grid');
   grid.innerHTML = '';
+  hideItemTooltip(); // re-render discards the slots; drop any popup anchored to an old one
   const present = new Map(
     // skip any item id no longer known (e.g. a retired Structure still in a save)
     (Object.entries(inv) as [ItemId, number][]).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id]),
@@ -1420,7 +1505,11 @@ function renderInventory(): void {
       slot.classList.add('filled');
       if (id === invSelected) slot.classList.add('selected');
       slot.setAttribute('data-testid', `inv-${id}`);
-      slot.title = `${def.name} — ${def.desc}`;
+      // a11y label kept for screen readers; the visible hover popup is the Codex
+      // Card (showItemTooltip) — it replaces the old native `title` box.
+      slot.setAttribute('aria-label', `${def.name} — ${def.desc}`);
+      slot.addEventListener('mouseenter', () => showItemTooltip(id, slot));
+      slot.addEventListener('mouseleave', hideItemTooltip);
       const icon = document.createElement('img');
       icon.className = 'inv-icon';
       icon.src = itemIcon(id);
@@ -1436,6 +1525,7 @@ function renderInventory(): void {
       }
       slot.draggable = true;
       slot.addEventListener('dragstart', (e) => {
+        hideItemTooltip(); // don't leave the popup floating over a drag
         e.dataTransfer!.setData('text/plain', String(i));
         // extra payloads so the item can also be dropped onto the Loadout bar
         // (Tools) or the game canvas to place it (Structures)

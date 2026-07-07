@@ -140,6 +140,32 @@ export function weaponStatLine(
   return `⚔ ${band} ${labels.dmg} · ${crit} · ${aps}/s · ~${Math.round(weaponDps(tool))} ${labels.dps}`;
 }
 
+/**
+ * The same band · crit · attack speed · DPS numbers as `weaponStatLine`, but as
+ * separate display-unit pieces so a multi-line panel (the inventory hover popup,
+ * hud.ts) can put each on its own row. Keeps the ×scale + crit-factor maths in
+ * one place; node-importable, no i18n.
+ */
+export function weaponStatParts(tool: ToolId | undefined): {
+  band: string;
+  canCrit: boolean;
+  critPct: number;
+  critMult: number;
+  aps: string;
+  dps: number;
+} {
+  const w = weaponCombat(tool);
+  const s = GUARDIAN_DISPLAY_SCALE;
+  return {
+    band: w.min === w.max ? `${w.min * s}` : `${w.min * s}–${w.max * s}`,
+    canCrit: w.critChance > 0,
+    critPct: Math.round(w.critChance * 100),
+    critMult: w.critMult,
+    aps: (1000 / w.attackMs).toFixed(2),
+    dps: Math.round(weaponDps(tool)),
+  };
+}
+
 // ------------------------------------------------------------- fury phases
 
 /**
