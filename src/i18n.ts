@@ -270,6 +270,9 @@ const en = {
     tooltip: (name: string, kind: string, desc: string, cost: string, stats: string) =>
       `${name} (${kind})\n${desc}\nCost: ${cost}${stats}`,
     needsTool: (name: string) => `needs ${name}`,
+    atForge: 'at a Forge',
+    forgeTip: (near: boolean): string =>
+      near ? 'A Forge is nearby — you can forge this here.' : 'Only forged at a Forge — build one and stand beside it.',
     kindTool: 'tool',
     kindBuilding: 'building',
     kindProp: 'prop',
@@ -367,6 +370,7 @@ const en = {
     crafted: (name: string) => `Crafted ${name}!`,
     notEnoughResources: 'Not enough resources.',
     missingTool: 'You are missing the required tool.',
+    forgeRequired: 'That can only be forged at a Forge — stand beside one.',
     crateGone: 'Someone was quicker — the crate no longer holds that.',
     millFullOrNoWood: 'The mill is full or you carry no wood.',
     noPlankYet: 'No plank is finished yet — the mill works slowly.',
@@ -675,6 +679,9 @@ const de: Strings = {
     // kind subtitle on the hover popup for non-weapon items
     kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung' },
     needsTool: (name) => `benötigt ${name}`,
+    atForge: 'an einer Schmiede',
+    forgeTip: (near) =>
+      near ? 'Eine Schmiede ist in der Nähe — du kannst dies hier schmieden.' : 'Nur an einer Schmiede zu schmieden — bau eine und stell dich daneben.',
     kindTool: 'Werkzeug',
     kindBuilding: 'Gebäude',
     kindProp: 'Deko',
@@ -771,6 +778,7 @@ const de: Strings = {
     crafted: (name) => `${name} hergestellt!`,
     notEnoughResources: 'Nicht genug Ressourcen.',
     missingTool: 'Dir fehlt das benötigte Werkzeug.',
+    forgeRequired: 'Das lässt sich nur an einer Schmiede schmieden — stell dich daneben.',
     crateGone: 'Jemand war schneller — die Kiste enthält das nicht mehr.',
     millFullOrNoWood: 'Das Werk ist voll oder du trägst kein Holz.',
     noPlankYet: 'Noch kein Brett fertig — das Werk arbeitet langsam.',

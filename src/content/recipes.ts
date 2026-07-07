@@ -7,6 +7,12 @@ export interface Recipe {
   cost: Partial<Record<ResourceId, number>>;
   /** tool that must be in the inventory to craft (not consumed) */
   requiresTool?: ToolId;
+  /**
+   * the heavy forged gear can only be crafted while standing next to a Forge
+   * Structure — not from the pack anywhere. Enforced client-side by proximity
+   * (like cooking at a campfire); the generic jw_craft RPC is unchanged.
+   */
+  requiresForge?: boolean;
   kind: 'tool' | 'structure' | 'consumable';
   /**
    * A3 (ADR-0010): the minimum Village tier at which this recipe unlocks. Absent
@@ -29,18 +35,19 @@ export const RECIPES: Recipe[] = [
   { id: 'hand_torch', output: 'hand_torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'tool' },
 
   // v2 tier-2 tools — every recipe demands Guardian Scales (fight at least
-  // once) AND planks: tier 2 builds on refined wood (Sawmill required)
-  { id: 'ancient_axe', output: 'ancient_axe', count: 1, cost: { guardian_scale: 3, plank: 3, stone: 2 }, kind: 'tool' },
-  { id: 'ancient_pickaxe', output: 'ancient_pickaxe', count: 1, cost: { guardian_scale: 3, plank: 2, stone: 3 }, kind: 'tool' },
+  // once) AND planks: tier 2 builds on refined wood (Sawmill required). The heavy
+  // metal gear is FORGED: craftable only beside a Forge (requiresForge), not the pack.
+  { id: 'ancient_axe', output: 'ancient_axe', count: 1, cost: { guardian_scale: 3, plank: 3, stone: 2 }, requiresForge: true, kind: 'tool' },
+  { id: 'ancient_pickaxe', output: 'ancient_pickaxe', count: 1, cost: { guardian_scale: 3, plank: 2, stone: 3 }, requiresForge: true, kind: 'tool' },
   { id: 'fishing_rod', output: 'fishing_rod', count: 1, cost: { guardian_scale: 2, plank: 2, fiber: 2 }, kind: 'tool' },
 
   // Dungeons v1 (ADR-0007) — the Sword: the game's first pure-combat Tool,
   // forged from Delve loot (rare Deep Core + common Husk Shards) plus planks.
-  { id: 'sword', output: 'sword', count: 1, cost: { deep_core: 1, husk_shard: 6, plank: 3, stone: 2 }, kind: 'tool' },
+  { id: 'sword', output: 'sword', count: 1, cost: { deep_core: 1, husk_shard: 6, plank: 3, stone: 2 }, requiresForge: true, kind: 'tool' },
   // ADR-0011 — the Forgebrand: the Deep's pure-combat sidegrade, forged from Deep
   // loot (rare Forge Core + common Cinder Shards) plus planks + stone. An
   // INDEPENDENT craft — it does NOT consume the Sword (they coexist as feel-choices).
-  { id: 'forgebrand', output: 'forgebrand', count: 1, cost: { forge_core: 1, cinder_shard: 6, plank: 3, stone: 2 }, kind: 'tool' },
+  { id: 'forgebrand', output: 'forgebrand', count: 1, cost: { forge_core: 1, cinder_shard: 6, plank: 3, stone: 2 }, requiresForge: true, kind: 'tool' },
 
   // v2 — cheap, repeatable summon Offering (tier-1 resources only)
   { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },
@@ -60,6 +67,9 @@ export const RECIPES: Recipe[] = [
 
   // v3 — the Sawmill is tier-1 (the gateway to refined wood)...
   { id: 'sawmill', output: 'sawmill', count: 1, cost: { wood: 6, stone: 4 }, requiresTool: 'hammer', kind: 'structure' },
+  // ...and the Forge is the tier-2 workshop: build it (planks + stone, hammer) to
+  // unlock forging the heavy metal gear beside it.
+  { id: 'forge', output: 'forge', count: 1, cost: { plank: 4, stone: 8 }, requiresTool: 'hammer', kind: 'structure' },
   // ...and the new functional Structures + decor consume its planks
   { id: 'hammock', output: 'hammock', count: 1, cost: { plank: 2, fiber: 3 }, kind: 'structure' },
   { id: 'signpost', output: 'signpost', count: 1, cost: { plank: 1, fiber: 1 }, kind: 'structure' },

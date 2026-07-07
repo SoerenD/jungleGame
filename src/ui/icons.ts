@@ -7,7 +7,7 @@
 import { OBJECTS } from '../assetConfig';
 import { asset } from '../paths';
 import type { ItemId } from '../content/items';
-import { VILLAGE_ART, type StructureArt } from '../content/village';
+import { FORGE_ART, VILLAGE_ART, type StructureArt } from '../content/village';
 import { WILDLIFE_ART } from '../content/wildlife';
 
 /** shared palette: char → CSS color ('.' and unknown chars are transparent) */
@@ -985,6 +985,37 @@ function drawTrophy(R: Put, C: Clear): void {
   R(5, 45, 3, 1, B_PAL.stone.hi);
 }
 
+// The Forge: a stone furnace with a chimney and a bright fire mouth, an iron
+// anvil on a timber stump beside it. Hot colours are literals (no B_PAL entry).
+function drawForge(R: Put, C: Clear): void {
+  const S = B_PAL.stone;
+  const iron = '#4a4e54', ironHi = '#7d828a', ironFace = '#5b5f66';
+  const emberD = '#c2531f', ember = '#e0763c', ember2 = '#f2b13c', core = '#ffe08a';
+  // ground slab
+  R(2, 43, 28, 5, B_OUT); bStones(R, 3, 44, 26, 3, true);
+  // smoke + chimney stack
+  R(8, 2, 2, 2, '#6f6a61'); R(9, 0, 3, 2, '#8f8a80'); R(11, 1, 2, 2, '#a49e94');
+  R(6, 3, 8, 6, B_OUT); bStones(R, 7, 4, 6, 4, false); R(7, 4, 6, 1, S.hi);
+  // hood widening down onto the body
+  R(4, 9, 11, 4, B_OUT); bStones(R, 5, 10, 9, 2, false);
+  // furnace body
+  R(3, 13, 14, 30, B_OUT); bStones(R, 4, 14, 12, 28, true); R(4, 14, 12, 1, S.hi);
+  // arched fire mouth, banked from deep ember to a white-hot core
+  R(5, 25, 9, 15, B_OUT); C(5, 25, 1, 1); C(13, 25, 1, 1);
+  R(6, 27, 7, 12, emberD); R(7, 29, 5, 9, ember); R(8, 31, 3, 6, ember2); R(9, 33, 1, 3, core);
+  R(6, 38, 7, 1, ember2); R(7, 39, 5, 1, ember);
+  R(15, 28, 1, 1, core); R(16, 31, 1, 1, ember2); R(14, 23, 1, 1, core); // sparks
+  // anvil: horn, face, waist and base
+  R(16, 27, 2, 2, B_OUT); R(16, 27, 1, 1, ironFace);
+  R(18, 26, 12, 4, B_OUT); R(19, 27, 10, 2, ironFace); R(19, 27, 10, 1, ironHi);
+  R(22, 30, 4, 3, B_OUT); R(23, 30, 2, 3, iron);
+  R(19, 33, 12, 2, B_OUT); R(20, 33, 10, 1, iron);
+  R(22, 25, 3, 1, ember2); R(23, 25, 1, 1, core); // glowing ingot on the face
+  // timber stump under the anvil
+  R(21, 35, 9, 8, B_OUT); R(22, 36, 7, 7, B_PAL.timber); R(22, 36, 1, 7, B_PAL.timberHi);
+  R(24, 36, 1, 7, '#3c2c1d'); R(26, 36, 1, 7, '#3c2c1d'); R(28, 36, 1, 7, '#3c2c1d');
+}
+
 // Overgrown-Jungle vine arch (mossy stone + hanging vines)
 const JP = {
   out: '#1c2018', stoneD: '#454b40', stoneM: '#5d6455', stone: '#78806e', stoneL: '#99a189',
@@ -1119,6 +1150,14 @@ function drawStructureIcon(R: Put, C: Clear, kind: StructureArt['kind']): void {
       R(2, 3, 8, 6, '#b08a58'); R(2, 3, 8, 1, '#c9a06c');
       R(4, 4, 2, 1, B_PAL.timber); R(7, 6, 2, 1, B_PAL.timber); R(3, 7, 1, 1, B_PAL.timber);
       break;
+    case 'forge':
+      // stone furnace with a glowing fire mouth + short chimney, a small anvil beside it
+      R(3, 0, 3, 2, B_OUT); R(4, 0, 1, 1, '#8f8a80'); // chimney + smoke
+      R(1, 2, 7, 10, B_OUT); bStones(R, 2, 3, 5, 8, false);
+      R(3, 6, 3, 5, B_OUT); R(3, 7, 3, 4, '#e0763c'); R(4, 8, 1, 3, '#ffe08a');
+      R(8, 8, 4, 1, B_OUT); R(9, 9, 2, 1, B_OUT); R(8, 10, 4, 1, B_OUT); // anvil
+      R(9, 9, 2, 1, S.hi);
+      break;
   }
 }
 
@@ -1135,6 +1174,7 @@ const STRUCTURE_DRAWERS: Record<StructureArt['kind'], (R: Put, C: Clear) => void
   flowers: (R) => drawFlowers(R),
   trophy: (R, C) => drawTrophy(R, C),
   rug: (R) => drawRug(R),
+  forge: (R, C) => drawForge(R, C),
 };
 
 /**
@@ -1164,7 +1204,9 @@ export function itemIcon(id: ItemId): string {
   if (hit) return hit;
   const grid = GRIDS[id];
   const villageArt: StructureArt | undefined =
-    VILLAGE_ART[id as keyof typeof VILLAGE_ART] ?? WILDLIFE_ART[id as keyof typeof WILDLIFE_ART];
+    VILLAGE_ART[id as keyof typeof VILLAGE_ART] ??
+    WILDLIFE_ART[id as keyof typeof WILDLIFE_ART] ??
+    FORGE_ART[id as keyof typeof FORGE_ART];
   let url = '';
   if (grid) {
     const canvas = document.createElement('canvas');

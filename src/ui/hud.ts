@@ -36,6 +36,8 @@ let seal: SealState | null = null;
 /** the communal Village record (ADR-0010) — drives the tier panel + recipe gating */
 let village: VillageRecord | null = null;
 let villageTier = 0;
+/** standing beside a Forge — the heavy forged gear is only craftable then */
+let nearForge = false;
 let journey: JourneyState | null = null;
 let placingNow = false;
 /** the four craft tabs: Tools & Weapons, Buildings (≥2×2), Props (1×1), Consumables */
@@ -442,6 +444,17 @@ export function initHud(name: string, muted: boolean): void {
   });
   bus.on('village-near', (near: boolean) => {
     el('village-panel').classList.toggle('open', near);
+  });
+  // beside a Forge the heavy forged gear becomes craftable — re-render so those
+  // cards flip between locked and craftable as the Player steps up to it
+  bus.on('forge-near', (near: boolean) => {
+    nearForge = near;
+    renderRecipes();
+  });
+  // E at the Forge opens the craft menu on the Tools & Weapons tab
+  bus.on('open-forge', () => {
+    el('craft-panel').classList.add('open');
+    setCraftTab('tool');
   });
   bus.on('fog', (explored: Set<number>, chunksW: number, chunksH: number) => {
     if (!fogLayer) fogLayer = document.createElement('canvas');
@@ -1614,6 +1627,7 @@ function setCraftTab(tab: CraftTab): void {
 /** is a recipe craftable right now with the current inventory? */
 function recipeCraftable(r: (typeof RECIPES)[number]): boolean {
   if (r.requiresTool && (inv[r.requiresTool] ?? 0) <= 0) return false;
+  if (r.requiresForge && !nearForge) return false; // heavy forged gear needs a Forge nearby
   for (const [res, count] of Object.entries(r.cost)) {
     if ((inv[res as ItemId] ?? 0) < (count as number)) return false;
   }
@@ -1661,6 +1675,26 @@ function renderRecipes(): void {
       if (have <= 0) craftable = false;
       costText.push(t.recipe.needsTool(ITEMS[r.requiresTool].name));
       cost.appendChild(ingChip(r.requiresTool, 1, have, true));
+    }
+    // the heavy forged gear: a Forge must be nearby (not a pack item) — a station
+    // chip that greys out until the Player stands beside a built Forge
+    if (r.requiresForge) {
+      if (!nearForge) craftable = false;
+      costText.push(t.recipe.atForge);
+      const chip = document.createElement('span');
+      chip.className = 'recipe-ing recipe-tool' + (nearForge ? '' : ' lack');
+      chip.title = t.recipe.forgeTip(nearForge);
+      const img = document.createElement('img');
+      img.className = 'recipe-ing-icon';
+      img.src = itemIcon('forge');
+      img.alt = ITEMS.forge.name;
+      img.draggable = false;
+      chip.appendChild(img);
+      const badge = document.createElement('span');
+      badge.className = 'recipe-ing-count';
+      badge.textContent = '🔨';
+      chip.appendChild(badge);
+      cost.appendChild(chip);
     }
 
     const card = document.createElement('div');

@@ -110,6 +110,7 @@ import {
   FESTIVAL_SPEED_FACTOR,
   FOUNTAIN_WISH_ITEM,
   FOUNTAIN_WISH_THRESHOLD,
+  FORGE_ART,
   inventoryCapacity,
   inVillageZone,
   villageBuff,
@@ -129,6 +130,7 @@ import {
   type WildKind,
 } from '../content/wildlife';
 import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX, projTheme } from '../mobSprites';
+import { RECIPES } from '../content/recipes';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import { drawStructureArt } from '../ui/icons';
@@ -358,6 +360,8 @@ export class GameScene extends Phaser.Scene {
   private villageAura?: Phaser.GameObjects.Graphics;
   private villageBanner?: Phaser.GameObjects.Text;
   private nearHall = false;
+  /** standing beside a Forge (ADR-none): gates crafting the heavy forged gear */
+  private nearForge = false;
   // ---- v2: the Guardian
   private fight: FightState | null = null;
   private guardianSprite!: Phaser.GameObjects.Sprite;
@@ -1024,7 +1028,7 @@ export class GameScene extends Phaser.Scene {
 
   /** bake a sprite for every Village Building + Wildlife decor from its art spec — no PNGs */
   private bakeVillageTextures(): void {
-    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART })) {
+    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART })) {
       if (!art) continue;
       const key = `st_${id}`;
       if (this.textures.exists(key)) continue;
@@ -2431,6 +2435,13 @@ export class GameScene extends Phaser.Scene {
       this.applyMusicVolumes();
     });
     bus.on('craft', (recipeId: string) => {
+      // backstop the Forge gate (the HUD already hides these cards away from a
+      // Forge): the heavy forged gear can only be made beside a Forge Structure
+      const recipe = RECIPES.find((r) => r.id === recipeId);
+      if (recipe?.requiresForge && !this.nearForge) {
+        bus.emit('toast', t.toast.forgeRequired, 'bad');
+        return;
+      }
       void this.backend.craft(recipeId).then((result) => {
         if (result.ok) {
           this.inventory = result.inventory;
@@ -2814,6 +2825,10 @@ export class GameScene extends Phaser.Scene {
     if (fountain) return { swing: false, run: () => this.openFountain() };
     const flowerBed = this.nearbyStructure(['flower_bed']);
     if (flowerBed) return { swing: false, run: () => this.tendFlowers() };
+    // the Forge: E opens the craft menu on the Tools & Weapons tab, where the
+    // heavy forged gear is now craftable (this station is what unlocks it)
+    const forge = this.nearbyStructure(['forge']);
+    if (forge) return { swing: false, run: () => bus.emit('open-forge') };
 
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
@@ -3003,6 +3018,7 @@ export class GameScene extends Phaser.Scene {
       torch: { scale: 1.4, base: 0.6 },
       golden_idol: { scale: 1.6, base: 0.5 },
       brazier: { scale: 2.8, base: 0.8 },
+      forge: { scale: 2.2, base: 0.7 }, // the furnace mouth burns warm into the night
     }[s.type as string];
     if (glowDef) {
       glowImg = this.add
@@ -3495,6 +3511,13 @@ export class GameScene extends Phaser.Scene {
     if (nearHall !== this.nearHall) {
       this.nearHall = nearHall;
       bus.emit('village-near', nearHall);
+    }
+    // beside a Forge, the heavy forged Tools/weapons become craftable (the craft
+    // menu re-renders on this flag); a tight 3×3 like cooking at a campfire
+    const nearForge = !!this.nearbyStructure(['forge']);
+    if (nearForge !== this.nearForge) {
+      this.nearForge = nearForge;
+      bus.emit('forge-near', nearForge);
     }
     this.updateFog();
     this.checkVista();

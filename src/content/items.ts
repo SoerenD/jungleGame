@@ -58,6 +58,8 @@ export type StructureId =
   | 'signpost'
   | 'sawmill'
   | 'table'
+  // the Forge: a crafting station where the heavy forged tools/weapons are made
+  | 'forge'
   // A3 (ADR-0010) — the Village: the Hall (founding + communal spawn), the four
   // later milestone Buildings, and per-tier decor unlocks. Progress lives in the
   // per-world Village record, not these tiles (re-founding never resets it).
@@ -160,6 +162,10 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   // Any Player may dismantle any Structure for its full refund (no ownership).
   sawmill: { name: 'Sawmill', kind: 'structure', desc: 'A 2×2 timber mill: deposit wood, collect planks after its slow work. The first real Building.', blocks: true, w: 2, h: 2 },
   table: { name: 'Table', kind: 'structure', desc: 'A sturdy plank table for the camp.', blocks: true },
+  // A 2×2 workshop with a stone furnace and anvil. Stand beside it to forge the
+  // heavy metal gear (Ancient Axe/Pickaxe, Sword, Forgebrand) — they can no longer
+  // be made from the pack alone.
+  forge: { name: 'Forge', kind: 'structure', desc: 'A 2×2 furnace-and-anvil workshop. Stand close to forge the heavy metal Tools and weapons — the Ancient Axe, Ancient Pickaxe, Sword and Forgebrand can only be made here.', blocks: true, w: 2, h: 2 },
   // A3 (ADR-0010): the Village. The Hall founds the Village wherever it is raised
   // and becomes the communal wake point; the four later Buildings are each a
   // tier's milestone; the rest are per-tier decor. Contributions feed one shared,
@@ -231,6 +237,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   signpost: { name: 'Wegweiser', desc: 'Trägt eine kurze Zeile deiner Schrift, für alle lesbar.' },
   sawmill: { name: 'Sägewerk', desc: 'Eine 2×2-Holzmühle: Holz einlegen, Bretter holen, wenn ihre langsame Arbeit getan ist. Das erste echte Gebäude.' },
   table: { name: 'Tisch', desc: 'Ein stabiler Brettertisch fürs Lager.' },
+  forge: { name: 'Schmiede', desc: 'Eine 2×2-Werkstatt aus Ofen und Amboss. Stell dich nah heran, um die schweren Metallwerkzeuge und -waffen zu schmieden — Uralte Axt, Uralte Spitzhacke, Schwert und Schmiedebrand lassen sich nur hier fertigen.' },
   village_hall: { name: 'Dorfhalle', desc: 'Errichte sie irgendwo, um das Dorf zu gründen und zur Heimat zu machen: Jeder ohne Hängematte erwacht hier. Stell dich nah heran und drücke E, um Ressourcen und Beute in den gemeinsamen Vorrat zu geben. Ein Neugründen setzt das Dorf nie zurück.' },
   village_well: { name: 'Dorfbrunnen', desc: 'Der Weiler-Meilenstein: Errichte ihn in der Dorfzone bei vollem Vorrat, um aus dem Lager einen Weiler zu machen.' },
   market_square: { name: 'Marktplatz', desc: 'Der Dorf-Meilenstein: ein belebter Stand, der einen Weiler zum vollen Dorf erhebt.' },

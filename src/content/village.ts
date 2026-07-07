@@ -342,7 +342,7 @@ export interface StructureArt {
    */
   kind:
     | 'hall' | 'well' | 'market' | 'keep' | 'monument' | 'fountain' | 'archJungle'
-    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug';
+    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge';
   /**
    * tiles the sprite rises ABOVE its footprint (defaults from shape: monument 2,
    * else 1). The bell-towered hall rises 3 so it out-scales the houses.
@@ -363,4 +363,13 @@ export const VILLAGE_ART: Partial<Record<StructureId, StructureArt>> = {
   fountain: { kind: 'fountain', body: '#847e6d', roof: '#9e9782', trim: '#537f8d', w: 2, h: 2, shape: 'monument' },
   flower_bed: { kind: 'flowers', body: '#4c3826', roof: '#5d7440', trim: '#a65445', w: 1, h: 1, shape: 'decor' },
   victory_arch: { kind: 'archJungle', body: '#78806e', roof: '#5d6455', trim: '#4d6b3c', w: 2, h: 1, shape: 'monument' },
+};
+
+/**
+ * Code-drawn art for non-Village functional Buildings that ship without a PNG.
+ * Shares the same StructureArt pipeline as VILLAGE_ART (baked in-scene, drawn as a
+ * slot icon) but is NOT a Village Building — it never touches the tier ladder.
+ */
+export const FORGE_ART: Partial<Record<StructureId, StructureArt>> = {
+  forge: { kind: 'forge', body: '#635e4f', roof: '#3a2c22', trim: '#e0763c', w: 2, h: 2, shape: 'building', glow: true },
 };
