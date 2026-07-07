@@ -141,6 +141,16 @@ export function tradeYield(giveItem: string, giveCount: number, getItem: string,
   return Math.floor((giveCount * vGive * (1 - tradeTaxForTier(tier))) / vGet);
 }
 
+/** the fewest `giveItem` that buys 1 whole `getItem` at `tier` (0 if the trade is invalid) */
+export function tradeUnitCost(giveItem: string, getItem: string, tier: number): number {
+  if (giveItem === getItem) return 0;
+  if (!TRADEABLE.includes(giveItem) || !TRADEABLE.includes(getItem)) return 0;
+  const vGive = VILLAGE_CONTRIB[giveItem] ?? 0;
+  const vGet = VILLAGE_CONTRIB[getItem] ?? 0;
+  if (vGive <= 0 || vGet <= 0) return 0;
+  return Math.ceil(vGet / (vGive * (1 - tradeTaxForTier(tier))));
+}
+
 /** the Village record: collective tier + additive pool + Hall location (tile-independent) */
 export interface VillageRecord {
   tier: VillageTier;

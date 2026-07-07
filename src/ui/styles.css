@@ -936,7 +936,7 @@ button.ui-btn:disabled {
 /* Trade Post: label | select | amount on one line */
 .trade-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 8px;
   margin: 6px 0;
@@ -944,6 +944,16 @@ button.ui-btn:disabled {
 .trade-lbl {
   font-size: calc(13px * var(--ui-scale));
   color: var(--dim);
+}
+.trade-max {
+  padding: 4px 8px;
+  font-size: calc(12px * var(--ui-scale));
+}
+.trade-rate {
+  margin: 4px 2px 0;
+  font-size: calc(12px * var(--ui-scale));
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
 }
 #trade-panel select,
 #trade-panel input,

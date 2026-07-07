@@ -18,7 +18,7 @@ import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine } from '../conten
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
-import { inventoryCapacity, milestoneForTier, tierThreshold, TRADEABLE, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
+import { inventoryCapacity, milestoneForTier, tierThreshold, TRADEABLE, tradeUnitCost, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
 import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
 import { bus } from './bus';
 import { asset } from '../paths';
@@ -193,8 +193,9 @@ export function initHud(name: string, muted: boolean): void {
 
     <div id="trade-panel" class="panel" data-testid="trade-panel">
       <h3>${t.trade.title}</h3>
-      <div class="trade-row"><span class="trade-lbl">${t.trade.give}</span><select id="trade-give"></select><input id="trade-amt" type="number" min="1" value="1" /></div>
+      <div class="trade-row"><span class="trade-lbl">${t.trade.give}</span><select id="trade-give"></select><input id="trade-amt" type="number" min="1" value="1" /><button class="ui-btn trade-max" id="trade-max">${t.trade.max}</button></div>
       <div class="trade-row"><span class="trade-lbl">${t.trade.get}</span><select id="trade-get"></select></div>
+      <div id="trade-rate" class="trade-rate"></div>
       <div id="trade-out" class="village-give-total"></div>
       <div class="village-give-btns">
         <span class="village-give-spacer"></span>
@@ -589,23 +590,47 @@ export function initHud(name: string, muted: boolean): void {
 
   // ---- ADR-0013: Trade Post (market_square) resource-exchange panel
   let tradeTier = 0;
+  let tradeHeld: Partial<Record<string, number>> = {};
   const tradeGive = () => el<HTMLSelectElement>('trade-give').value as ItemId;
   const tradeGet = () => el<HTMLSelectElement>('trade-get').value as ItemId;
   const tradeAmt = () => Math.max(0, Math.floor(Number(el<HTMLInputElement>('trade-amt').value) || 0));
   const renderTradeOut = () => {
-    const out = tradeYield(tradeGive(), tradeAmt(), tradeGet(), tradeTier);
-    el('trade-out').textContent = out > 0 ? t.trade.youGet(out, ITEMS[tradeGet()]?.name ?? tradeGet()) : t.trade.nothing;
+    const give = tradeGive();
+    const get = tradeGet();
+    const giveName = ITEMS[give]?.name ?? give;
+    const getName = ITEMS[get]?.name ?? get;
+    // the standing exchange rate for this pair — always shown, so the swap is legible
+    const cost = tradeUnitCost(give, get, tradeTier);
+    el('trade-rate').textContent = cost > 0 ? t.trade.rate(cost, giveName, getName) : '';
+    const out = tradeYield(give, tradeAmt(), get, tradeTier);
+    // when the amount buys nothing yet, say exactly how much would — not a dead end
+    el('trade-out').textContent =
+      out > 0 ? t.trade.youGet(out, getName) : cost > 0 ? t.trade.needAtLeast(cost, giveName, getName) : t.trade.nothing;
     (el('trade-confirm') as HTMLButtonElement).disabled = out <= 0;
+  };
+  // open at the smallest amount that yields a whole unit (capped to what's held),
+  // so the panel never greets the Player with a bare "Not enough".
+  const syncTradeAmt = () => {
+    const held = tradeHeld[tradeGive()] ?? 0;
+    const cost = Math.max(1, tradeUnitCost(tradeGive(), tradeGet(), tradeTier));
+    el<HTMLInputElement>('trade-amt').value = String(held > 0 ? Math.min(held, cost) : cost);
+    renderTradeOut();
   };
   const closeTrade = () => el('trade-panel').classList.remove('open');
   el('trade-cancel').onclick = closeTrade;
   bus.on('trade-close', closeTrade);
-  el('trade-give').addEventListener('change', renderTradeOut);
-  el('trade-get').addEventListener('change', renderTradeOut);
+  el('trade-give').addEventListener('change', syncTradeAmt);
+  el('trade-get').addEventListener('change', syncTradeAmt);
   el('trade-amt').addEventListener('input', renderTradeOut);
+  el('trade-max').onclick = () => {
+    const held = tradeHeld[tradeGive()] ?? 0;
+    el<HTMLInputElement>('trade-amt').value = String(Math.max(1, held));
+    renderTradeOut();
+  };
   el('trade-confirm').onclick = () => bus.emit('trade-do', { give: tradeGive(), count: tradeAmt(), get: tradeGet() });
   bus.on('trade-open', (o: { inventory: Inventory; tier: number }) => {
     tradeTier = o.tier;
+    tradeHeld = { ...o.inventory };
     const gSel = el<HTMLSelectElement>('trade-give');
     const rSel = el<HTMLSelectElement>('trade-get');
     gSel.innerHTML = '';
@@ -630,9 +655,8 @@ export function initHud(name: string, muted: boolean): void {
           break;
         }
     }
-    el<HTMLInputElement>('trade-amt').value = '1';
     el('trade-panel').classList.add('open');
-    renderTradeOut();
+    syncTradeAmt();
   });
 
   // ---- ADR-0013: Banner name & crest

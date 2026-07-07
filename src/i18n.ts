@@ -163,9 +163,13 @@ const en = {
     title: '🛖 Trade Post',
     give: 'Give',
     get: 'Get',
+    max: 'Max',
     cancel: 'Cancel',
     confirm: 'Trade',
+    rate: (cost: number, giveName: string, getName: string) => `Rate: ${cost} ${giveName} → 1 ${getName}`,
     youGet: (n: number, name: string) => `→ you get ${n} ${name}`,
+    needAtLeast: (cost: number, giveName: string, getName: string) =>
+      `Give at least ${cost} ${giveName} for 1 ${getName}.`,
     nothing: 'Not enough for a whole unit.',
   },
 
@@ -553,9 +557,12 @@ const de: Strings = {
     title: '🛖 Handelsposten',
     give: 'Geben',
     get: 'Erhalten',
+    max: 'Max',
     cancel: 'Abbrechen',
     confirm: 'Tauschen',
+    rate: (cost, giveName, getName) => `Kurs: ${cost} ${giveName} → 1 ${getName}`,
     youGet: (n, name) => `→ du erhältst ${n} ${name}`,
+    needAtLeast: (cost, giveName, getName) => `Mindestens ${cost} ${giveName} für 1 ${getName} geben.`,
     nothing: 'Nicht genug für eine ganze Einheit.',
   },
 
