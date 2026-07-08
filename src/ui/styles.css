@@ -291,6 +291,13 @@
 .recipe-tool .recipe-ing-count {
   right: -6px;
 }
+/* a required-but-missing tool/station is an alarm, not just dim: red ring + red-lit icon.
+   Its badge is an emoji (🔧/🔨) that ignores CSS `color`, so the grey-out alone never read
+   as "missing" — this makes the lack unmistakably red like a short ingredient's count. */
+.recipe-tool.lack .recipe-ing-icon {
+  outline-color: var(--bad);
+  filter: grayscale(0.4) brightness(0.9) drop-shadow(0 0 3px var(--bad));
+}
 /* slot inventory */
 #inv-grid {
   display: grid;
@@ -444,6 +451,13 @@
 }
 .tt-rar-ancient .tt-head {
   background: rgba(93, 204, 192, 0.1);
+}
+/* Fabled — the rarest tier (boss-only ~1% world-drops): a bright legendary gold */
+.tt-rar-fabled {
+  --tt-rar: #ffcf3a;
+}
+.tt-rar-fabled .tt-head {
+  background: rgba(255, 207, 58, 0.14);
 }
 
 button.ui-btn {
@@ -856,6 +870,52 @@ button.ui-btn:disabled {
   color: var(--dim);
   font-size: calc(12px * var(--ui-scale));
   padding: 4px 0;
+}
+/* the boss Spoils window (read-only loot bag): same frame as the crate, one column */
+#loot-panel {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 46;
+  width: 300px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+#loot-panel.open {
+  display: block;
+}
+#loot-panel .sub-note {
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--dim);
+  font-weight: 400;
+}
+/* a small inventory grid of loot slots, centred under the title */
+#loot-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 46px);
+  gap: 6px;
+  justify-content: center;
+  margin: 12px 0 8px;
+  min-height: 46px;
+}
+.loot-slot {
+  cursor: pointer;
+}
+.loot-slot:hover {
+  border-color: var(--accent);
+  background: rgba(255, 209, 102, 0.12);
+}
+.loot-hint {
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--dim);
+  text-align: center;
+  margin-bottom: 10px;
+}
+.loot-btns {
+  display: flex;
+  gap: 8px;
 }
 #sawmill-panel {
   width: 340px;

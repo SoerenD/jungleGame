@@ -255,6 +255,15 @@ export const EXHAUSTION_KNOCKDOWNS = 3;
 export const ARENA_EMPTY_SLUMBER_MS = 5_000;
 /** every participant with ≥1 hit receives this many Guardian Scales */
 export const GUARDIAN_SCALE_DROP = 3;
+/**
+ * The Fabled weapon set (fabled_sword/axe/bow) is a rare BOSS-ONLY world-drop:
+ * each participating Player independently rolls this chance per weapon on every
+ * boss kill (Guardian + both Delve bosses). Rolled client-side so each fighter's
+ * luck is their own — see rollFabledDrops in GameScene.
+ */
+export const FABLED_DROP_CHANCE = 0.01;
+/** the Fabled weapon ids eligible to drop (kept here so the roll has no import cycle) */
+export const FABLED_WEAPONS = ['fabled_sword', 'fabled_axe', 'fabled_bow'] as const;
 
 // ---------------------------------------------------------------- v2: cooking
 export const SPEED_BUFF_FACTOR = 1.2;

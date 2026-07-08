@@ -32,6 +32,9 @@ import {
   FOG_REVEAL_RADIUS,
   FORCE_NIGHT,
   GUARDIAN_AWAKE_MS,
+  GUARDIAN_SCALE_DROP,
+  FABLED_DROP_CHANCE,
+  FABLED_WEAPONS,
   INTERACT_RANGE,
   KNOCKDOWN_STUN_MS,
   MAP_H,
@@ -429,6 +432,8 @@ export class GameScene extends Phaser.Scene {
   private delveExhausted = false;
   /** did I land ≥1 hit this run? (participation-loot eligibility) */
   private delveHitLanded = false;
+  /** boss Spoils not yet taken out of the read-only loot window (any boss) */
+  private lootPending: Inventory = {};
   /** host-only: Husks felled (drives shard loot) + everyone who has landed a hit */
   private delveKills = 0;
   private delveParticipants = new Set<string>();
@@ -1010,7 +1015,13 @@ export class GameScene extends Phaser.Scene {
         this.time.delayedCall(60, () => this.guardianSprite.clearTint());
       }
     });
-    this.backend.on('guardianVictory', () => this.endFight('victory'));
+    this.backend.on('guardianVictory', (participants: string[]) => {
+      this.endFight('victory');
+      // every fighter who landed a hit collects their Scales from the Spoils window
+      // (the grant is deferred to the take — see openLoot/claimLoot). Non-fighters
+      // in the arena still get the death-throes spectacle, but no loot bag.
+      if (participants.includes(this.me.name)) this.openLoot({ guardian_scale: GUARDIAN_SCALE_DROP, ...this.rollFabledDrops() }, t.loot.fromGuardian);
+    });
     this.backend.on('guardianSlumber', () => this.endFight('slumber'));
     this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
     this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
@@ -1658,7 +1669,7 @@ export class GameScene extends Phaser.Scene {
       this.guardianSprite.y - TILE * 1.5,
     );
     // the Bow reaches ~8 tiles; melee needs to close to arm's length
-    const bow = this.heldItem === 'bow';
+    const bow = this.isBow();
     const range = bow ? TILE * 8 : INTERACT_RANGE + TILE * 2;
     if (d > range) return null;
     if (!this.fight) {
@@ -1672,7 +1683,7 @@ export class GameScene extends Phaser.Scene {
     }
     // each weapon carries its own COMBAT attack speed (ADR-0006 §4); harvesting
     // is untouched — resolveEAction only sets cadenceMs on Guardian swings
-    if (bow) return { swing: true, cadenceMs: this.atkCadence(weaponCombat('bow').attackMs), run: () => this.looseArrow() };
+    if (bow) return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.looseArrow() };
     return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.swingAtGuardian() };
   }
 
@@ -1697,7 +1708,7 @@ export class GameScene extends Phaser.Scene {
       onComplete: () => {
         arrow.destroy();
         // adjudicate on landing (server re-checks the Eye Window at its own time)
-        this.fireGuardianHit('bow', gx, gy);
+        this.fireGuardianHit(this.heldTool(), gx, gy);
       },
     });
   }
@@ -2483,6 +2494,11 @@ export class GameScene extends Phaser.Scene {
         bus.emit('crate-open', crateId, res.contents);
       });
     });
+    // the boss Spoils window: take one drop, take everything, or close (which
+    // sweeps up whatever is left so loot is never abandoned)
+    bus.on('loot-take', (item: ItemId, count: number) => this.claimLoot({ [item]: count }));
+    bus.on('loot-take-all', () => this.claimLoot({ ...this.lootPending }));
+    bus.on('loot-close', () => this.claimLoot({ ...this.lootPending }));
     bus.on('sawmill-deposit', (sawmillId: string) => {
       void this.backend.sawmillDeposit(sawmillId).then((res) => {
         if (!res.ok) {
@@ -2575,6 +2591,11 @@ export class GameScene extends Phaser.Scene {
   private heldTool(): ToolId | undefined {
     const h = this.heldItem;
     return h && ITEMS[h].kind === 'tool' ? (h as ToolId) : undefined;
+  }
+
+  /** a ranged bow is in hand (the crafted Bow or the rare Fabled Bow) — strikes from afar */
+  private isBow(): boolean {
+    return this.heldItem === 'bow' || this.heldItem === 'fabled_bow';
   }
 
   // ------------------------------------------------------------ nodes
@@ -4055,15 +4076,71 @@ export class GameScene extends Phaser.Scene {
       bus.emit('toast', isDeep ? t.toast.deepClearedNoHit : t.toast.delveClearedNoHit, 'info');
       return;
     }
-    void this.backend.claimDelveLoot(loot).then((res) => {
+    // roll THIS client's own rare Fabled drops (the broadcast base loot is shared;
+    // the ~1% weapons are personal) and fold them into the haul
+    const full: Inventory = { ...loot, ...this.rollFabledDrops() };
+    // the boss fell — announce it, then present the haul in the Spoils window so
+    // the drops are taken out deliberately (claimDelveLoot fires on the take)
+    const parts = Object.entries(full)
+      .filter(([, n]) => (n as number) > 0)
+      .map(([k, n]) => `+${n} ${ITEMS[k as ItemId]?.name ?? k}`)
+      .join('  ');
+    bus.emit('toast', isDeep ? t.toast.forgebornFalls(parts) : t.toast.deepGuardianFalls(parts), 'good');
+    this.openLoot(full, isDeep ? t.loot.fromForgeborn : t.loot.fromDeepGuardian);
+  }
+
+  /**
+   * Roll the rare Fabled weapon world-drops for one boss kill — each weapon an
+   * independent ~1% chance. Rolled LOCALLY per client (never broadcast) so every
+   * fighter's luck is their own; the winners land in that Player's Spoils window.
+   */
+  private rollFabledDrops(): Inventory {
+    const drop: Inventory = {};
+    for (const id of FABLED_WEAPONS) {
+      if (Math.random() < FABLED_DROP_CHANCE) drop[id] = 1;
+    }
+    return drop;
+  }
+
+  /**
+   * Open the read-only boss Spoils window with a fresh drop set, merging it into
+   * anything still uncollected (a second boss before the first bag is emptied).
+   * The loot is NOT in the pack yet: it lands there only as it is taken out
+   * (claimLoot → claimDelveLoot). Every boss funnels through here.
+   */
+  private openLoot(loot: Inventory, sub: string): void {
+    for (const [k, n] of Object.entries(loot)) {
+      if ((n as number) > 0) this.lootPending[k as ItemId] = (this.lootPending[k as ItemId] ?? 0) + (n as number);
+    }
+    bus.emit('loot-open', { ...this.lootPending }, sub);
+  }
+
+  /**
+   * Take some (or all) of the pending Spoils into the pack. Clamped to what is
+   * actually owed, then granted through the same per-client claim the Delve uses
+   * (claimDelveLoot merges arbitrary loot into MY inventory — no server grant, no
+   * migration). Echoes the remainder back so the window updates / self-closes.
+   */
+  private claimLoot(part: Inventory): void {
+    const take: Inventory = {};
+    for (const [k, n] of Object.entries(part)) {
+      const amt = Math.min(n as number, this.lootPending[k as ItemId] ?? 0);
+      if (amt > 0) take[k as ItemId] = amt;
+    }
+    if (Object.keys(take).length === 0) {
+      bus.emit('loot-changed', { ...this.lootPending });
+      return;
+    }
+    for (const [k, n] of Object.entries(take)) {
+      const left = (this.lootPending[k as ItemId] ?? 0) - (n as number);
+      if (left > 0) this.lootPending[k as ItemId] = left;
+      else delete this.lootPending[k as ItemId];
+    }
+    void this.backend.claimDelveLoot(take).then((res) => {
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
-      const parts = Object.entries(loot)
-        .filter(([, n]) => (n as number) > 0)
-        .map(([k, n]) => `+${n} ${ITEMS[k as ItemId]?.name ?? k}`)
-        .join('  ');
-      bus.emit('toast', isDeep ? t.toast.forgebornFalls(parts) : t.toast.deepGuardianFalls(parts), 'good');
       this.sfx('craft', 0.8);
+      bus.emit('loot-changed', { ...this.lootPending });
     });
   }
 
@@ -4086,7 +4163,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     if (this.delveExhausted) return null;
-    const reach = this.heldItem === 'bow' ? 6 : 1.7; // the Bow strikes mobs from range
+    const reach = this.isBow() ? 6 : 1.7; // the Bow strikes mobs from range
     const ptx = this.player.x / TILE;
     const pty = (this.player.y - 4) / TILE;
     let best: MobState | null = null;
@@ -4106,7 +4183,7 @@ export class GameScene extends Phaser.Scene {
 
   private delveSwing(m: MobState): void {
     const tool = this.heldTool();
-    this.sfx(tool === 'bow' ? 'blip' : 'chop', 0.5);
+    this.sfx(this.isBow() ? 'blip' : 'chop', 0.5);
     if (this.isDelveHost) {
       this.applyDelveHit(m.id, tool, this.me.name);
     } else if (this.delveRunId) {
@@ -4978,7 +5055,7 @@ export class GameScene extends Phaser.Scene {
 
   /** in the World, E on the nearest creature in reach: hunt a predator (swing) or forage a peaceful (catch) */
   private wildlifeAction(): EAction | null {
-    const reach = this.heldItem === 'bow' ? 6 : 1.9;
+    const reach = this.isBow() ? 6 : 1.9;
     const ptx = this.player.x / TILE;
     const pty = (this.player.y - 4) / TILE;
     let best: MobState | null = null;
@@ -5003,7 +5080,7 @@ export class GameScene extends Phaser.Scene {
 
   private wildSwing(m: MobState): void {
     const tool = this.heldTool();
-    this.sfx(tool === 'bow' ? 'blip' : 'chop', 0.5);
+    this.sfx(this.isBow() ? 'blip' : 'chop', 0.5);
     if (this.isWildHost) this.applyWildHit(m.id, tool, this.me.name);
     else this.backend.sendCreatures({ t: 'hit', id: m.id, by: this.me.name, tool });
   }

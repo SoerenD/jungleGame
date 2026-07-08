@@ -6,7 +6,6 @@ import {
   DORMANT_TIMEOUT_MS,
   EXHAUSTION_KNOCKDOWNS,
   GUARDIAN_AWAKE_MS,
-  GUARDIAN_SCALE_DROP,
   HP_PER_HEAD,
   MAP_PIECE_DROP_CHANCE,
   MAP_W,
@@ -1033,7 +1032,10 @@ export class SupabaseBackend implements Backend {
       p_roster: roster,
       p_max_hp: maxHp,
       p_eye_open: eyeOpen,
-      p_scale_drop: GUARDIAN_SCALE_DROP,
+      // 0 — the server no longer auto-grants Scales; each fighter takes theirs out of
+      // the client-side Spoils window (claimDelveLoot), matching the Delve's claim model.
+      // Keeps the existing RPC (jw_add(...,0) is a no-op) so there is no migration.
+      p_scale_drop: 0,
       p_awake_ms: GUARDIAN_AWAKE_MS,
       p_dormant_ms: DORMANT_TIMEOUT_MS,
     });

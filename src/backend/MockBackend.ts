@@ -1451,12 +1451,11 @@ export class MockBackend implements Backend {
     if (!f.participants.includes(me)) f.participants.push(me);
     this.emit('guardianHit', f.hp, me);
     if (f.hp === 0) {
-      // victory: every participant with ≥1 hit receives the full drop set
+      // victory: every participant with ≥1 hit is owed the full drop set — but the
+      // Scales are no longer poured straight into the pack. Each fighter takes them
+      // out of the client-side Spoils window (claimDelveLoot). Mirrors the Supabase
+      // path (p_scale_drop: 0) so both backends grant boss loot the same way.
       const participants = [...f.participants];
-      for (const name of participants) {
-        const pl = this.db.players[name];
-        if (pl) pl.inventory.guardian_scale = (pl.inventory.guardian_scale ?? 0) + GUARDIAN_SCALE_DROP;
-      }
       this.db.world!.fight = null;
       this.saveNow();
       this.scheduleSlumberCheck();

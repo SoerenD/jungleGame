@@ -38,7 +38,12 @@ export type ToolId =
   // Dungeons v1 (ADR-0007) — the first pure-combat Tool: no harvest use
   | 'sword'
   // ADR-0011 — the Deep's reward: a pure-combat molten two-hander (sidegrade)
-  | 'forgebrand';
+  | 'forgebrand'
+  // Fabled set — rare (1%) BOSS-ONLY world-drops, one tier above every crafted
+  // weapon. Pure combat, no harvest use; land in the Spoils window on a lucky kill.
+  | 'fabled_sword'
+  | 'fabled_axe'
+  | 'fabled_bow';
 export type StructureId =
   | 'campfire'
   | 'torch'
@@ -139,6 +144,12 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   hand_torch: { name: 'Hand Torch', kind: 'tool', desc: 'Hold it to light your way with a warm orange glow at night. Distinct from the placed Torch.' },
   sword: { name: 'Sword', kind: 'tool', desc: 'The Delve’s reward: a pure-combat blade — it grants no gathering bonus and unlocks no Node, but strikes Husks, the Deep Guardian, and the Guardian with the game’s heaviest melee band.' },
   forgebrand: { name: 'Forgebrand', kind: 'tool', desc: 'The Deep’s reward: a pure-combat molten two-hander — no gathering bonus, no Node. It swings slower than the Sword but lands a heavier per-hit band (net damage on par), and strikes Husks, both bosses, and the Guardian alike.' },
+  // Fabled set — the rarest reward in the game: a ~1% drop from ANY boss, one tier
+  // above every crafted weapon. Pure combat, no gathering use; each strikes Husks,
+  // both Delve bosses, and the Guardian.
+  fabled_sword: { name: 'Fabled Sword', kind: 'tool', desc: 'A legendary blade, whole and unblemished among the ruins — a rare prize taken only from a fallen boss (~1%). The keenest melee weapon there is: a fast, high-crit band a clear step above the crafted Sword.' },
+  fabled_axe: { name: 'Fabled Axe', kind: 'tool', desc: 'A legendary war-axe, wrenched from a fallen boss on the rarest of days (~1%). Heavy, wide and brutal — the biggest per-swing crits in the game, one tier above the Ancient Axe.' },
+  fabled_bow: { name: 'Fabled Bow', kind: 'tool', desc: 'A legendary longbow dropped by a fallen boss (~1%). Looses arrows from range like the plain Bow, but hits far harder and faster — the safe way to out-damage a crafted melee weapon.' },
 
   summon_totem: { name: 'Summoning Totem', kind: 'consumable', desc: 'An Offering for the arena altar — wakes the Guardian. Consumed on summon.' },
   cooked_fish: { name: 'Cooked Fish', kind: 'food', desc: 'Warm and hearty. Eating it quickens your step for a while.' },
@@ -216,6 +227,9 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   hand_torch: { name: 'Handfackel', desc: 'Halte sie, um deinen Weg nachts mit warmem orangem Schein zu erleuchten. Nicht zu verwechseln mit der platzierten Fackel.' },
   sword: { name: 'Schwert', desc: 'Der Lohn des Schachts: eine reine Kampfklinge — sie gibt keinen Ernte-Bonus und schaltet keinen Knotenpunkt frei, trifft aber Hüllen, den Tiefenwächter und den Wächter mit dem schwersten Nahkampfband des Spiels.' },
   forgebrand: { name: 'Schmiedebrand', desc: 'Der Lohn der Tiefe: ein reiner Kampf-Zweihänder aus Magma — kein Ernte-Bonus, kein Knotenpunkt. Er schwingt langsamer als das Schwert, landet aber ein schwereres Schadensband (unterm Strich gleichauf), und trifft Hüllen, beide Bosse und den Wächter.' },
+  fabled_sword: { name: 'Sagenhaftes Schwert', desc: 'Eine legendäre Klinge, makellos zwischen den Ruinen — eine seltene Beute, die nur ein gefallener Boss hergibt (~1%). Die schärfste Nahkampfwaffe überhaupt: ein schnelles, kritstarkes Band eine Stufe über dem geschmiedeten Schwert.' },
+  fabled_axe: { name: 'Sagenhafte Axt', desc: 'Eine legendäre Streitaxt, einem gefallenen Boss an den seltensten Tagen entrissen (~1%). Schwer, breit und brutal — die größten Krits pro Schlag im Spiel, eine Stufe über der Uralten Axt.' },
+  fabled_bow: { name: 'Sagenhafter Bogen', desc: 'Ein legendärer Langbogen, von einem gefallenen Boss fallen gelassen (~1%). Verschießt Pfeile aus der Ferne wie der einfache Bogen, trifft aber deutlich härter und schneller — der sichere Weg, eine geschmiedete Nahkampfwaffe zu übertreffen.' },
 
   summon_totem: { name: 'Beschwörungstotem', desc: 'Eine Opfergabe für den Arena-Altar — weckt den Wächter. Beim Beschwören verbraucht.' },
   cooked_fish: { name: 'Gebratener Fisch', desc: 'Warm und herzhaft. Ihn zu essen beschleunigt deinen Schritt für eine Weile.' },

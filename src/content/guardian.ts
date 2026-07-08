@@ -82,6 +82,14 @@ export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   // ~9.4 ≈ the Sword's ~9.4 — the axe-vs-pickaxe "same DPS, opposite feel" at the
   // top melee tier. Like the Sword it strikes Husks, both bosses, and the Guardian.
   forgebrand: { min: 4, max: 6, critChance: 0.2, critMult: 2.0, attackMs: 640 },
+  // The Fabled set — rare (~1%) BOSS-ONLY world-drops, one clear tier above every
+  // crafted weapon (net DPS ~11–12 base vs the ~9.4 top of the crafted tier).
+  // fabled_sword: the Sword's keen tempo, sharper. fabled_axe: the Ancient Axe's
+  // wide high-crit weight, heavier. fabled_bow: still range-taxed vs melee, but
+  // roughly double the plain Bow. All three strike Husks, both bosses, and the Guardian.
+  fabled_sword: { min: 4, max: 6, critChance: 0.18, critMult: 2.0, attackMs: 460 },
+  fabled_axe: { min: 4, max: 7, critChance: 0.22, critMult: 2.1, attackMs: 540 },
+  fabled_bow: { min: 3, max: 4, critChance: 0.12, critMult: 1.7, attackMs: 460 },
 };
 
 /** the combat profile of the in-hand Tool (bare hands / non-combat → BARE_HANDS) */

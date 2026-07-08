@@ -180,6 +180,15 @@ export function initHud(name: string, muted: boolean): void {
       </div>
       <button class="ui-btn" id="crate-close">${t.crate.close}</button>
     </div>
+    <div id="loot-panel" class="panel" data-testid="loot-panel">
+      <h3>${t.loot.title} <span class="sub-note" id="loot-sub"></span></h3>
+      <div id="loot-grid"></div>
+      <div class="loot-hint">${t.loot.hint}</div>
+      <div class="loot-btns">
+        <button class="ui-btn" id="loot-takeall" data-testid="loot-takeall">${t.loot.takeAll}</button>
+        <button class="ui-btn" id="loot-close">${t.loot.close}</button>
+      </div>
+    </div>
     <div id="village-give-panel" class="panel" data-testid="village-give-panel">
       <h3>${t.villageGive.title} <span class="sub-note">${t.villageGive.shared}</span></h3>
       <div id="village-give-rows"></div>
@@ -571,6 +580,29 @@ export function initHud(name: string, muted: boolean): void {
     renderCrate();
   });
 
+  // ---- boss Spoils window: a read-only loot bag opened on every boss kill.
+  // GameScene owns the claim (grant-on-take) and echoes back what's left; when
+  // nothing remains the panel closes itself. Closing early collects the rest so
+  // loot is never lost.
+  el('loot-close').onclick = () => bus.emit('loot-close');
+  el('loot-takeall').onclick = () => bus.emit('loot-take-all');
+  bus.on('loot-open', (drops: Inventory, sub: string) => {
+    lootDrops = drops;
+    el('loot-sub').textContent = sub;
+    el('loot-panel').classList.add('open');
+    renderLoot();
+  });
+  bus.on('loot-changed', (drops: Inventory) => {
+    lootDrops = drops;
+    const left = Object.values(drops).some((n) => (n ?? 0) > 0);
+    if (!left) {
+      lootDrops = null;
+      el('loot-panel').classList.remove('open');
+    } else {
+      renderLoot();
+    }
+  });
+
   // ---- A3: Village contribution panel (per-resource sliders, ADR-0010)
   const closeVillageGive = () => el('village-give-panel').classList.remove('open');
   el('village-give-cancel').onclick = closeVillageGive;
@@ -854,6 +886,8 @@ export function initHud(name: string, muted: boolean): void {
 
 let openCrateId: string | null = null;
 let crateContents: Inventory = {};
+/** the boss Spoils window: the drops still waiting to be taken (null = closed) */
+let lootDrops: Inventory | null = null;
 let openSawmillId: string | null = null;
 let sawmill: SawmillState | null = null;
 let sawmillOpenedAt = 0;
@@ -895,6 +929,49 @@ function renderCrate(): void {
   if (mine.length === 0) pack.innerHTML = `<div class="col-empty">${t.crate.nothingToStore}</div>`;
   for (const [item, n] of mine) {
     pack.appendChild(crateRow(item, n, 'put', () => bus.emit('crate-deposit', id, item, n)));
+  }
+}
+
+/**
+ * The boss Spoils window as a small read-only inventory: one icon slot per drop
+ * (the item's own sprite + stack count), the same Codex Card preview on hover as
+ * the pack, and a click that takes that whole stack into the pack. No Put — loot
+ * only flows outward.
+ */
+function renderLoot(): void {
+  const grid = el('loot-grid');
+  grid.innerHTML = '';
+  hideItemTooltip(); // a re-render discards the slots; drop any popup anchored to an old one
+  const drops = (Object.entries(lootDrops ?? {}).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
+  if (drops.length === 0) {
+    grid.innerHTML = `<div class="col-empty">${t.loot.empty}</div>`;
+    return;
+  }
+  for (const [item, n] of drops) {
+    const def = ITEMS[item];
+    const slot = document.createElement('div');
+    slot.className = 'inv-slot filled loot-slot';
+    slot.setAttribute('data-testid', `loot-take-${item}`);
+    slot.setAttribute('aria-label', `${def.name} × ${n} — ${def.desc}`);
+    slot.addEventListener('mouseenter', () => showItemTooltip(item, slot));
+    slot.addEventListener('mouseleave', hideItemTooltip);
+    const icon = document.createElement('img');
+    icon.className = 'inv-icon';
+    icon.src = itemIcon(item);
+    icon.alt = def.name;
+    icon.draggable = false;
+    slot.appendChild(icon);
+    if (n > 1) {
+      const badge = document.createElement('span');
+      badge.className = 'inv-count';
+      badge.textContent = n > 999 ? '999+' : String(n);
+      slot.appendChild(badge);
+    }
+    slot.onclick = () => {
+      hideItemTooltip();
+      bus.emit('loot-take', item, n);
+    };
+    grid.appendChild(slot);
   }
 }
 
@@ -1399,10 +1476,11 @@ function renderLoadout(): void {
 // a rarity-tinted name, a kind subtitle and — for weapons that strike the
 // Guardian (WEAPON_COMBAT) — a damage / crit / attack-speed / DPS stat block,
 // closing with the item's flavour line. Replaces the old native `title` box.
-type ItemRarity = 'reward' | 'ancient' | 'basic';
+type ItemRarity = 'fabled' | 'reward' | 'ancient' | 'basic';
 
 /** three name colours: Delve/Deep rewards, tier-2 ancients, everything else */
 function itemRarity(id: ItemId): ItemRarity {
+  if (id === 'fabled_sword' || id === 'fabled_axe' || id === 'fabled_bow') return 'fabled';
   if (id === 'sword' || id === 'forgebrand') return 'reward';
   if (id === 'ancient_axe' || id === 'ancient_pickaxe') return 'ancient';
   return 'basic';
@@ -1420,7 +1498,7 @@ function itemTooltipHtml(id: ItemId): string {
   const def = ITEMS[id];
   const rar = itemRarity(id);
   const combat = WEAPON_COMBAT[id as ToolId];
-  const rarLabel = rar === 'reward' ? t.weapon.rarReward : rar === 'ancient' ? t.weapon.rarAncient : t.weapon.rarBasic;
+  const rarLabel = rar === 'fabled' ? t.weapon.rarFabled : rar === 'reward' ? t.weapon.rarReward : rar === 'ancient' ? t.weapon.rarAncient : t.weapon.rarBasic;
   const subtitle = combat ? `${rarLabel} ${t.weapon.weaponKind}` : t.inv.kind[def.kind];
   let stats = '';
   if (combat) {

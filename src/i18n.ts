@@ -235,6 +235,19 @@ const en = {
     close: 'Close',
   },
 
+  // the boss Spoils window: a read-only loot bag you take drops out of (every boss)
+  loot: {
+    title: '💰 Spoils',
+    fromGuardian: 'from the Guardian',
+    fromDeepGuardian: 'from the Deep Guardian',
+    fromForgeborn: 'from the Forgeborn',
+    hint: 'Click an item to take it into your pack',
+    take: 'Take',
+    takeAll: 'Take all',
+    empty: 'all claimed',
+    close: 'Close',
+  },
+
   sawmill: {
     title: '🪚 Sawmill',
     deposit: 'Deposit wood',
@@ -338,6 +351,7 @@ const en = {
     atkSpeed: 'Attacks per second',
     dpsFull: 'Damage per second',
     weaponKind: 'weapon',
+    rarFabled: 'Fabled',
     rarReward: 'Reward',
     rarAncient: 'Ancient',
     rarBasic: 'Basic',
@@ -646,6 +660,18 @@ const de: Strings = {
     close: 'Schließen',
   },
 
+  loot: {
+    title: '💰 Beute',
+    fromGuardian: 'vom Wächter',
+    fromDeepGuardian: 'vom Tiefenwächter',
+    fromForgeborn: 'vom Schmiedegeborenen',
+    hint: 'Klick ein Item an, um es in den Rucksack zu nehmen',
+    take: 'Nehmen',
+    takeAll: 'Alles nehmen',
+    empty: 'alles eingesammelt',
+    close: 'Schließen',
+  },
+
   sawmill: {
     title: '🪚 Sägewerk',
     deposit: 'Holz einlegen',
@@ -746,6 +772,7 @@ const de: Strings = {
     atkSpeed: 'Angriffe pro Sekunde',
     dpsFull: 'Schaden pro Sekunde',
     weaponKind: 'Waffe',
+    rarFabled: 'Sagenhaft',
     rarReward: 'Belohnung',
     rarAncient: 'Uralt',
     rarBasic: 'Einfach',
