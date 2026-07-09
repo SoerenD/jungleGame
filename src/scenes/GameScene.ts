@@ -4090,14 +4090,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Roll the rare Fabled weapon world-drops for one boss kill — each weapon an
-   * independent ~1% chance. Rolled LOCALLY per client (never broadcast) so every
-   * fighter's luck is their own; the winners land in that Player's Spoils window.
+   * Roll the rare Fabled world-drop for one boss kill — ONE 1% roll for the
+   * category, then a uniform pick among the weapons. Rolled LOCALLY per client
+   * (never broadcast) so every fighter's luck is their own; a win lands in that
+   * Player's Spoils window.
    */
   private rollFabledDrops(): Inventory {
     const drop: Inventory = {};
-    for (const id of FABLED_WEAPONS) {
-      if (Math.random() < FABLED_DROP_CHANCE) drop[id] = 1;
+    if (Math.random() < FABLED_DROP_CHANCE) {
+      drop[FABLED_WEAPONS[Math.floor(Math.random() * FABLED_WEAPONS.length)]] = 1;
     }
     return drop;
   }
