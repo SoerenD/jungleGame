@@ -871,6 +871,74 @@ button.ui-btn:disabled {
   font-size: calc(12px * var(--ui-scale));
   padding: 4px 0;
 }
+/* ADR-0015: the Grand Monument's engraved Depth Record board */
+#records-panel {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 46;
+  width: 340px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+#records-panel.open {
+  display: block;
+}
+#records-panel .sub-note {
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--dim);
+  font-weight: 400;
+}
+#records-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 6px;
+}
+.records-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: calc(12px * var(--ui-scale));
+}
+.records-rank {
+  color: var(--dim);
+  min-width: 18px;
+}
+.records-depth {
+  color: var(--accent);
+  min-width: 64px;
+}
+.records-who {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.records-when {
+  color: var(--dim);
+  font-size: calc(10px * var(--ui-scale));
+}
+.records-empty {
+  color: var(--dim);
+  padding: 10px 2px;
+}
+#records-panel .ui-btn {
+  margin-top: 8px;
+}
+/* the Hall panel's one-line current-record teaser (ADR-0015) */
+#village-record {
+  margin-top: 4px;
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* the boss Spoils window (read-only loot bag): same frame as the crate, one column */
 #loot-panel {
   position: absolute;

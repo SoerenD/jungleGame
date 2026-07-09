@@ -54,6 +54,8 @@ import type {
   CraftResult,
   CrateResult,
   CreatureMsg,
+  DepthRecords,
+  DepthRecordWrite,
   DigResult,
   Dir,
   DismantleResult,
@@ -984,14 +986,57 @@ export class SupabaseBackend implements Backend {
     return { ok: true, delveOpen: true };
   }
 
-  async claimDelveLoot(loot: Inventory): Promise<{ inventory: Inventory }> {
+  async claimDelveLoot(loot: Inventory, record?: DepthRecordWrite): Promise<{ inventory: Inventory }> {
     // the run's ONLY DB write (ADR-0007 §8): grant the participation drop set to
     // this Player's own inventory. jw_claim_delve_loot returns the merged
     // inventory; if it isn't deployed, merge into the local mirror optimistically.
-    const res = await this.rpc<any>('jw_claim_delve_loot', { p_who: this.me, p_loot: loot });
+    // ADR-0015 (migration 0011): the Depth Record rides the same RPC — the
+    // Descent's board row + this Player's personal best upsert in the one call.
+    // The record params are sent only when a record rides along, so plain loot
+    // claims still match the pre-0011 3-arg signature (deploy order safety).
+    const args: Record<string, unknown> = { p_who: this.me, p_loot: loot };
+    if (record) {
+      args.p_descent = record.descentId;
+      args.p_depth = record.depth;
+      args.p_roster = record.roster;
+    }
+    const res = await this.rpc<any>('jw_claim_delve_loot', args);
     if (res?.inventory) this.inv = res.inventory as Inventory;
     else for (const [k, v] of Object.entries(loot)) this.inv[k as ItemId] = (this.inv[k as ItemId] ?? 0) + (v as number);
     return { inventory: { ...this.inv } };
+  }
+
+  /** the World's Depth Records (ADR-0015): top slice, deepest-first, ties by earliest */
+  async getDepthRecords(): Promise<DepthRecords> {
+    const [dR, bR] = await Promise.all([
+      this.supa
+        .from('depth_records')
+        .select('descent_id,depth,roster,achieved_at')
+        .eq('world_id', this.worldId)
+        .order('depth', { ascending: false })
+        .order('achieved_at', { ascending: true })
+        .limit(50),
+      this.supa
+        .from('depth_bests')
+        .select('name,depth,achieved_at')
+        .eq('world_id', this.worldId)
+        .order('depth', { ascending: false })
+        .order('achieved_at', { ascending: true })
+        .limit(50),
+    ]);
+    // pre-migration (table missing) both selects error → data null → empty board
+    const descents = ((dR.data ?? []) as any[]).map((r) => ({
+      descentId: r.descent_id as string,
+      depth: r.depth as number,
+      roster: (r.roster ?? []) as string[],
+      achievedAt: new Date(r.achieved_at as string).getTime(),
+    }));
+    const bests = ((bR.data ?? []) as any[]).map((r) => ({
+      name: r.name as string,
+      depth: r.depth as number,
+      achievedAt: new Date(r.achieved_at as string).getTime(),
+    }));
+    return { descents, bests };
   }
 
   sendDungeon(msg: DungeonMsg): void {

@@ -19,6 +19,8 @@ export type ResourceId =
   // ADR-0011 — the Deep (Stage 2) drops that forge the Forgebrand
   | 'cinder_shard'
   | 'forge_core'
+  // ADR-0015 — the generated Depths' only loot: pure prestige, crafts nothing
+  | 'depth_sigil'
   // ADR-0012 — open-world Wildlife drops (hide/meat/trophy family). Feed EXISTING
   // loops only: the Village pool, a cooked-meat campfire recipe, decor Structures.
   | 'hide'
@@ -129,6 +131,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   deep_core: { name: 'Deep Core', kind: 'resource', desc: 'The molten heart of the Deep Guardian, granted to everyone who fought it. Rare — forges the Sword.' },
   cinder_shard: { name: 'Cinder Shard', kind: 'resource', desc: 'Molten shrapnel from a felled Cinder or Ember Husk in the Deep. Common — the farm of a Deep run.' },
   forge_core: { name: 'Forge Core', kind: 'resource', desc: 'The white-hot heart of the Forgeborn, granted to everyone who descended and fought it. Rare — forges the Forgebrand.' },
+  depth_sigil: { name: 'Depth Sigil', kind: 'resource', desc: 'Proof of a boss felled in the generated Depths (3+), one per Stage. Pure prestige — it crafts nothing; give it to the Village pool, and let the Depth Record speak.' },
   hide: { name: 'Hide', kind: 'resource', desc: 'Tough hide from foraged or hunted Wildlife. Give it to the Village, or lay it as a rug.' },
   meat: { name: 'Raw Meat', kind: 'resource', desc: 'Fresh meat from Wildlife. Cook it at a campfire for a hearty meal that quickens your step.' },
   trophy: { name: 'Wild Trophy', kind: 'resource', desc: 'A prize rack or fang from the wilds — rare. Mount it, or grace the Village pool with it.' },
@@ -212,6 +215,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   deep_core: { name: 'Tiefenkern', desc: 'Das glühende Herz des Tiefenwächters, verliehen an alle, die gegen ihn kämpften. Selten — schmiedet das Schwert.' },
   cinder_shard: { name: 'Glutsplitter', desc: 'Glühender Splitter einer gefallenen Glut- oder Aschehülle in der Tiefe. Häufig — die Ausbeute eines Tiefen-Zugs.' },
   forge_core: { name: 'Schmiedekern', desc: 'Das weißglühende Herz des Schmiedegeborenen, verliehen an alle, die hinabstiegen und gegen ihn kämpften. Selten — schmiedet den Schmiedebrand.' },
+  depth_sigil: { name: 'Tiefensiegel', desc: 'Beweis eines gefällten Bosses in den erzeugten Tiefen (3+), eines pro Stufe. Reines Prestige — es stellt nichts her; gib es dem Dorfvorrat, und lass den Tiefenrekord sprechen.' },
   hide: { name: 'Fell', desc: 'Zähes Fell von erjagtem oder gesammeltem Wild. Gib es dem Dorf oder leg es als Teppich aus.' },
   meat: { name: 'Rohes Fleisch', desc: 'Frisches Fleisch von Wild. Brate es am Lagerfeuer für eine herzhafte Mahlzeit, die deinen Schritt beschleunigt.' },
   trophy: { name: 'Wildtrophäe', desc: 'Ein prächtiges Geweih oder Fangzahn aus der Wildnis — selten. Häng sie auf oder zier den Dorfvorrat damit.' },

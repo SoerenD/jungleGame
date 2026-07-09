@@ -67,6 +67,8 @@ import type {
   CookResult,
   CraftResult,
   CrateResult,
+  DepthRecords,
+  DepthRecordWrite,
   DigResult,
   Dir,
   DismantleResult,
@@ -178,6 +180,15 @@ interface Db {
     fight?: DbFight | null;
     /** the communal Village (ADR-0010): tier + additive pool + Hall location, tile-independent */
     village?: VillageRecord;
+    /**
+     * the World's Depth Records (ADR-0015) — the localStorage mirror of
+     * migration 0011: one entry per Descent (deepest Depth + the roster that
+     * cleared it) and one personal best per Player. Append/upsert-only.
+     */
+    depthRecords?: {
+      descents: Record<string, { depth: number; roster: string[]; at: number }>;
+      bests: Record<string, { depth: number; at: number }>;
+    };
   };
 }
 
@@ -262,6 +273,7 @@ export class MockBackend implements Backend {
     this.db.world.seal ??= { broken: false, contributed: { wood: 0, stone: 0, fiber: 0, fruit: 0 } };
     this.db.world.fight ??= null;
     this.db.world.village ??= emptyVillage();
+    this.db.world.depthRecords ??= { descents: {}, bests: {} };
     this.db.crates ??= {};
     this.db.sawmills ??= {};
     // drop anything whose id is no longer a known item — retired Structures/Tools
@@ -1383,14 +1395,40 @@ export class MockBackend implements Backend {
     return { ok: true, delveOpen: true };
   }
 
-  async claimDelveLoot(loot: Inventory): Promise<{ inventory: Inventory }> {
+  async claimDelveLoot(loot: Inventory, record?: DepthRecordWrite): Promise<{ inventory: Inventory }> {
     await this.lag();
     const p = this.me ? this.db.players[this.me] : null;
     if (!p) return { inventory: {} };
     // the run's only persisted write (ADR-0007 §8) — mob HP never touches the DB
     for (const [k, v] of Object.entries(loot)) p.inventory[k as ItemId] = (p.inventory[k as ItemId] ?? 0) + (v as number);
+    // ADR-0015: the Depth Record rides the same write — mirror of migration 0011.
+    // Both upserts only ever RAISE a depth (append/upsert-only, never pruned).
+    if (record && this.me) {
+      const rec = (this.db.world!.depthRecords ??= { descents: {}, bests: {} });
+      const d = rec.descents[record.descentId];
+      if (!d || d.depth < record.depth) {
+        rec.descents[record.descentId] = { depth: record.depth, roster: [...record.roster], at: Date.now() };
+      }
+      const b = rec.bests[this.me];
+      if (!b || b.depth < record.depth) rec.bests[this.me] = { depth: record.depth, at: Date.now() };
+    }
     this.saveNow();
     return { inventory: { ...p.inventory } };
+  }
+
+  /** the World's Depth Records (ADR-0015): deepest-first, ties by earliest set */
+  async getDepthRecords(): Promise<DepthRecords> {
+    await this.lag();
+    const rec = this.db.world?.depthRecords ?? { descents: {}, bests: {} };
+    const descents = Object.entries(rec.descents)
+      .map(([descentId, d]) => ({ descentId, depth: d.depth, roster: [...d.roster], achievedAt: d.at }))
+      .sort((a, b) => b.depth - a.depth || a.achievedAt - b.achievedAt)
+      .slice(0, 50);
+    const bests = Object.entries(rec.bests)
+      .map(([name, b]) => ({ name, depth: b.depth, achievedAt: b.at }))
+      .sort((a, b) => b.depth - a.depth || a.achievedAt - b.achievedAt)
+      .slice(0, 50);
+    return { descents, bests };
   }
 
   /** single-player: the lone Player is always the host, so nothing is on the wire */

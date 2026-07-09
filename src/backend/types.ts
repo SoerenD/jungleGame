@@ -297,6 +297,41 @@ export type OpenDelveResult =
   | { ok: true; delveOpen: true };
 
 /**
+ * The Depth Record write that rides a Stage's participation-loot claim
+ * (ADR-0015 §5): the Descent id (= the Stage-1 runId carried through the
+ * chain), the Depth just cleared, and the participation-loot roster. Sent only
+ * by clients that landed ≥1 hit — credit is exactly the participation set.
+ */
+export interface DepthRecordWrite {
+  descentId: string;
+  depth: number;
+  roster: string[];
+}
+
+/** one engraved Descent: how deep it got, who cleared that deepest Stage, when */
+export interface DepthDescentRecord {
+  descentId: string;
+  depth: number;
+  roster: string[];
+  achievedAt: number;
+}
+
+/** one Player's personal best — the deepest Stage they helped clear */
+export interface DepthBestRecord {
+  name: string;
+  depth: number;
+  achievedAt: number;
+}
+
+/** the World's Depth Records (ADR-0015): append/upsert-only, never pruned —
+ *  the board displays a top slice; both lists arrive deepest-first, ties by
+ *  earliest achievedAt */
+export interface DepthRecords {
+  descents: DepthDescentRecord[];
+  bests: DepthBestRecord[];
+}
+
+/**
  * A live mob as the host broadcasts it (ADR-0007 §2/§10). Mob HP lives ONLY in
  * host memory and on the wire — never a DB row. Peers render straight from these
  * snapshots; the host is the sole simulator/authority for the run.
@@ -314,6 +349,8 @@ export interface MobSnap {
   phase: number;
   /** the Forgeborn's oversized radius-strike is live (ADR-0011) — peers render/adjudicate the big zone */
   erupt?: boolean;
+  /** the Bulwark's guard is up (ADR-0016) — peers render the lit rune ring (hits bounce host-side) */
+  guard?: boolean;
 }
 export interface ProjSnap {
   id: string;
@@ -328,17 +365,21 @@ export interface ProjSnap {
  * (MockBackend) nothing is on the wire — the lone player IS the host and drives
  * the run locally. `runId` scopes every message to one instance.
  *
- * ADR-0011 (chained Stages): `start` carries a `stage` marker (1 = the Delve, 2 =
- * the Deep). A descent is just a fresh `start` with `stage: 2` and a new `runId`,
- * accepted by at-the-door party-mates (the relaxed join-guard). `end` gains
- * `stagecleared`: a Stage-1 boss fell — pay that run's loot and open the door, but
- * DO NOT tear the instance down (the party lingers to descend or leave). Only
- * `victory` (the Forgeborn) ends the whole descent.
+ * ADR-0011/0015 (chained Stages, endless): `start` carries the Stage's Depth
+ * NUMBER (1 = the Delve, 2 = the Deep, 3+ = the generated Depths — guests
+ * rebuild the whole generated Stage from this number alone; no seed on the
+ * wire). A descent is just a fresh `start` with the next number and a new
+ * `runId`, accepted by at-the-door party-mates (the relaxed join-guard).
+ * EVERY boss fall is `stagecleared` — pay that run's loot and open the next
+ * door, never tearing the instance down (ADR-0015 retires "the Forgeborn ends
+ * the descent"; only wipe, leaving, or declining the door ends a Descent).
+ * `participants` on `end` is the participation-loot set — the roster the Depth
+ * Record credits.
  */
 export type DungeonMsg =
-  | { t: 'start'; runId: string; host: string; heads: number; roster: string[]; stage?: 1 | 2 }
+  | { t: 'start'; runId: string; host: string; heads: number; roster: string[]; stage?: number }
   | { t: 'snap'; runId: string; mobs: MobSnap[]; projectiles: ProjSnap[] }
-  | { t: 'end'; runId: string; reason: 'victory' | 'wipe' | 'hostleft' | 'stagecleared'; loot?: Inventory }
+  | { t: 'end'; runId: string; reason: 'victory' | 'wipe' | 'hostleft' | 'stagecleared'; loot?: Inventory; participants?: string[] }
   | { t: 'join'; runId: string; name: string }
   | { t: 'pos'; runId: string; name: string; x: number; y: number }
   | { t: 'hit'; runId: string; mobId: string; by: string; tool?: ItemId }
@@ -473,8 +514,16 @@ export interface Backend {
    * grant this Player their Delve participation loot at run completion — the run's
    * ONLY DB write (ADR-0007 §8). Mob HP never persists; only this does. Merged
    * into the caller's own inventory (each client claims for itself).
+   * ADR-0015 widens the same write: when `record` rides along, the backend also
+   * upserts the Descent's Depth Record (board entry + the caller's personal
+   * best) in that one call — no second bookkeeping.
    */
-  claimDelveLoot(loot: Inventory): Promise<{ inventory: Inventory }>;
+  claimDelveLoot(loot: Inventory, record?: DepthRecordWrite): Promise<{ inventory: Inventory }>;
+  /**
+   * read this World's Depth Records (ADR-0015): the deepest-Descents board and
+   * per-Player bests, deepest-first (ties by earliest achievedAt), top slice.
+   */
+  getDepthRecords(): Promise<DepthRecords>;
   /**
    * fire-and-forget a peer-host-authority Delve message over the Realtime channel
    * (ADR-0007 §3). No-op in single-player (MockBackend) — the lone host is local.

@@ -14,6 +14,10 @@
  */
 import type { ResourceId, ToolId } from './items';
 import { rollGuardianDamage } from './guardian';
+// i18n is explicitly node-safe (every browser access is guarded) — the generated
+// Depths compose their Husk/boss/zone names from its localized word lists
+// (ADR-0015: composed, never baked English strings).
+import { t } from '../i18n';
 // type-only (erased at compile — NO runtime import, so no circular dependency):
 // the open-world Wildlife (ADR-0012) reskins this one engine. Its kinds widen
 // MobKind so MobState/mob sprites accept them; their profiles register at runtime
@@ -27,6 +31,8 @@ export const DEEP_CORE: ResourceId = 'deep_core';
 /** the Deep's loot (ADR-0011): common Cinder/Ember Husk drop + rare Forgeborn drop */
 export const CINDER_SHARD: ResourceId = 'cinder_shard';
 export const FORGE_CORE: ResourceId = 'forge_core';
+/** the generated Depths' ONLY loot (ADR-0015): one Sigil per Stage boss, prestige-only */
+export const DEPTH_SIGIL: ResourceId = 'depth_sigil';
 /** husk shards awarded per participant at run completion (one per Husk felled) */
 export const SHARD_PER_KILL = 1;
 /** the rare boss Resource each participant is granted on a completed run */
@@ -256,15 +262,22 @@ export function isDelveBlocked(tx: number, ty: number): boolean {
 // molten-reskinned and tuned slightly harder. Bosses: the Deep Guardian ('boss',
 // Stage 1) and the Forgeborn ('forgeborn', Stage 2, + its signature eruption).
 export type HuskKind = 'grasp' | 'spit' | 'cinder' | 'ember';
+/**
+ * The Depth boss kits (ADR-0016): the two authored bosses plus five variant
+ * kits with their own attack patterns + silhouettes. themeFor(depth) picks one
+ * seeded per Depth — the same Depth always rolls the same boss, no seed on the
+ * wire. All seven run the ONE shared state machine with per-kit branches.
+ */
+export type DepthBossKind = 'boss' | 'forgeborn' | 'ram' | 'warden' | 'whirl' | 'bulwark' | 'brood';
 /** the kinds native to the Dungeons (the closed MOB_PROFILES table below) */
-export type DungeonMobKind = HuskKind | 'boss' | 'forgeborn';
+export type DungeonMobKind = HuskKind | DepthBossKind;
 /** every kind the shared engine simulates: Dungeon Husks/bosses + open-world Wildlife */
 export type MobKind = DungeonMobKind | WildKind;
 
 /** which Dungeon kinds are the ranged kiters (start in 'kite', run stepRanged) */
 const RANGED_KINDS = new Set<DungeonMobKind>(['spit', 'ember']);
 /** which Dungeon kinds are the scaled reactive bosses (per-head HP, run stepBoss) */
-const BOSS_KINDS = new Set<DungeonMobKind>(['boss', 'forgeborn']);
+const BOSS_KINDS = new Set<DungeonMobKind>(['boss', 'forgeborn', 'ram', 'warden', 'whirl', 'bulwark', 'brood']);
 export function isBossKind(kind: MobKind): boolean {
   return BOSS_KINDS.has(kind as DungeonMobKind);
 }
@@ -316,6 +329,25 @@ export interface MobProfile {
   eruptStrikeMs?: number;
   /** base cooldown between eruptions (shortened by fury); first fires after it too */
   eruptEveryMs?: number;
+  // --- the Depth boss kits (ADR-0016). `kit` picks a per-kit branch in stepBoss;
+  // undefined = the two authored bosses' classic lunge+volley behaviour. Each kit
+  // REUSES the same state nodes + MobEvent vocabulary — no second engine:
+  //   ram     — locks a charge lane through you (windup → long dash strike), plus
+  //             the eruption fields as its point-blank slam ring.
+  //   warden  — hover-kites and fires telegraphed fans; eruptEveryMs paces its
+  //             signature wide slow "wall" volley (a curtain you slip through).
+  //   whirl   — tucks (windup), then SPINS: a long moving strike zone centred on
+  //             itself (strikeMs = spin duration, lungeSpeed = spin drift speed).
+  //   bulwark — guards (hits bounce, applyMobHit) while walking you down;
+  //             eruptEveryMs paces the guard DROP → counter-slam → long exposed
+  //             recover (the punish window).
+  //   brood   — rooted; eruptEveryMs paces a BIRTH (small shockwave + a summon
+  //             MobEvent the host turns into Husk adds), claws if you hug it.
+  kit?: 'ram' | 'warden' | 'whirl' | 'bulwark' | 'brood';
+  /** warden: shots per fan volley (phase 2 adds one) */
+  burstShots?: number;
+  /** warden: ms between the shots of one volley */
+  burstGapMs?: number;
 }
 
 /**
@@ -448,6 +480,124 @@ export const MOB_PROFILES: Record<DungeonMobKind, MobProfile> = {
     eruptStrikeMs: 520,
     eruptEveryMs: 8000,
   },
+  // ---- the Depth boss kits (ADR-0016): five variant bosses the generated Depths
+  // roll seeded. HP is per-head via the ONE monotone bossHpPerHead curve (the
+  // profile hp is documentation); per-mob danger stays knockdown-only + readable.
+  // the Ram — a charger: telegraphs a lane THROUGH you, then dashes it (7.2 t/s,
+  // below Player speed — a right-angle sidestep always escapes). Crowd it and it
+  // answers with a point-blank slam ring (the erupt fields).
+  ram: {
+    kit: 'ram',
+    hp: 90,
+    radius: 1.35,
+    speed: 2.6,
+    aggro: 14,
+    reach: 2.2,
+    telegraphMs: 1400,
+    strikeMs: 900, // the dash — ~6.5 tiles of committed lane
+    lungeSpeed: 7.2,
+    strikeR: 1.05,
+    cooldownMs: 2400,
+    kiteMin: 0,
+    fireRange: 9, // repurposed: the range at which it commits a charge
+    projSpeed: 0,
+    projR: 0,
+    eruptR: 3.4,
+    eruptTelegraphMs: 1500,
+    eruptStrikeMs: 420,
+    eruptEveryMs: 9000,
+  },
+  // the Warden — a hovering caster: kites a firing pocket and looses telegraphed
+  // 3-shot fans; every eruptEveryMs it conjures its signature WALL — seven slow
+  // shots fanned wide, a curtain with gaps you slip through. Never melees.
+  warden: {
+    kit: 'warden',
+    hp: 90,
+    radius: 1.15,
+    speed: 2.7,
+    aggro: 15,
+    reach: 0,
+    telegraphMs: 950,
+    strikeMs: 0,
+    lungeSpeed: 0,
+    strikeR: 0,
+    cooldownMs: 2100,
+    kiteMin: 4.5,
+    fireRange: 9.5,
+    projSpeed: 5.2,
+    projR: 0.6,
+    burstShots: 3,
+    burstGapMs: 170,
+    eruptEveryMs: 9500, // paces the wall volley (no erupt zone — projectiles only)
+  },
+  // the Whirlwind — area denial: tucks its blades (long windup), then SPINS for
+  // 2.6s — a moving knockdown zone drifting after you SLOWER than you run (3.3
+  // t/s), then a long dizzy recover: the punish window.
+  whirl: {
+    kit: 'whirl',
+    hp: 90,
+    radius: 1.25,
+    speed: 2.9,
+    aggro: 13,
+    reach: 3.2, // commits the tuck when you're this close
+    telegraphMs: 1500,
+    strikeMs: 2600, // the spin duration
+    lungeSpeed: 3.3, // spin drift speed — always outrunnable
+    strikeR: 1.7,
+    cooldownMs: 3000, // dizzy — the punish window
+    kiteMin: 0,
+    fireRange: 0,
+    projSpeed: 0,
+    projR: 0,
+  },
+  // the Bulwark — a walking wall: guards behind its rune slab (hits BOUNCE —
+  // applyMobHit deals 0) while pressing toward you; the guard drops on a cycle
+  // into a counter-slam ring, then a LONG exposed recover — hit it then.
+  bulwark: {
+    kit: 'bulwark',
+    hp: 90,
+    radius: 1.4,
+    speed: 2.0,
+    aggro: 13,
+    reach: 2.2,
+    telegraphMs: 1150,
+    strikeMs: 220,
+    lungeSpeed: 0,
+    strikeR: 1.2,
+    cooldownMs: 3500, // the exposed window after the slam
+    kiteMin: 0,
+    fireRange: 0,
+    projSpeed: 0,
+    projR: 0,
+    eruptR: 3.0,
+    eruptTelegraphMs: 1400,
+    eruptStrikeMs: 420,
+    eruptEveryMs: 5200, // how long the guard holds each cycle
+  },
+  // the Broodmother — rooted: never moves; on a cycle her cage BURSTS (a small
+  // shockwave + two Husk adds crawl out — the host caps the room at
+  // DEPTH_MOB_CAP), and she claws anyone hugging her. Cut the brood down first.
+  brood: {
+    kit: 'brood',
+    hp: 90,
+    radius: 1.3,
+    speed: 0, // rooted
+    aggro: 14,
+    reach: 2.2,
+    telegraphMs: 1100,
+    strikeMs: 200,
+    lungeSpeed: 0,
+    strikeR: 1.15,
+    cooldownMs: 2200,
+    kiteMin: 0,
+    fireRange: 0,
+    projSpeed: 0,
+    projR: 0,
+    eruptR: 1.8, // the birth shockwave — step off her skirt
+    eruptTelegraphMs: 1900,
+    eruptStrikeMs: 380,
+    eruptEveryMs: 7200,
+  },
 };
 
 /**
@@ -568,11 +718,17 @@ export interface MobState {
   erupt?: boolean;
   /** Forgeborn only: ms until the next eruption may fire (counts down while chasing) */
   eruptCd?: number;
+  /** the Bulwark's guard is up (ADR-0016): hits bounce (applyMobHit deals 0) — on the wire */
+  guard?: boolean;
+  /** the Warden's live volley mode (host-only): 0 = fan, 1 = the wide slow wall */
+  mode?: number;
 }
 
-export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerHead = BOSS_HP_PER_HEAD): MobState {
+export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerHead = BOSS_HP_PER_HEAD, hpMul = 1): MobState {
   const P = profileOf(spawn.kind);
-  const maxHp = isBossKind(spawn.kind) ? bossHpPerHead * delveHeads(heads) : P.hp;
+  // hpMul is the per-Depth Husk hardening (ADR-0015, 1 on the authored Stages);
+  // boss HP passes in pre-compounded per-head values, so only heads scale it here
+  const maxHp = isBossKind(spawn.kind) ? Math.round(bossHpPerHead * delveHeads(heads)) : Math.round(P.hp * hpMul);
   return {
     id,
     kind: spawn.kind,
@@ -589,6 +745,8 @@ export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerH
     // the Forgeborn's FIRST eruption comes early (teaches the mechanic); later ones
     // respect the full eruptEveryMs cooldown (shortened by fury)
     eruptCd: P.eruptEveryMs ? Math.round(P.eruptEveryMs * 0.5) : 0,
+    // the Bulwark opens with its guard up — the fight starts by teaching the bounce
+    guard: P.kit === 'bulwark' ? true : undefined,
   };
 }
 
@@ -599,6 +757,61 @@ export function bossPhaseForHp(frac: number): number {
   return 0;
 }
 
+// ---------------------------------------------------- per-Depth tuning (ADR-0015)
+// The generated Depths harden the SAME two archetypes + recycled boss kits by
+// multiplying the static profiles at sim time — no new state machine, no new
+// engine. All named constants are playtest-tunable; the three HARD caps keep
+// deep runs readable forever: mob speed stays below Player speed (escape/kiting
+// always possible), telegraphs never dive under a humanly reactable floor, and
+// the mob count never exceeds what the host's single batched broadcast carries.
+// Past those caps, difficulty keeps compounding via HP and cadence alone.
+
+/** Player speed in TILE units — mirrors config's PLAYER_SPEED (130 px/s) / TILE (16)
+ *  (this module must stay node-importable and may not import ../config) */
+export const PLAYER_SPEED_TILES = 130 / 16; // 8.125
+/** Husk & boss HP multiplier per Depth past 2 (compounds without end) */
+export const DEPTH_HP_MUL = 1.15;
+/** move-speed multiplier per Depth past 2 (creeps up toward the hard cap) */
+export const DEPTH_SPEED_MUL = 1.04;
+/** HARD cap: no Depth-tuned mob ever moves as fast as a Player (tiles/second) */
+export const DEPTH_MOB_SPEED_CAP = 7.4;
+/** telegraph & cooldown multiplier per Depth past 2 (cadence quickens, compounding) */
+export const DEPTH_CADENCE_MUL = 0.96;
+/** HARD floor: a wind-up never shrinks below this — attacks stay reactable */
+export const DEPTH_TELEGRAPH_FLOOR_MS = 600;
+/** floor under the quickening recovery so a mob never attacks back-to-back */
+export const DEPTH_COOLDOWN_FLOOR_MS = 700;
+/** ranged-kiter projectile-speed multiplier per Depth past 2 */
+export const DEPTH_PROJ_SPEED_MUL = 1.05;
+/** projectiles too stay side-steppable: capped below Player speed like the mobs */
+export const DEPTH_PROJ_SPEED_CAP = 7.4;
+/** extra Husks per Depth past 2, stepping toward the count cap */
+export const DEPTH_COUNT_STEP = 1;
+/** HARD cap: total mobs per Depth (the host's ONE batched broadcast per tick is
+ *  the bandwidth ceiling — ADR-0012's cap discipline applied to the Delve) */
+export const DEPTH_MOB_CAP = 24;
+
+/** the compounding multipliers themeFor(depth) hands the sim (identity when absent) */
+export interface MobTune {
+  /** multiplies chase/kite speed; the result is clamped at DEPTH_MOB_SPEED_CAP */
+  speedMul: number;
+  /** multiplies telegraph wind-ups; floored at DEPTH_TELEGRAPH_FLOOR_MS (after fury) */
+  telegraphMul: number;
+  /** multiplies attack recovery/cooldowns; floored at DEPTH_COOLDOWN_FLOOR_MS */
+  cooldownMul: number;
+  /** multiplies projectile speed; clamped at DEPTH_PROJ_SPEED_CAP */
+  projSpeedMul: number;
+}
+
+const tunedSpeed = (P: MobProfile, tune?: MobTune): number =>
+  tune ? Math.min(P.speed * tune.speedMul, DEPTH_MOB_SPEED_CAP) : P.speed;
+const tunedTelegraph = (baseMs: number, tune?: MobTune): number =>
+  tune ? Math.max(baseMs * tune.telegraphMul, DEPTH_TELEGRAPH_FLOOR_MS) : baseMs;
+const tunedCooldown = (baseMs: number, tune?: MobTune): number =>
+  tune ? Math.max(baseMs * tune.cooldownMul, DEPTH_COOLDOWN_FLOOR_MS) : baseMs;
+const tunedProjSpeed = (base: number, tune?: MobTune): number =>
+  tune ? Math.min(base * tune.projSpeedMul, DEPTH_PROJ_SPEED_CAP) : base;
+
 export interface MobCtx {
   /** alive player positions in tile units */
   targets: { x: number; y: number }[];
@@ -606,6 +819,8 @@ export interface MobCtx {
   /** frame time in ms */
   dt: number;
   rng: () => number;
+  /** ADR-0015: the live Stage's per-Depth hardening (undefined on Stages 1–2 + Wildlife) */
+  tune?: MobTune;
 }
 
 /** what a mob's step produced this frame for the host to render/adjudicate */
@@ -614,6 +829,9 @@ export interface MobEvent {
   strike?: { x: number; y: number; r: number };
   /** a projectile to spawn (velocity in tiles/second) */
   projectile?: { x: number; y: number; vx: number; vy: number; r: number };
+  /** the Broodmother's birth (ADR-0016): positions where the host spawns Husk
+   *  adds (the host picks the Stage's chaser kind + enforces DEPTH_MOB_CAP) */
+  summon?: { x: number; y: number }[];
   sfx?: 'lunge' | 'spit' | 'roar';
 }
 
@@ -700,13 +918,13 @@ function stepMelee(
         m.t = 0;
         return { sfx: 'lunge' };
       }
-      moveToward(m, near.x, near.y, P.speed, ctx);
+      moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx);
       return {};
     }
     case 'windup': {
       // the Forgeborn's eruption uses a much longer, fury-independent wind-up (it
       // reads as an authored, room-wide "get to the wall" threat, not a quick lunge)
-      const tele = m.erupt ? P.eruptTelegraphMs ?? P.telegraphMs : P.telegraphMs * fury;
+      const tele = tunedTelegraph(m.erupt ? P.eruptTelegraphMs ?? P.telegraphMs : P.telegraphMs * fury, ctx.tune);
       if (m.t >= tele) {
         m.st = 'strike';
         m.t = 0;
@@ -731,7 +949,7 @@ function stepMelee(
       }
       return { strike: { x: m.x, y: m.y, r: P.strikeR } };
     case 'recover':
-      if (m.t >= P.cooldownMs * fury) {
+      if (m.t >= tunedCooldown(P.cooldownMs * fury, ctx.tune)) {
         m.st = 'chase';
         m.t = 0;
       }
@@ -755,9 +973,9 @@ function stepRanged(
       if (!near) return {};
       m.face = Math.atan2(near.y - m.y, near.x - m.x);
       if (near.d < P.kiteMin) {
-        moveToward(m, near.x, near.y, P.speed, ctx, true); // back away — player closed in
+        moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx, true); // back away — player closed in
       } else if (near.d > P.fireRange) {
-        moveToward(m, near.x, near.y, P.speed, ctx); // edge closer to get a shot
+        moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx); // edge closer to get a shot
       } else {
         // in the pocket — lock the target and aim
         m.ax = near.x;
@@ -768,18 +986,19 @@ function stepRanged(
       return {};
     }
     case 'aim':
-      if (m.t >= P.telegraphMs * fury) {
+      if (m.t >= tunedTelegraph(P.telegraphMs * fury, ctx.tune)) {
         m.st = 'recover';
         m.t = 0;
         const a = Math.atan2(m.ay - m.y, m.ax - m.x);
+        const ps = tunedProjSpeed(P.projSpeed, ctx.tune);
         return {
           sfx: 'spit',
-          projectile: { x: m.x, y: m.y, vx: Math.cos(a) * P.projSpeed, vy: Math.sin(a) * P.projSpeed, r: P.projR },
+          projectile: { x: m.x, y: m.y, vx: Math.cos(a) * ps, vy: Math.sin(a) * ps, r: P.projR },
         };
       }
       return {};
     case 'recover':
-      if (m.t >= P.cooldownMs * fury) {
+      if (m.t >= tunedCooldown(P.cooldownMs * fury, ctx.tune)) {
         m.st = 'kite';
         m.t = 0;
       }
@@ -803,6 +1022,12 @@ function stepBoss(
   near: { x: number; y: number; d: number } | null,
   fury: number,
 ): MobEvent {
+  // the Depth boss kits (ADR-0016) branch here; undefined = the classic kit below
+  if (P.kit === 'ram') return stepRam(m, ctx, P, near, fury);
+  if (P.kit === 'warden') return stepWarden(m, ctx, P, near, fury);
+  if (P.kit === 'whirl') return stepWhirl(m, ctx, P, near, fury);
+  if (P.kit === 'bulwark') return stepBulwark(m, ctx, P, near, fury);
+  if (P.kit === 'brood') return stepBrood(m, ctx, P, near, fury);
   if (m.st === 'chase' && near) {
     m.face = Math.atan2(near.y - m.y, near.x - m.x);
     // ERUPTION (the Forgeborn's signature move, ADR-0011): its cooldown ticks down
@@ -817,7 +1042,7 @@ function stepBoss(
         m.erupt = true;
         m.st = 'windup';
         m.t = 0;
-        m.eruptCd = P.eruptEveryMs * fury; // fury<1 → more frequent later
+        m.eruptCd = tunedCooldown(P.eruptEveryMs * fury, ctx.tune); // fury<1 → more frequent later
         return { sfx: 'roar' };
       }
     }
@@ -836,11 +1061,11 @@ function stepBoss(
       m.t = 0;
       return { sfx: 'roar' };
     }
-    moveToward(m, near.x, near.y, P.speed, ctx);
+    moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx);
     return {};
   }
   if (m.st === 'aim') {
-    if (m.t >= P.telegraphMs * fury) {
+    if (m.t >= tunedTelegraph(P.telegraphMs * fury, ctx.tune)) {
       m.st = 'recover';
       m.t = 0;
       // a spread volley: 1 shot in phase 0, widening to 3 in fury
@@ -851,15 +1076,276 @@ function stepBoss(
       const spread = 0.32;
       const k = shots === 1 ? 0 : Math.round(ctx.rng() * (shots - 1)) - (shots - 1) / 2;
       const a = base + k * spread;
+      const ps = tunedProjSpeed(P.projSpeed, ctx.tune);
       return {
         sfx: 'spit',
-        projectile: { x: m.x, y: m.y, vx: Math.cos(a) * P.projSpeed, vy: Math.sin(a) * P.projSpeed, r: P.projR },
+        projectile: { x: m.x, y: m.y, vx: Math.cos(a) * ps, vy: Math.sin(a) * ps, r: P.projR },
       };
     }
     return {};
   }
   // windup / strike / recover reuse the melee machine
   return stepMelee(m, ctx, P, near, fury);
+}
+
+// ------------------------------------------------- the Depth boss kits (ADR-0016)
+// Five variant bosses, each a small branch over the SAME state nodes + MobEvent
+// vocabulary (strike zones, projectiles, the erupt radius machine) — never a
+// second engine. themeFor(depth) rolls one per Depth, seeded; per-mob danger
+// stays knockdown-only and telegraph-first, exactly like everything since
+// ADR-0007. Every wind-up honours the tuned telegraph floor.
+
+/** the Ram: locks a charge lane through you, dashes it; slams point-blank crowding */
+function stepRam(
+  m: MobState,
+  ctx: MobCtx,
+  P: MobProfile,
+  near: { x: number; y: number; d: number } | null,
+  fury: number,
+): MobEvent {
+  // the slam's cadence ticks EVERY engaged frame (chase lasts ~one frame when a
+  // target is in charge range, so a chase-only tick would starve the slam)
+  if (P.eruptEveryMs && m.st !== 'windup' && m.st !== 'strike') m.eruptCd = (m.eruptCd ?? 0) - ctx.dt;
+  if (m.st === 'chase' && near) {
+    m.face = Math.atan2(near.y - m.y, near.x - m.x);
+    // the slam ring answers players who hug it instead of dodging the charges
+    if (P.eruptEveryMs) {
+      if (m.eruptCd !== undefined && m.eruptCd <= 0 && near.d <= P.reach * 1.6) {
+        m.ax = m.x;
+        m.ay = m.y;
+        m.erupt = true;
+        m.st = 'windup';
+        m.t = 0;
+        m.eruptCd = tunedCooldown(P.eruptEveryMs * fury, ctx.tune);
+        return { sfx: 'roar' };
+      }
+    }
+    if (near.d <= P.fireRange) {
+      // the CHARGE: the lane is locked THROUGH you (+4 tiles of overshoot) — a
+      // sidestep clears it; standing in the lane does not
+      m.ax = m.x + Math.cos(m.face) * (near.d + 4.0);
+      m.ay = m.y + Math.sin(m.face) * (near.d + 4.0);
+      m.st = 'windup';
+      m.t = 0;
+      return { sfx: 'roar' };
+    }
+    moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx);
+    return {};
+  }
+  // windup → dash-strike (the long strikeMs lane) → recover: the melee machine
+  return stepMelee(m, ctx, P, near, fury);
+}
+
+/** the Warden: hover-kites a firing pocket; telegraphed fans + a paced wall volley */
+function stepWarden(
+  m: MobState,
+  ctx: MobCtx,
+  P: MobProfile,
+  near: { x: number; y: number; d: number } | null,
+  fury: number,
+): MobEvent {
+  // the wall's cadence ticks EVERY engaged frame (in the pocket, chase lasts a
+  // single frame before it aims — a chase-only tick would starve the wall)
+  m.eruptCd = (m.eruptCd ?? 0) - ctx.dt;
+  switch (m.st) {
+    case 'chase': {
+      if (!near) return {};
+      m.face = Math.atan2(near.y - m.y, near.x - m.x);
+      if (near.d < P.kiteMin) {
+        moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx, true);
+        return {};
+      }
+      if (near.d > P.fireRange) {
+        moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx);
+        return {};
+      }
+      // in the pocket — lock the target and conjure: the wall when paced, else a fan
+      m.ax = near.x;
+      m.ay = near.y;
+      m.st = 'aim';
+      m.t = 0;
+      if (m.eruptCd <= 0) {
+        m.mode = 1;
+        m.eruptCd = tunedCooldown((P.eruptEveryMs ?? 9000) * fury, ctx.tune);
+        return { sfx: 'roar' };
+      }
+      m.mode = 0;
+      return {};
+    }
+    case 'aim':
+      if (m.t >= tunedTelegraph(P.telegraphMs * fury, ctx.tune)) {
+        m.st = 'strike'; // repurposed as the VOLLEY: shots stream out over its duration
+        m.t = 0;
+      }
+      return {};
+    case 'strike': {
+      const wall = m.mode === 1;
+      // the wall: seven slow wide shots (a curtain with gaps); the fan: three
+      // aimed shots, four in deep fury — one projectile per gap crossing
+      const shots = wall ? 7 : (P.burstShots ?? 3) + (m.phase >= 2 ? 1 : 0);
+      const gap = P.burstGapMs ?? 170;
+      let ev: MobEvent = {};
+      const idx = Math.min(shots - 1, Math.floor(m.t / gap));
+      const prev = Math.floor(Math.max(0, m.t - ctx.dt) / gap);
+      if (m.t <= ctx.dt || idx > prev) {
+        const base = Math.atan2(m.ay - m.y, m.ax - m.x);
+        const spread = wall ? 0.9 : 0.3;
+        const a = base + (shots === 1 ? 0 : ((idx / (shots - 1)) * 2 - 1) * spread);
+        const ps = tunedProjSpeed(P.projSpeed, ctx.tune) * (wall ? 0.55 : 1);
+        ev = {
+          sfx: 'spit',
+          projectile: { x: m.x, y: m.y, vx: Math.cos(a) * ps, vy: Math.sin(a) * ps, r: P.projR },
+        };
+      }
+      if (m.t >= shots * gap) {
+        m.st = 'recover';
+        m.t = 0;
+      }
+      return ev;
+    }
+    case 'recover':
+      if (m.t >= tunedCooldown(P.cooldownMs * fury, ctx.tune)) {
+        m.st = 'chase';
+        m.t = 0;
+      }
+      return {};
+    default:
+      m.st = 'chase';
+      return {};
+  }
+}
+
+/** the Whirlwind: tucks, then SPINS — a long moving strike zone, then a dizzy recover */
+function stepWhirl(
+  m: MobState,
+  ctx: MobCtx,
+  P: MobProfile,
+  near: { x: number; y: number; d: number } | null,
+  fury: number,
+): MobEvent {
+  switch (m.st) {
+    case 'chase': {
+      if (!near) return {};
+      m.face = Math.atan2(near.y - m.y, near.x - m.x);
+      if (near.d <= P.reach) {
+        m.ax = m.x; // the tuck telegraphs on the spot — the zone will be itself
+        m.ay = m.y;
+        m.st = 'windup';
+        m.t = 0;
+        return { sfx: 'roar' };
+      }
+      moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx);
+      return {};
+    }
+    case 'windup':
+      if (m.t >= tunedTelegraph(P.telegraphMs * fury, ctx.tune)) {
+        m.st = 'strike'; // the SPIN
+        m.t = 0;
+        return { sfx: 'lunge' };
+      }
+      return {};
+    case 'strike': {
+      // the spin drifts after the nearest player SLOWER than they run — hold
+      // distance and it never catches you; the zone rides the boss itself
+      if (near) {
+        m.face = Math.atan2(near.y - m.y, near.x - m.x);
+        moveToward(m, near.x, near.y, P.lungeSpeed, ctx);
+      }
+      if (m.t >= P.strikeMs) {
+        m.st = 'recover'; // dizzy — the punish window
+        m.t = 0;
+      }
+      return { strike: { x: m.x, y: m.y, r: P.strikeR } };
+    }
+    case 'recover':
+      if (m.t >= tunedCooldown(P.cooldownMs * fury, ctx.tune)) {
+        m.st = 'chase';
+        m.t = 0;
+      }
+      return {};
+    default:
+      m.st = 'chase';
+      return {};
+  }
+}
+
+/** the Bulwark: guards (hits bounce) while walking you down; drops it into a counter-slam */
+function stepBulwark(
+  m: MobState,
+  ctx: MobCtx,
+  P: MobProfile,
+  near: { x: number; y: number; d: number } | null,
+  fury: number,
+): MobEvent {
+  if (m.st === 'chase' && near) {
+    m.face = Math.atan2(near.y - m.y, near.x - m.x);
+    m.guard = true; // back behind the slab the moment it re-engages
+    m.eruptCd = (m.eruptCd ?? 0) - ctx.dt;
+    if (m.eruptCd <= 0) {
+      // the guard DROPS: counter-slam wind-up → ring → the long exposed recover.
+      // guard stays false through the whole sequence — that's the damage window.
+      m.guard = false;
+      m.erupt = true;
+      m.ax = m.x;
+      m.ay = m.y;
+      m.st = 'windup';
+      m.t = 0;
+      m.eruptCd = tunedCooldown((P.eruptEveryMs ?? 5200) * fury, ctx.tune);
+      return { sfx: 'roar' };
+    }
+    moveToward(m, near.x, near.y, tunedSpeed(P, ctx.tune), ctx); // the walking wall
+    return {};
+  }
+  return stepMelee(m, ctx, P, near, fury);
+}
+
+/** the Broodmother: rooted; her cage bursts on a cycle (shockwave + Husk adds), claws huggers */
+function stepBrood(
+  m: MobState,
+  ctx: MobCtx,
+  P: MobProfile,
+  near: { x: number; y: number; d: number } | null,
+  fury: number,
+): MobEvent {
+  // the birth's cadence ticks EVERY engaged frame except mid-birth (a hugging
+  // player keeps her clawing — a chase-only tick would starve the brood)
+  if (m.st !== 'windup' && m.st !== 'strike') m.eruptCd = (m.eruptCd ?? 0) - ctx.dt;
+  if (m.st === 'chase') {
+    if (!near) return {};
+    m.face = Math.atan2(near.y - m.y, near.x - m.x);
+    if ((m.eruptCd ?? 0) <= 0) {
+      // the BIRTH: a long-telegraphed cage-burst — a small shockwave off her
+      // skirt, and the summon rides the wind-up→strike transition below
+      m.ax = m.x;
+      m.ay = m.y;
+      m.erupt = true;
+      m.st = 'windup';
+      m.t = 0;
+      m.eruptCd = tunedCooldown((P.eruptEveryMs ?? 7200) * fury, ctx.tune);
+      return { sfx: 'roar' };
+    }
+    if (near.d <= P.reach) {
+      // the claw — she defends her skirt but NEVER walks (rooted)
+      m.ax = m.x + Math.cos(m.face) * (near.d + 0.6);
+      m.ay = m.y + Math.sin(m.face) * (near.d + 0.6);
+      m.st = 'windup';
+      m.t = 0;
+      return { sfx: 'lunge' };
+    }
+    return {};
+  }
+  const birthing = m.st === 'windup' && !!m.erupt;
+  const ev = stepMelee(m, ctx, P, near, fury);
+  if (birthing && m.st === 'strike' && m.erupt) {
+    // the cage bursts THIS frame: the host turns these into Husk adds (its
+    // chaser kind, capped at DEPTH_MOB_CAP) — the sim itself never adds mobs
+    ev.summon = [
+      { x: m.x - 1.8, y: m.y + 0.4 },
+      { x: m.x + 1.8, y: m.y + 0.4 },
+    ];
+    ev.sfx = 'roar';
+  }
+  return ev;
 }
 
 /**
@@ -871,6 +1357,9 @@ function stepBoss(
  */
 export function applyMobHit(m: MobState, tool: ToolId | undefined, rng: () => number): { damage: number; crit: boolean; dead: boolean } {
   if (m.st === 'dead') return { damage: 0, crit: false, dead: true };
+  // the Bulwark's guard (ADR-0016): while the rune slab is up, every hit bounces —
+  // damage flows only in the counter-slam + exposed-recover window of its cycle
+  if (m.guard) return { damage: 0, crit: false, dead: false };
   const { damage, crit } = rollGuardianDamage(tool, rng);
   m.hp = Math.max(0, m.hp - damage);
   const dead = m.hp <= 0;
@@ -1067,7 +1556,8 @@ export function planDeepSpawns(heads: number, rng: () => number): MobSpawn[] {
  * boss-death door opens. Pure data — the scene multiplies TILE at the render edge.
  */
 export interface StageDef {
-  stage: 1 | 2;
+  /** the Depth number this Stage sits at (ADR-0015: the chain is endless) */
+  stage: number;
   w: number;
   h: number;
   rooms: Rect[];
@@ -1083,12 +1573,27 @@ export interface StageDef {
   isBlocked(tx: number, ty: number): boolean;
   planSpawns(heads: number, rng: () => number): MobSpawn[];
   bossHpPerHead: number;
-  /** the zone banner shown on entry/descent (English id; i18n translates it) */
+  /** the zone banner shown on entry/descent (English id; i18n translates it —
+   *  generated Depths carry an already-localized composed name here) */
   zone: string;
-  /** the run's participation loot: common (per Husk felled) + rare (on the boss) */
+  /** the run's participation loot: common (per Husk felled) + rare (on the boss).
+   *  Depths 3+ pay ONE Sigil per boss and nothing else (both ids = the Sigil). */
   loot: { common: ResourceId; rare: ResourceId };
-  /** Stage 1 only: interior tile where the hidden boss-door opens (leads to the Deep) */
+  /** interior tile where the boss-death door opens — every Stage has one now
+   *  (ADR-0015 retires "the Forgeborn ends the descent"; the chain never stops) */
   door?: { tx: number; ty: number };
+  /** which spat-shot art the Stage's kiters/boss fire */
+  shot: 'acid' | 'ember';
+  /** Husk (non-boss) HP multiplier — compounds per Depth (1 on the authored Stages) */
+  hpMul: number;
+  /** ADR-0015 generated Depths: per-depth floor ramp (overrides the palette ramps) */
+  floor?: DepthFloor;
+  /** ADR-0015 generated Depths: multiply-tints re-dressing the recycled sprites/props */
+  tint?: { chaser: number; kiter: number; boss: number; prop: number };
+  /** ADR-0015 generated Depths: the compounding cadence/speed tuning stepMob applies */
+  tune?: MobTune;
+  /** ADR-0015 generated Depths: localized composed display names (i18n word lists) */
+  names?: { zone: string; huskFamily: string; boss: string };
 }
 
 const STAGE_1: StageDef = {
@@ -1109,6 +1614,8 @@ const STAGE_1: StageDef = {
   zone: 'The Delve',
   loot: { common: HUSK_SHARD, rare: DEEP_CORE },
   door: { tx: 55, ty: 3 }, // top-east of the boss room E (above D), clear of the boss + props
+  shot: 'acid',
+  hpMul: 1,
 };
 
 const STAGE_2: StageDef = {
@@ -1128,7 +1635,411 @@ const STAGE_2: StageDef = {
   bossHpPerHead: FORGEBORN_HP_PER_HEAD,
   zone: 'The Deep',
   loot: { common: CINDER_SHARD, rare: FORGE_CORE },
+  // ADR-0015: the Forgeborn no longer ends the descent — its fall opens the door
+  // to the first generated Depth. East edge of room E, clear of the boss + props.
+  door: { tx: 80, ty: 11 },
+  shot: 'ember',
+  hpMul: 1,
 };
 
-export type Stage = 1 | 2;
-export const STAGES: Record<Stage, StageDef> = { 1: STAGE_1, 2: STAGE_2 };
+/** a Stage's number IS its Depth (ADR-0015): 1–2 authored, 3+ generated, endless */
+export type Stage = number;
+export const STAGES: Record<number, StageDef> = { 1: STAGE_1, 2: STAGE_2 };
+
+/**
+ * The one lookup every caller uses (ADR-0015): authored defs for Depths 1–2, a
+ * deterministically generated def for any Depth ≥ 3 — a pure, memoized function
+ * of the Depth number (guests rebuild the identical Stage from the number the
+ * descent `start` message carries; no seed on the wire).
+ */
+const GENERATED_STAGES = new Map<number, StageDef>();
+export function stageDefFor(depth: number): StageDef {
+  const d = Math.max(1, Math.floor(depth));
+  if (STAGES[d]) return STAGES[d];
+  let def = GENERATED_STAGES.get(d);
+  if (!def) {
+    def = buildDepthStage(d);
+    GENERATED_STAGES.set(d, def);
+  }
+  return def;
+}
+
+// =========================================================== endless Depths (ADR-0015)
+// Everything below derives a Depth's ENTIRE content — palette, re-dressed Husk
+// family (names composed from the i18n word lists), recycled boss kit, floor
+// plan, and compounding tuning — as a pure function of the Depth number. No
+// Date.now, no Math.random, no seed on the wire: Depth 7 looks identical in
+// every run and every World, forever. Layouts come from a CONSTRAINED generator
+// that only emits the authored grammar (safe entry chamber → 3–5 rooms
+// west-to-east → boss room) through the same carve function as Stages 1–2.
+
+/** the per-room floor ramp a generated Depth paints (mirrors the authored ramps) */
+export interface DepthFloor {
+  base: string;
+  toneA: string;
+  toneB: string;
+  toneC: string;
+  stain: string;
+  scuff: string;
+  speckle: string;
+  edge: string;
+}
+
+/** everything themeFor(depth) derives — the whole identity of one Depth */
+export interface DepthTheme {
+  depth: number;
+  /** which authored dressing family re-dresses this Depth (props + shot art) */
+  family: 'stone' | 'molten';
+  /** the Depth's boss kit (ADR-0016): one of the seven, rolled seeded per Depth */
+  bossKind: DepthBossKind;
+  /** the two re-dressed archetypes (melee chaser + ranged kiter — never a new AI) */
+  chaser: HuskKind;
+  kiter: HuskKind;
+  /** localized composed names (i18n word lists — never baked English strings) */
+  zoneName: string;
+  huskFamily: string;
+  bossName: string;
+  floor: DepthFloor;
+  lightColor: number;
+  tint: { chaser: number; kiter: number; boss: number; prop: number };
+  tune: MobTune;
+  hpMul: number;
+  bossHpPerHead: number;
+  layout: DepthLayout;
+}
+
+export interface DepthLayout {
+  w: number;
+  h: number;
+  rooms: Rect[];
+  corridors: Rect[];
+  entry: { tx: number; ty: number };
+  bossSpawn: { x: number; y: number };
+  door: { tx: number; ty: number };
+  props: DelveProp[];
+  lights: { tx: number; ty: number; color: number; scale: number; alpha: number }[];
+  chaserAnchors: { x: number; y: number }[];
+  kiterAnchors: { x: number; y: number }[];
+}
+
+/** tiny deterministic PRNG — seeded from the Depth number alone (never wall-clock) */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hslChannel(p: number, q: number, h: number): number {
+  let x = h;
+  if (x < 0) x += 1;
+  if (x > 1) x -= 1;
+  if (x < 1 / 6) return p + (q - p) * 6 * x;
+  if (x < 1 / 2) return q;
+  if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+  return p;
+}
+
+/** hsl (h 0–360, s/l 0–100) → 0xRRGGBB — the palette math behind every Depth hue */
+function hslNum(h: number, s: number, l: number): number {
+  const hh = ((h % 360) + 360) % 360 / 360;
+  const ss = s / 100;
+  const ll = l / 100;
+  if (ss === 0) {
+    const g = Math.round(ll * 255);
+    return (g << 16) | (g << 8) | g;
+  }
+  const q = ll < 0.5 ? ll * (1 + ss) : ll + ss - ll * ss;
+  const p = 2 * ll - q;
+  const r = Math.round(hslChannel(p, q, hh + 1 / 3) * 255);
+  const g = Math.round(hslChannel(p, q, hh) * 255);
+  const b = Math.round(hslChannel(p, q, hh - 1 / 3) * 255);
+  return (r << 16) | (g << 8) | b;
+}
+
+function hslHex(h: number, s: number, l: number): string {
+  return `#${hslNum(h, s, l).toString(16).padStart(6, '0')}`;
+}
+
+/** golden-angle hue walk — consecutive Depths land far apart on the color wheel */
+const DEPTH_HUE_STEP = 137.508;
+
+/**
+ * The constrained layout generator: only the authored grammar comes out — a safe
+ * entry chamber (the first Husk anchors sit beyond aggro range, exactly like
+ * Stage 1's antechamber), 3–5 Husk rooms marching west-to-east on a 2-tile
+ * corridor spine, then a boss room big enough that the eruption kit's edges are
+ * always reachable. Deterministic per Depth; carved by the same carveGrid.
+ */
+function genDepthLayout(depth: number, family: 'stone' | 'molten', lightColor: number): DepthLayout {
+  const rng = mulberry32((Math.imul(depth, 2654435761) ^ 0x9e3779b9) >>> 0);
+  const H = 24;
+  const SPINE = 11; // corridors occupy rows SPINE..SPINE+1
+  const rooms: Rect[] = [];
+  const corridors: Rect[] = [];
+  const entry: Rect = { x: 2, y: 8, w: 8, h: 7 }; // safe antechamber, spans the spine
+  rooms.push(entry);
+  const mids: Rect[] = [];
+  const midCount = 3 + Math.floor(rng() * 3); // 3–5 Husk rooms
+  let cursor = entry.x + entry.w;
+  let corW = 6 + Math.floor(rng() * 3); // the long safe-entry buffer (≥6 tiles)
+  for (let i = 0; i < midCount; i++) {
+    corridors.push({ x: cursor, y: SPINE, w: corW, h: 2 });
+    cursor += corW;
+    const w = 9 + Math.floor(rng() * 5); // 9–13
+    const h = 9 + Math.floor(rng() * 8); // 9–16
+    // the room must span the spine rows and stay inside the border walls
+    const yMin = Math.max(1, SPINE + 2 - h);
+    const yMax = Math.min(SPINE, H - 1 - h);
+    const y = yMin + Math.floor(rng() * Math.max(1, yMax - yMin + 1));
+    const r: Rect = { x: cursor, y, w, h };
+    rooms.push(r);
+    mids.push(r);
+    cursor += w;
+    corW = 3 + Math.floor(rng() * 3); // 3–5 between Husk rooms
+  }
+  corridors.push({ x: cursor, y: SPINE, w: corW, h: 2 });
+  cursor += corW;
+  // the boss room mirrors the Deep's arena: edges ≥9 tiles from the spawn, so
+  // sprinting out of the recycled eruption kit's radius is always possible
+  const boss: Rect = { x: cursor, y: 2, w: 22, h: 20 };
+  rooms.push(boss);
+  const w = boss.x + boss.w + 2;
+  const bossSpawn = { x: boss.x + 11, y: boss.y + 10 };
+  const door = { tx: boss.x + boss.w - 2, ty: boss.y + 1 }; // top-east, like Stage 1's
+
+  // ---- deterministic dressing from the family's authored prop kinds
+  const coverKinds: PropKind[] = family === 'stone' ? ['support_beam', 'obsidian_pillar'] : ['basalt_pillar'];
+  const lightKinds: PropKind[] = family === 'stone' ? ['brazier', 'brazier_violet'] : ['ember_brazier'];
+  const decorKinds: PropKind[] =
+    family === 'stone' ? ['rubble_pile', 'bone_pile', 'glyph_stone', 'crystal_teal', 'crystal_amber'] : ['lava_vein', 'slag_pile'];
+  const props: DelveProp[] = [];
+  const used = new Set<number>();
+  used.add(door.ty * w + door.tx); // the door tile stays clear
+  used.add((door.ty + 1) * w + door.tx);
+  const tryAdd = (kind: PropKind, tx: number, ty: number, blockOk: boolean): boolean => {
+    const k = ty * w + tx;
+    if (used.has(k)) return false;
+    // blocking cover never sits on the corridor spine rows, so no mouth ever seals
+    if (!blockOk && (ty === SPINE || ty === SPINE + 1)) return false;
+    // keep the boss's arena centre + the eruption escape lanes clear
+    if (Math.hypot(tx - bossSpawn.x, ty - bossSpawn.y) < 4) return false;
+    props.push({ kind, tx, ty });
+    used.add(k);
+    return true;
+  };
+  const scatter = (r: Rect, kinds: PropKind[], count: number, blockOk: boolean, margin: number): void => {
+    let attempts = count * 6;
+    let placed = 0;
+    while (placed < count && attempts-- > 0) {
+      const tx = r.x + margin + Math.floor(rng() * Math.max(1, r.w - margin * 2));
+      const ty = r.y + margin + Math.floor(rng() * Math.max(1, r.h - margin * 2));
+      if (tryAdd(kinds[Math.floor(rng() * kinds.length)], tx, ty, blockOk)) placed++;
+    }
+  };
+  // entry: kept safe and readable — one light, a little rubble, no cover
+  tryAdd(lightKinds[0], entry.x + 1, entry.y + 1, false);
+  scatter(entry, decorKinds, 2, false, 1);
+  for (const r of mids) {
+    scatter(r, coverKinds, 2, false, 1); // real cover — Spit sightlines break on it
+    scatter(r, lightKinds, 2, false, 1);
+    scatter(r, decorKinds, 3, false, 1);
+  }
+  // boss room: rim dressing only, centre + door left clear (escape lanes stay open)
+  tryAdd(coverKinds[0], boss.x + 2, boss.y + 2, true);
+  tryAdd(coverKinds[coverKinds.length - 1], boss.x + boss.w - 3, boss.y + 2, true);
+  tryAdd(coverKinds[0], boss.x + 2, boss.y + boss.h - 3, true);
+  tryAdd(coverKinds[coverKinds.length - 1], boss.x + boss.w - 3, boss.y + boss.h - 3, true);
+  tryAdd(lightKinds[0], boss.x + 1, boss.y + 1, true);
+  tryAdd(lightKinds[0], boss.x + boss.w - 2, boss.y + boss.h - 2, true);
+  scatter(boss, decorKinds, 3, false, 3);
+
+  // ambient light pools: the boss arena glows in the Depth's hue, breadcrumbs on the spine
+  const lights: DepthLayout['lights'] = [{ tx: bossSpawn.x, ty: bossSpawn.y, color: lightColor, scale: 5.0, alpha: 0.3 }];
+  for (const r of mids) lights.push({ tx: r.x + Math.floor(r.w / 2), ty: SPINE, color: lightColor, scale: 3.0, alpha: 0.18 });
+
+  // Husk anchors: spread across the Husk rooms (one per room first, Stage-1 style);
+  // every anchor sits ≥13 tiles east of the entry tile — beyond aggro, so the
+  // antechamber stays safe. Kept off walls by a 2-tile margin, and off blocking
+  // cover props (with a ±1 jitter buffer) so a spawn never lands inside a pillar.
+  const entryTile = { tx: 5, ty: SPINE + 1 };
+  const blocked = new Set<number>(props.filter((p) => PROP_BLOCKS[p.kind]).map((p) => p.ty * w + p.tx));
+  const nearBlocked = (x: number, y: number): boolean => {
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (blocked.has((y + dy) * w + x + dx)) return true;
+    return false;
+  };
+  const chaserAnchors: { x: number; y: number }[] = [];
+  const kiterAnchors: { x: number; y: number }[] = [];
+  const anchorIn = (r: Rect): { x: number; y: number } => {
+    let x = 0;
+    let y = 0;
+    for (let attempts = 0; attempts < 12; attempts++) {
+      x = Math.max(r.x + 2, entryTile.tx + 13) + Math.floor(rng() * Math.max(1, r.w - 4));
+      y = r.y + 2 + Math.floor(rng() * Math.max(1, r.h - 4));
+      if (!nearBlocked(x, y)) break;
+    }
+    return { x, y };
+  };
+  for (let round = 0; round < 3; round++) for (const r of mids) chaserAnchors.push(anchorIn(r));
+  for (let round = 0; round < 2; round++) for (const r of mids) kiterAnchors.push(anchorIn(r));
+
+  return { w, h: H, rooms, corridors, entry: entryTile, bossSpawn, door, props, lights, chaserAnchors, kiterAnchors };
+}
+
+const DEPTH_THEMES = new Map<number, DepthTheme>();
+
+/**
+ * A Depth's whole identity from its number alone (ADR-0015 §2) — memoized, pure.
+ * Defined for Depth ≥ 3 (the authored Stages 1–2 keep their hand-made content).
+ */
+export function themeFor(depth: number): DepthTheme {
+  const d = Math.max(3, Math.floor(depth));
+  const cached = DEPTH_THEMES.get(d);
+  if (cached) return cached;
+  const past = d - 2; // Depths past the two authored Stages — the compounding exponent
+  const family: 'stone' | 'molten' = d % 2 === 1 ? 'stone' : 'molten';
+  // the boss kit (ADR-0016): one seeded roll from the seven-kit pool — mixed in
+  // at "random", but a pure function of the Depth number, so Depth 7's boss is
+  // the same kit for every client, every run, every World, forever
+  const KITS: DepthBossKind[] = ['boss', 'forgeborn', 'ram', 'warden', 'whirl', 'bulwark', 'brood'];
+  const bossKind = KITS[Math.floor(mulberry32((Math.imul(d, 1103515245) ^ 0x2545f491) >>> 0)() * KITS.length)];
+  const chaser: HuskKind = family === 'stone' ? 'grasp' : 'cinder';
+  const kiter: HuskKind = family === 'stone' ? 'spit' : 'ember';
+  // names composed from the localized word lists — indexed by the Depth number,
+  // so every client (and every World) in a language composes the same name
+  const adj = t.depth.adjectives[d % t.depth.adjectives.length];
+  const noun = t.depth.nouns[(d * 5 + 1) % t.depth.nouns.length];
+  const zoneName = t.depth.zone(d, adj, noun);
+  const huskFamily = t.depth.huskFamily(adj);
+  const bossNameFns: Record<DepthBossKind, (adj: string) => string> = {
+    boss: t.depth.bossColossus,
+    forgeborn: t.depth.bossForgeborn,
+    ram: t.depth.bossRam,
+    warden: t.depth.bossWarden,
+    whirl: t.depth.bossWhirl,
+    bulwark: t.depth.bossBulwark,
+    brood: t.depth.bossBrood,
+  };
+  const bossName = bossNameFns[bossKind](adj);
+  const hue = (d * DEPTH_HUE_STEP) % 360;
+  const floor: DepthFloor = {
+    toneA: hslHex(hue, 24, 11),
+    base: hslHex(hue, 24, 13),
+    toneB: hslHex(hue, 26, 15),
+    toneC: hslHex(hue, 22, 9),
+    stain: hslHex(hue, 30, 6),
+    scuff: hslHex(hue, 20, 18),
+    speckle: hslHex(hue, 85, 55),
+    edge: hslHex(hue, 28, 5),
+  };
+  const lightColor = hslNum(hue, 70, 60);
+  const tint = {
+    chaser: hslNum(hue, 55, 78),
+    kiter: hslNum((hue + 24) % 360, 55, 78),
+    boss: hslNum(hue, 65, 72),
+    prop: hslNum(hue, 35, 82),
+  };
+  const tune: MobTune = {
+    speedMul: Math.pow(DEPTH_SPEED_MUL, past),
+    telegraphMul: Math.pow(DEPTH_CADENCE_MUL, past),
+    cooldownMul: Math.pow(DEPTH_CADENCE_MUL, past),
+    projSpeedMul: Math.pow(DEPTH_PROJ_SPEED_MUL, past),
+  };
+  const hpMul = Math.pow(DEPTH_HP_MUL, past);
+  // one monotone HP curve for every Depth boss regardless of which kit it
+  // recycles — the kit only changes moves/appearance, so a deeper boss is never
+  // softer than a shallower one (the wall only ever grows)
+  const bossHpPerHead = FORGEBORN_HP_PER_HEAD * hpMul;
+  const theme: DepthTheme = {
+    depth: d,
+    family,
+    bossKind,
+    chaser,
+    kiter,
+    zoneName,
+    huskFamily,
+    bossName,
+    floor,
+    lightColor,
+    tint,
+    tune,
+    hpMul,
+    bossHpPerHead,
+    layout: genDepthLayout(d, family, lightColor),
+  };
+  DEPTH_THEMES.set(d, theme);
+  return theme;
+}
+
+/** per-head Husk coefficients of the generated Depths (the Deep's, the harder pair) */
+const DEPTH_CHASER_PER_HEAD = 1.8;
+const DEPTH_KITER_PER_HEAD = 1.1;
+/** per-kind ceilings that keep chaser + kiter + boss ≤ DEPTH_MOB_CAP */
+const DEPTH_CHASER_MAX = 15;
+const DEPTH_KITER_MAX = 8;
+
+/** wrap a DepthTheme into the same StageDef bundle the authored Stages use */
+function buildDepthStage(d: number): StageDef {
+  const th = themeFor(d);
+  const L = th.layout;
+  const walls = carveGrid(L.w, L.h, [...L.rooms, ...L.corridors]);
+  const isWall = (tx: number, ty: number): boolean => {
+    if (tx < 0 || ty < 0 || tx >= L.w || ty >= L.h) return true;
+    return walls[ty * L.w + tx] === 1;
+  };
+  const blockedTiles = new Set<number>(L.props.filter((p) => PROP_BLOCKS[p.kind]).map((p) => p.ty * L.w + p.tx));
+  const isBlocked = (tx: number, ty: number): boolean => isWall(tx, ty) || blockedTiles.has(ty * L.w + tx);
+  // count scales with heads AND steps up per Depth — but never past the hard
+  // broadcast cap; past it (and the speed/windup caps) only HP + cadence compound
+  const planSpawns = (heads: number, rng: () => number): MobSpawn[] => {
+    const n = delveHeads(heads);
+    const bonus = (d - 2) * DEPTH_COUNT_STEP;
+    const chasers = Math.min(DEPTH_CHASER_MAX, Math.max(3, Math.round(DEPTH_CHASER_PER_HEAD * n) + bonus));
+    const kiters = Math.min(DEPTH_KITER_MAX, Math.max(2, Math.round(DEPTH_KITER_PER_HEAD * n) + Math.floor(bonus / 2)));
+    const out: MobSpawn[] = [];
+    const place = (kind: HuskKind, count: number, anchors: { x: number; y: number }[]): void => {
+      for (let i = 0; i < count; i++) {
+        const a = anchors[i % anchors.length];
+        let x = a.x + Math.round(rng() * 2 - 1);
+        let y = a.y + Math.round(rng() * 2 - 1);
+        if (isBlocked(Math.floor(x), Math.floor(y))) {
+          x = a.x;
+          y = a.y;
+        }
+        out.push({ kind, x: x + 0.5, y: y + 0.5 });
+      }
+    };
+    place(th.chaser, chasers, L.chaserAnchors);
+    place(th.kiter, kiters, L.kiterAnchors);
+    out.push({ kind: th.bossKind, x: L.bossSpawn.x + 0.5, y: L.bossSpawn.y + 0.5 });
+    return out;
+  };
+  return {
+    stage: d,
+    w: L.w,
+    h: L.h,
+    rooms: L.rooms,
+    corridors: L.corridors,
+    entry: L.entry,
+    props: L.props,
+    lights: L.lights,
+    palette: th.family === 'molten' ? 'magma' : 'mine',
+    ruinsFromX: L.w, // never — the per-Depth floor ramp paints the whole interior
+    isWall,
+    isBlocked,
+    planSpawns,
+    bossHpPerHead: th.bossHpPerHead,
+    zone: th.zoneName,
+    loot: { common: DEPTH_SIGIL, rare: DEPTH_SIGIL }, // one Sigil per boss, nothing else
+    door: L.door,
+    shot: th.family === 'stone' ? 'acid' : 'ember',
+    hpMul: th.hpMul,
+    floor: th.floor,
+    tint: th.tint,
+    tune: th.tune,
+    names: { zone: th.zoneName, huskFamily: th.huskFamily, boss: th.bossName },
+  };
+}

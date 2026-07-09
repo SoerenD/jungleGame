@@ -89,13 +89,15 @@ import {
   applyMobHit,
   createMob,
   DEEP_CORE_DROP,
+  DEPTH_MOB_CAP,
+  DEPTH_SIGIL,
   FORGE_CORE,
   isBossKind,
   profileOf,
   PROP_BLOCKS,
   PROP_LIGHT,
   SHARD_PER_KILL,
-  STAGES,
+  stageDefFor,
   stepMob,
   type MobEvent,
   type MobKind,
@@ -132,7 +134,7 @@ import {
   WILDLIFE_ART,
   type WildKind,
 } from '../content/wildlife';
-import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX, projTheme } from '../mobSprites';
+import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX } from '../mobSprites';
 import { RECIPES } from '../content/recipes';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
@@ -445,10 +447,14 @@ export class GameScene extends Phaser.Scene {
   private lastMobSnapAt = 0;
   private nextMobId = 1;
   private nextProjId = 1;
-  /** which Stage of the Delve is live (ADR-0011): 1 = the Delve, 2 = the Deep */
+  /** which Stage of the Delve is live (ADR-0011/0015): 1 = the Delve, 2 = the
+   *  Deep, 3+ = the generated Depths — the chain is endless */
   private delveStage: Stage = 1;
-  /** Stage 1 only: the Deep Guardian fell and the in-Dungeon door to the Deep is open */
+  /** the live Stage's boss fell and the in-Dungeon door to the next Depth is open */
   private deepDoorOpen = false;
+  /** the Descent's id (ADR-0015): the Stage-1 runId, carried through the whole
+   *  chain — the key every Stage clear's Depth Record write shares */
+  private descentId = '';
   // ---- ADR-0012: open-world Wildlife — an ephemeral, host-simmed roaming pool
   /** host: authoritative creature state (HP lives ONLY here — never the DB). Guests: last snapshot. */
   private wildMobs = new Map<string, MobState>();
@@ -800,6 +806,9 @@ export class GameScene extends Phaser.Scene {
       // joining mid-fight: dormant or engaged, the state derives from the fight
       // row (engagedAt), not from having witnessed the summon/engage events
       if (snap.fight) this.startFight(snap.fight, false);
+      // ADR-0015: seed the Hall panel's Depth Record teaser (records accrue from
+      // the first Descent even while the Grand Monument is unbuilt)
+      this.refreshDepthRecords();
     });
     bus.emit('inventory', this.inventory);
 
@@ -892,16 +901,16 @@ export class GameScene extends Phaser.Scene {
           doorOpen: () => this.deepDoorOpen,
           mobs: () =>
             [...this.mobs.values()].map((m) => ({
-              id: m.id, kind: m.kind, hp: m.hp, maxHp: m.maxHp, st: m.st, erupt: !!m.erupt,
+              id: m.id, kind: m.kind, hp: m.hp, maxHp: m.maxHp, st: m.st, erupt: !!m.erupt, guard: !!m.guard,
               x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10,
             })),
           enterStage1: () => this.enterDelve(),
           enterDeep: () => this.enterDeepDirect(),
-          descend: () => this.descendToDeep(),
-          /** force the Forgeborn's next eruption to charge now (demo AC6) */
+          descend: () => this.descendNextStage(),
+          /** force the next signature move (eruption/slam/wall/birth) to charge now */
           erupt: () => {
             for (const m of this.mobs.values()) {
-              if (m.kind === 'forgeborn') { m.eruptCd = 0; return true; }
+              if (m.st !== 'dead' && profileOf(m.kind).eruptEveryMs) { m.eruptCd = 0; return true; }
             }
             return false;
           },
@@ -930,7 +939,7 @@ export class GameScene extends Phaser.Scene {
             }
             return n;
           },
-          /** fell the current Stage boss (opens the door in Stage 1 / completes the Deep) */
+          /** fell the current Stage boss (pays loot + Record, opens the next door — ADR-0015) */
           fellBoss: () => {
             for (const m of [...this.mobs.values()]) {
               if (!isBossKind(m.kind) || m.st === 'dead') continue;
@@ -2846,6 +2855,10 @@ export class GameScene extends Phaser.Scene {
     if (fountain) return { swing: false, run: () => this.openFountain() };
     const flowerBed = this.nearbyStructure(['flower_bed']);
     if (flowerBed) return { swing: false, run: () => this.tendFlowers() };
+    // ADR-0015: the Grand Monument — until now the one interaction-less Building —
+    // is the Depth Record stone: E opens the engraved record board
+    const monument = this.nearbyStructure(['grand_monument']);
+    if (monument) return { swing: false, run: () => this.openRecordBoard() };
     // the Forge: E opens the craft menu on the Tools & Weapons tab, where the
     // heavy forged gear is now craftable (this station is what unlocks it)
     const forge = this.nearbyStructure(['forge']);
@@ -3549,9 +3562,16 @@ export class GameScene extends Phaser.Scene {
 
   // ============================================================ Dungeons: the Delve + the Deep (ADR-0007 / ADR-0011)
 
-  /** the live Stage's interior/mobs/loot bundle — both Stages flow through it */
+  /** the live Stage's interior/mobs/loot bundle — every Stage (authored 1–2 and
+   *  generated 3+, ADR-0015) flows through this one lookup */
   private stageDef(): StageDef {
-    return STAGES[this.delveStage];
+    return stageDefFor(this.delveStage);
+  }
+
+  /** a Stage's display name: generated Depths carry a composed localized name,
+   *  the authored Stages translate their English zone id */
+  private stageZoneLabel(S: StageDef): string {
+    return S.names?.zone ?? zoneName(S.zone);
   }
 
   /** is the mine shaft open? (the persisted world flag, or the ?dungeon dev bypass) */
@@ -3644,6 +3664,7 @@ export class GameScene extends Phaser.Scene {
       if (Phaser.Math.Distance.Between(r.sprite.x, r.sprite.y, this.delveEntrance.x, this.delveEntrance.y) < TILE * 6) roster.push(name);
     }
     const runId = `${me}:${Date.now()}`;
+    this.descentId = runId; // the Descent is born here — every deeper Stage keeps this id
     this.isDelveHost = true;
     this.delveHostName = me;
     this.delveRoster = roster;
@@ -3655,17 +3676,20 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * DESCENT (ADR-0011 §3): at the open door, press interact to start THE DEEP as a
-   * FRESH run — a new runId with me as host, the ruins torn down and the magma
-   * interior built. The roster is the non-Exhausted players at the door (a subset
-   * of Stage 1's — Exhausted peers already dropped from delvePeers, so it can only
-   * shrink); no one outside the instance can join (the door is reachable only from
-   * inside). Broadcast BEFORE teardown so lingering party-mates accept the descent.
+   * DESCENT (ADR-0011 §3, endless per ADR-0015): at the open door, press interact
+   * to start the NEXT Stage as a FRESH run — a new runId with me as host, the old
+   * interior torn down and the next Depth's built (generated from its number for
+   * Depths 3+ — no seed on the wire). The roster is the non-Exhausted players at
+   * the door (a subset of the last Stage's — it can only shrink); no one outside
+   * the instance can join (the door is reachable only from inside). Broadcast
+   * BEFORE teardown so lingering party-mates accept the descent. The Descent's
+   * id (the Stage-1 runId) carries through unchanged.
    */
-  private descendToDeep(): void {
-    if (!this.inDelve || this.delveStage !== 1 || !this.deepDoorOpen) return;
+  private descendNextStage(): void {
+    if (!this.inDelve || !this.deepDoorOpen) return;
     const me = this.me.name;
     const door = this.stageDef().door;
+    const next = this.delveStage + 1;
     const roster = [me];
     if (door) {
       const dx = (door.tx + 0.5) * TILE;
@@ -3674,17 +3698,23 @@ export class GameScene extends Phaser.Scene {
         if (Phaser.Math.Distance.Between(pv.x, pv.y, dx, dy) < TILE * 8) roster.push(name);
       }
     }
-    const runId = `${me}:${Date.now()}:deep`;
-    this.backend.sendDungeon({ t: 'start', runId, host: me, heads: roster.length, roster, stage: 2 });
+    const runId = `${me}:${Date.now()}:d${next}`;
+    this.backend.sendDungeon({ t: 'start', runId, host: me, heads: roster.length, roster, stage: next });
     this.teardownDelve();
-    this.delveStage = 2;
+    this.delveStage = next;
     this.isDelveHost = true;
     this.delveHostName = me;
     this.delveRoster = roster;
     this.delveHeadcount = Math.max(1, roster.length);
     this.spawnDelveMobs();
     this.beginDelve(runId);
-    bus.emit('toast', roster.length > 1 ? t.toast.descendIntoDeep(roster.length - 1) : t.toast.descendIntoDeepAlone, 'info');
+    const others = roster.length - 1;
+    if (next === 2) {
+      bus.emit('toast', others > 0 ? t.toast.descendIntoDeep(others) : t.toast.descendIntoDeepAlone, 'info');
+    } else {
+      const zone = this.stageZoneLabel(this.stageDef());
+      bus.emit('toast', others > 0 ? t.toast.descendIntoDepth(zone, others) : t.toast.descendIntoDepthAlone(zone), 'info');
+    }
   }
 
   /**
@@ -3698,6 +3728,7 @@ export class GameScene extends Phaser.Scene {
     const me = this.me.name;
     const roster = [me];
     const runId = `${me}:${Date.now()}:deep`;
+    this.descentId = runId; // a dev shortcut is its own (skip-ahead) Descent
     this.isDelveHost = true;
     this.delveHostName = me;
     this.delveRoster = roster;
@@ -3714,18 +3745,20 @@ export class GameScene extends Phaser.Scene {
     this.mobs.clear();
     for (const s of S.planSpawns(this.delveHeadcount, Math.random)) {
       const id = `m${this.nextMobId++}`;
-      this.mobs.set(id, createMob(id, s, this.delveHeadcount, S.bossHpPerHead));
+      this.mobs.set(id, createMob(id, s, this.delveHeadcount, S.bossHpPerHead, S.hpMul));
     }
     this.delveKills = 0;
     this.delveParticipants.clear();
   }
 
   /**
-   * A party-mate's client announced a run. Stage 1: join if I'm rostered and at the
-   * World shaft (unchanged). Stage 2 (the descent): the join-guard is RELAXED so a
-   * party-mate who is ALREADY inside — lingering in the cleared Stage-1 ruins with
-   * the door open — accepts the descent to the Deep (ADR-0011 §3). Guests who
-   * decline simply stay in the lingering lobby or leave.
+   * A party-mate's client announced a run. Stage 1: join if I'm rostered and at
+   * the World shaft (unchanged). Deeper Stages (the descent, ADR-0011 §3 /
+   * ADR-0015): the join-guard is RELAXED so a party-mate who is ALREADY inside —
+   * lingering in the just-cleared Stage with the door open — accepts the descent
+   * to the next Depth. A generated Depth's whole interior rebuilds from the
+   * stage NUMBER the message carries (no seed on the wire). Guests who decline
+   * simply stay in the lingering lobby or leave.
    */
   private onDelveStart(msg: Extract<DungeonMsg, { t: 'start' }>): void {
     if (msg.host === this.me.name) return;
@@ -3735,6 +3768,7 @@ export class GameScene extends Phaser.Scene {
       if (this.inDelve) return; // Stage 1 is entered fresh from the World, never mid-run
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this.delveEntrance.x, this.delveEntrance.y) > TILE * 8) return;
       this.delveStage = 1;
+      this.descentId = msg.runId; // guests carry the same Descent id down the chain
       this.isDelveHost = false;
       this.delveHostName = msg.host;
       this.delveRoster = msg.roster;
@@ -3745,8 +3779,8 @@ export class GameScene extends Phaser.Scene {
       bus.emit('toast', t.toast.followInto(msg.host), 'info');
       return;
     }
-    // stage 2: only at-the-door party-mates of a cleared Stage-1 run may descend
-    if (!this.inDelve || this.delveStage !== 1 || !this.deepDoorOpen) return;
+    // deeper: only at-the-door party-mates of the just-cleared previous Stage descend
+    if (!this.inDelve || this.delveStage !== stage - 1 || !this.deepDoorOpen) return;
     const door = this.stageDef().door;
     if (door) {
       const dx = (door.tx + 0.5) * TILE;
@@ -3754,7 +3788,7 @@ export class GameScene extends Phaser.Scene {
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, dx, dy) > TILE * 8) return;
     }
     this.teardownDelve();
-    this.delveStage = 2;
+    this.delveStage = stage;
     this.isDelveHost = false;
     this.delveHostName = msg.host;
     this.delveRoster = msg.roster;
@@ -3762,7 +3796,8 @@ export class GameScene extends Phaser.Scene {
     this.mobs.clear();
     this.beginDelve(msg.runId);
     this.backend.sendDungeon({ t: 'join', runId: msg.runId, name: this.me.name });
-    bus.emit('toast', t.toast.followIntoDeep(msg.host), 'info');
+    if (stage === 2) bus.emit('toast', t.toast.followIntoDeep(msg.host), 'info');
+    else bus.emit('toast', t.toast.followIntoDepth(msg.host, this.stageZoneLabel(this.stageDef())), 'info');
   }
 
   /** shared entry: reset run state, build the live Stage's interior, swap collision, teleport in */
@@ -3850,20 +3885,26 @@ export class GameScene extends Phaser.Scene {
       toneA: '#301a14', base: '#3a221a', toneB: '#43271c', toneC: '#2a1712',
       stain: '#1e0f0a', scuff: '#4a2c1e', speckle: '#ff5a1e', edge: '#180d09',
     };
+    // ADR-0015: a generated Depth paints its own per-Depth ramp (pure hue math
+    // from the Depth number — identical on every client) instead of the two
+    // authored palettes; the authored Stages keep their hand-picked colors.
+    const gen = S.floor;
     // the corridor spine rows — keep specks out of the walking lane
     const spineRows = new Set<number>();
     for (const cor of S.corridors) for (let yy = cor.y; yy < cor.y + cor.h; yy++) spineRows.add(yy);
     for (const r of [...S.rooms, ...S.corridors]) {
-      const ruins = !magma && r.x >= S.ruinsFromX;
-      const ramp = magma
+      const ruins = !gen && !magma && r.x >= S.ruinsFromX;
+      const ramp = gen
+        ? [gen.toneA, gen.base, gen.toneB, gen.toneC]
+        : magma
         ? [lava.toneA, lava.base, lava.toneB, lava.toneC]
         : ruins
         ? [mine.ruinToneA, mine.ruinTint, mine.ruinToneB, mine.toneC]
         : [mine.toneA, mine.base, mine.toneB, mine.toneC];
-      const edge = magma ? lava.edge : ruins ? mine.edgeRuin : mine.edgeMine;
-      const stain = magma ? lava.stain : mine.stain;
-      const scuff = magma ? lava.scuff : mine.scuff;
-      const speckle = magma ? lava.speckle : mine.speckle;
+      const edge = gen ? gen.edge : magma ? lava.edge : ruins ? mine.edgeRuin : mine.edgeMine;
+      const stain = gen ? gen.stain : magma ? lava.stain : mine.stain;
+      const scuff = gen ? gen.scuff : magma ? lava.scuff : mine.scuff;
+      const speckle = gen ? gen.speckle : magma ? lava.speckle : mine.speckle;
       const key = `delveFloor_${S.stage}_${r.x}_${r.y}`;
       if (this.textures.exists(key)) this.textures.remove(key);
       const tex = this.textures.createCanvas(key, r.w * TILE, r.h * TILE);
@@ -3918,6 +3959,7 @@ export class GameScene extends Phaser.Scene {
       const py = flat ? (p.ty + 0.5) * TILE : (p.ty + 1) * TILE; // upright props stand on the tile
       const img = this.add.image(px, py, PROP_TEX[p.kind]).setOrigin(0.5, flat ? 0.5 : 1);
       img.setDepth(flat ? DELVE_DEPTH_FLOOR + 1 : DELVE_DEPTH_ENTITY + py);
+      if (S.tint) img.setTint(S.tint.prop); // ADR-0015: re-dress the recycled dressing per Depth
       this.delveObjects.push(img);
       const light = PROP_LIGHT[p.kind];
       if (light) this.addDelveLight((p.tx + 0.5) * TILE, (p.ty + 0.5) * TILE - (flat ? 0 : TILE * 0.4), light.color, light.scale, light.alpha, light.flicker);
@@ -4006,10 +4048,16 @@ export class GameScene extends Phaser.Scene {
     this.leaveDelve();
   }
 
-  /** the live Stage's participation loot: common per Husk felled + the rare boss drop */
+  /** the live Stage's participation loot: common per Husk felled + the rare boss
+   *  drop — except the generated Depths (3+), which pay ONE Depth Sigil and
+   *  nothing else (ADR-0015 §4: prestige-only; the Record is the real prize) */
   private stageLoot(): Inventory {
     const S = this.stageDef();
     const loot: Inventory = {};
+    if (S.stage >= 3) {
+      loot[S.loot.rare] = 1;
+      return loot;
+    }
     const shards = this.delveKills * SHARD_PER_KILL;
     if (shards > 0) loot[S.loot.common] = shards;
     loot[S.loot.rare] = DEEP_CORE_DROP;
@@ -4017,35 +4065,44 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Stage 1 boss (the Deep Guardian) fell (ADR-0011 §2): pay THIS run's
-   * participation loot, shake the screen, and open the hidden door in the boss
-   * room — but keep the instance ALIVE (do NOT leaveDelve). The party lingers in
-   * the cleared ruins to descend into the Deep or leave with its Stage-1 haul.
+   * A Stage boss fell (ADR-0011 §2, endless per ADR-0015): pay THIS run's
+   * participation loot, write the Depth Record (it rides the same claim), shake
+   * the screen, and open the next boss-door — but keep the instance ALIVE (do
+   * NOT leaveDelve). No boss ends a Descent any more — the party lingers in the
+   * cleared Stage to descend further or walk out with everything banked.
    */
-  private onStage1BossFelled(): void {
+  private onStageBossFelled(): void {
     const loot = this.stageLoot();
-    if (this.delveRunId) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'stagecleared', loot });
+    const participants = [...this.delveParticipants];
+    if (this.delveRunId) {
+      this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'stagecleared', loot, participants });
+    }
     this.cameras.main.shake(500, 0.01);
     this.sfx('roar', 0.6);
+    if (this.delveStage >= 2) this.cameras.main.flash(700, 255, 120, 40);
+    this.writeDepthRecord(participants);
     this.grantStageLoot(loot, this.delveHitLanded);
     this.openDeepDoor();
   }
 
-  /** the Forgeborn (Stage 2 boss) fell (ADR-0011 §7): pay Deep loot, complete, exit to World */
-  private completeDeepRun(): void {
-    const loot = this.stageLoot();
-    if (this.delveRunId) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'victory', loot });
-    this.cameras.main.shake(600, 0.012);
-    this.cameras.main.flash(700, 255, 120, 40);
-    this.grantStageLoot(loot, this.delveHitLanded);
-    this.leaveDelve();
+  /**
+   * The Depth Record write (ADR-0015 §5): rides the SAME RPC that pays the
+   * participation loot — credit is exactly the participation-loot set, so only
+   * a client that landed ≥1 hit sends it. Depth = the Stage just cleared;
+   * roster = everyone in the participation set; id = the Descent's Stage-1 runId.
+   */
+  private writeDepthRecord(roster: string[]): void {
+    if (!this.delveHitLanded) return;
+    const record = { descentId: this.descentId || this.delveRunId || '', depth: this.delveStage, roster };
+    void this.backend.claimDelveLoot({}, record).then(() => this.refreshDepthRecords());
   }
 
-  /** open (and render) the hidden door to the Deep in Stage 1's boss room */
+  /** open (and render) the boss-door to the next Depth in the cleared boss room */
   private openDeepDoor(): void {
     if (this.deepDoorOpen) return;
     this.deepDoorOpen = true;
-    bus.emit('toast', t.toast.deepDoorOpens, 'good');
+    const nextLabel = this.stageZoneLabel(stageDefFor(this.delveStage + 1));
+    bus.emit('toast', this.delveStage === 1 ? t.toast.deepDoorOpens : t.toast.depthDoorOpens(nextLabel), 'good');
     const door = this.stageDef().door;
     if (!door) return;
     const dx = (door.tx + 0.5) * TILE;
@@ -4055,7 +4112,12 @@ export class GameScene extends Phaser.Scene {
     const frame = this.add.rectangle(0, -2, TILE * 1.7, TILE * 2.1, 0x1a1210).setStrokeStyle(2, 0xff6a1e);
     const maw = this.add.rectangle(0, 0, TILE * 1.05, TILE * 1.7, 0x120806).setStrokeStyle(2, 0xff8c2a);
     const label = this.add
-      .text(0, -TILE * 1.7, t.delve.descendDeep, { fontSize: '8px', color: '#ffb060', stroke: '#000', strokeThickness: 3 })
+      .text(0, -TILE * 1.7, this.delveStage === 1 ? t.delve.descendDeep : t.delve.descendDepth(nextLabel), {
+        fontSize: '8px',
+        color: '#ffb060',
+        stroke: '#000',
+        strokeThickness: 3,
+      })
       .setOrigin(0.5)
       .setResolution(4);
     c.add([glow, frame, maw, label]);
@@ -4068,25 +4130,39 @@ export class GameScene extends Phaser.Scene {
    * Each client claims its OWN Stage loot iff it landed ≥1 hit — the run's only DB
    * write (the existing jw_claim_delve_loot merges any loot JSON; new ids ride the
    * inventory JSON, so no migration/new RPC). The success/no-hit toast is chosen
-   * from the loot payload so it names the right boss (Deep Guardian vs Forgeborn).
+   * from the loot payload so it names the right boss (Deep Guardian vs Forgeborn
+   * vs a generated Depth's composed boss name).
    */
   private grantStageLoot(loot: Inventory, eligible: boolean): void {
+    const S = this.stageDef();
+    const isDepth = S.stage >= 3 || DEPTH_SIGIL in loot;
     const isDeep = FORGE_CORE in loot;
     if (!eligible) {
-      bus.emit('toast', isDeep ? t.toast.deepClearedNoHit : t.toast.delveClearedNoHit, 'info');
+      bus.emit(
+        'toast',
+        isDepth ? t.toast.depthClearedNoHit(this.stageZoneLabel(S)) : isDeep ? t.toast.deepClearedNoHit : t.toast.delveClearedNoHit,
+        'info',
+      );
       return;
     }
     // roll THIS client's own rare Fabled drops (the broadcast base loot is shared;
-    // the ~1% weapons are personal) and fold them into the haul
-    const full: Inventory = { ...loot, ...this.rollFabledDrops() };
+    // the ~1% weapons are personal) and fold them into the haul. The generated
+    // Depths pay the Sigil and NOTHING else (ADR-0015 §4) — no Fabled roll there,
+    // so deep farming never out-loots the authored bosses.
+    const full: Inventory = isDepth ? { ...loot } : { ...loot, ...this.rollFabledDrops() };
     // the boss fell — announce it, then present the haul in the Spoils window so
     // the drops are taken out deliberately (claimDelveLoot fires on the take)
     const parts = Object.entries(full)
       .filter(([, n]) => (n as number) > 0)
       .map(([k, n]) => `+${n} ${ITEMS[k as ItemId]?.name ?? k}`)
       .join('  ');
-    bus.emit('toast', isDeep ? t.toast.forgebornFalls(parts) : t.toast.deepGuardianFalls(parts), 'good');
-    this.openLoot(full, isDeep ? t.loot.fromForgeborn : t.loot.fromDeepGuardian);
+    const bossName = S.names?.boss ?? '';
+    bus.emit(
+      'toast',
+      isDepth ? t.toast.depthBossFalls(bossName, parts) : isDeep ? t.toast.forgebornFalls(parts) : t.toast.deepGuardianFalls(parts),
+      'good',
+    );
+    this.openLoot(full, isDepth ? t.loot.fromDepthBoss(bossName) : isDeep ? t.loot.fromForgeborn : t.loot.fromDeepGuardian);
   }
 
   /**
@@ -4155,12 +4231,13 @@ export class GameScene extends Phaser.Scene {
     if (Phaser.Math.Distance.Between(this.player.x, this.player.y, ex, ey) < INTERACT_RANGE) {
       return { swing: false, run: () => this.leaveDelveManual() };
     }
-    // Stage 1: the open Deep-door prompt (optional — a party may instead just leave)
-    if (this.delveStage === 1 && this.deepDoorOpen && S.door) {
+    // the open boss-door prompt — EVERY cleared Stage has one now (ADR-0015);
+    // descending stays optional (a party may instead just leave with its haul)
+    if (this.deepDoorOpen && S.door) {
       const dx = (S.door.tx + 0.5) * TILE;
       const dy = (S.door.ty + 0.5) * TILE;
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, dx, dy) < INTERACT_RANGE + 8) {
-        return { swing: false, run: () => this.descendToDeep() };
+        return { swing: false, run: () => this.descendNextStage() };
       }
     }
     if (this.delveExhausted) return null;
@@ -4204,6 +4281,12 @@ export class GameScene extends Phaser.Scene {
     if (by === this.me.name) this.delveHitLanded = true;
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
     const fy = m.y * TILE - profileOf(m.kind).radius * TILE - 8;
+    // the Bulwark's guard (ADR-0016): the hit BOUNCES — show the clank, not a 0
+    if (roll.damage === 0 && m.guard) {
+      this.floatText(fx, fy, '✕', '#9aa0b5', 11);
+      this.sfx('blip', 0.2);
+      return;
+    }
     const shown = roll.damage * GUARDIAN_DISPLAY_SCALE;
     if (roll.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 13);
     else this.floatText(fx, fy, `${shown}`, '#ff9a66', 10);
@@ -4232,23 +4315,24 @@ export class GameScene extends Phaser.Scene {
       this.mobs.delete(m.id);
       return;
     }
-    // a Stage boss fell — clear its corpse, then branch: Stage 1 opens the door and
-    // lingers; Stage 2 (the Forgeborn) completes the whole descent and exits (§2/§7)
+    // a Stage boss fell — clear its corpse, pay the loot + Record, open the next
+    // door, linger (ADR-0015: no boss ends a Descent — only wipe/leave/decline)
     this.mobs.delete(m.id);
-    if (this.delveStage === 1) this.onStage1BossFelled();
-    else this.completeDeepRun();
+    this.onStageBossFelled();
   }
 
   /** my 3rd knockdown: Exhaustion — out of the run; a host leaving ends it for all (v1) */
   private exitDelveExhausted(): void {
     this.delveExhausted = true;
-    const deep = this.delveStage === 2;
+    const stage = this.delveStage;
     if (this.isDelveHost) {
-      bus.emit('toast', deep ? t.toast.exhaustionDeepHost : t.toast.exhaustionDelveHost, 'bad');
+      const msg = stage >= 3 ? t.toast.exhaustionDepthHost : stage === 2 ? t.toast.exhaustionDeepHost : t.toast.exhaustionDelveHost;
+      bus.emit('toast', msg, 'bad');
       if (this.delveRunId) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'hostleft' });
       this.leaveDelve();
     } else {
-      bus.emit('toast', deep ? t.toast.exhaustionDeepYou : t.toast.exhaustionDelveYou, 'bad');
+      const msg = stage >= 3 ? t.toast.exhaustionDepthYou : stage === 2 ? t.toast.exhaustionDeepYou : t.toast.exhaustionDelveYou;
+      bus.emit('toast', msg, 'bad');
       if (this.delveRunId) {
         this.backend.sendDungeon({ t: 'down', runId: this.delveRunId, name: this.me.name, out: true });
         if (this.delveHitLanded) this.delveExhaustedRun = this.delveRunId;
@@ -4273,7 +4357,8 @@ export class GameScene extends Phaser.Scene {
     this.delveKnockdowns++;
     if (this.delveKnockdowns >= EXHAUSTION_KNOCKDOWNS) this.exitDelveExhausted();
     else {
-      const knocked = this.delveStage === 2 ? t.toast.knockedInDeep : t.toast.knockedInDelve;
+      const knocked =
+        this.delveStage >= 3 ? t.toast.knockedInDepth : this.delveStage === 2 ? t.toast.knockedInDeep : t.toast.knockedInDelve;
       bus.emit('toast', knocked(this.delveKnockdowns, EXHAUSTION_KNOCKDOWNS), 'bad');
     }
   }
@@ -4379,8 +4464,9 @@ export class GameScene extends Phaser.Scene {
   private simulateDelve(delta: number): void {
     const S = this.stageDef();
     const targets = this.delveTargets();
-    // mobs treat cover props as walls too — so a Husk rounds a pillar
-    const ctx = { targets, isWall: (tx: number, ty: number) => S.isBlocked(tx, ty), dt: delta, rng: Math.random };
+    // mobs treat cover props as walls too — so a Husk rounds a pillar. S.tune is
+    // the per-Depth hardening (ADR-0015) — undefined on the authored Stages.
+    const ctx = { targets, isWall: (tx: number, ty: number) => S.isBlocked(tx, ty), dt: delta, rng: Math.random, tune: S.tune };
     for (const m of this.mobs.values()) {
       if (m.st === 'dead') continue;
       const ev = stepMob(m, ctx);
@@ -4395,6 +4481,24 @@ export class GameScene extends Phaser.Scene {
     if (ev.projectile) {
       const p = ev.projectile;
       this.projectiles.push({ id: `p${this.nextProjId++}`, x: p.x, y: p.y, vx: p.vx, vy: p.vy, r: p.r, life: 3000 });
+    }
+    // the Broodmother's birth (ADR-0016): the host turns the summon positions
+    // into live Husk adds — the Stage's own chaser kind, never past the mob cap
+    // (guests receive them through the ordinary authoritative snap)
+    if (ev.summon) {
+      const S = this.stageDef();
+      const kind = S.shot === 'acid' ? 'grasp' : 'cinder';
+      const alive = [...this.mobs.values()].filter((x) => x.st !== 'dead').length;
+      let room = Math.max(0, DEPTH_MOB_CAP - alive);
+      for (const s of ev.summon) {
+        if (room <= 0) break;
+        const tx = Math.floor(s.x);
+        const ty = Math.floor(s.y);
+        if (S.isBlocked(tx, ty)) continue;
+        const id = `m${this.nextMobId++}`;
+        this.mobs.set(id, createMob(id, { kind, x: s.x, y: s.y }, this.delveHeadcount, S.bossHpPerHead, S.hpMul));
+        room--;
+      }
     }
     void m;
   }
@@ -4412,6 +4516,7 @@ export class GameScene extends Phaser.Scene {
 
   /** draw mobs (body, telegraph, HP bar) + projectiles from this.mobs / this.projectiles */
   private renderDelve(time: number): void {
+    const S = this.stageDef();
     const seen = new Set<string>();
     for (const m of this.mobs.values()) {
       if (m.st === 'dead') continue;
@@ -4423,6 +4528,11 @@ export class GameScene extends Phaser.Scene {
       let v = this.mobViews.get(m.id);
       if (!v) {
         const sprite = this.add.sprite(0, 0, MOB_TEX[m.kind], 0).setOrigin(0.5, 0.78);
+        // ADR-0015: a generated Depth re-dresses the recycled sprites with its tint
+        if (S.tint) {
+          const kiter = m.kind === 'spit' || m.kind === 'ember';
+          sprite.setTint(isBossKind(m.kind) ? S.tint.boss : kiter ? S.tint.kiter : S.tint.chaser);
+        }
         const shadow = this.add.image(0, 0, 'shadow').setDisplaySize(rpx * 2.6, rpx * 1.4).setAlpha(0.45);
         const tele = this.add.graphics();
         const bar = this.add.rectangle(0, 0, barW, 3, 0x66ff88).setOrigin(0, 0.5).setVisible(false);
@@ -4436,11 +4546,15 @@ export class GameScene extends Phaser.Scene {
       v.shadow.setPosition(px, py + rpx * 0.5).setDepth(d - 1);
       v.sprite.setPosition(px, py + rpx * 0.5).setDepth(d);
       v.sprite.setFlipX(Math.cos(m.face) < -0.15); // face the way it's heading
-      // snap to the telegraph pose during a wind-up, else play the idle heave
+      // snap to the telegraph pose during a wind-up, else play the idle heave.
+      // the Whirlwind keeps its TUCKED pose through the whole spin and shimmers
+      // (fast flip) so the rotation reads even in pixel art (ADR-0016)
       const idleKey = `${MOB_TEX[m.kind]}-idle`;
-      if (m.st === 'windup' || m.st === 'aim') {
+      const spinning = m.st === 'strike' && prof.kit === 'whirl';
+      if (m.st === 'windup' || m.st === 'aim' || spinning) {
         if (v.sprite.anims.isPlaying) v.sprite.anims.stop();
         v.sprite.setFrame(2);
+        if (spinning) v.sprite.setFlipX(Math.floor(time / 90) % 2 === 0);
       } else if (v.sprite.anims.currentAnim?.key !== idleKey || !v.sprite.anims.isPlaying) {
         v.sprite.anims.play(idleKey, true);
       }
@@ -4470,6 +4584,13 @@ export class GameScene extends Phaser.Scene {
         v.tele.fillCircle(m.ax * TILE, m.ay * TILE, tr);
         v.tele.lineStyle(3, 0xffe0a0, 0.85);
         v.tele.strokeCircle(m.ax * TILE, m.ay * TILE, tr);
+      } else if (m.st === 'strike' && prof.kit === 'whirl') {
+        // the Whirlwind's SPIN (ADR-0016): the danger zone rides the boss itself
+        // for the whole spin — a live, moving circle you keep your distance from
+        v.tele.fillStyle(0xff3322, 0.3);
+        v.tele.fillCircle(px, py, prof.strikeR * TILE);
+        v.tele.lineStyle(3, 0xff7a55, 0.8);
+        v.tele.strokeCircle(px, py, prof.strikeR * TILE);
       } else if (m.st === 'windup') {
         const warn = 0.35 + 0.25 * Math.sin(time / 55);
         v.tele.lineStyle(3, 0xff3322, warn);
@@ -4481,6 +4602,13 @@ export class GameScene extends Phaser.Scene {
         v.tele.lineStyle(2, 0xffaa33, warn);
         v.tele.lineBetween(px, py, m.ax * TILE, m.ay * TILE);
       }
+      // the Bulwark's guard ring (ADR-0016): lit while hits bounce — the moment
+      // it vanishes, the slab is down and the boss is yours to hurt
+      if (m.guard) {
+        const gp = 0.45 + 0.2 * Math.sin(time / 140);
+        v.tele.lineStyle(2, 0xffc36a, gp);
+        v.tele.strokeCircle(px, py, (prof.radius + 0.35) * TILE);
+      }
     }
     for (const [id, v] of this.mobViews) {
       if (seen.has(id)) continue;
@@ -4490,13 +4618,12 @@ export class GameScene extends Phaser.Scene {
       v.bar.destroy();
       this.mobViews.delete(id);
     }
-    // projectiles wear the live Stage's spat shot (ADR-0011): an acid glob in the
-    // Delve, a molten cinder in the Deep — a flickering pixel sprite over an
-    // additive glow, sized to the shot's radius. Radial art, so guest snapshots
-    // (position only) render identically.
-    const theme = projTheme(this.delveStage);
-    const projKey = PROJ_TEX[theme];
-    const projGlow = PROJ_GLOW[theme];
+    // projectiles wear the live Stage's spat shot (ADR-0011/0015): an acid glob
+    // in the stone Stages, a molten cinder in the molten ones — a flickering
+    // pixel sprite over an additive glow, sized to the shot's radius. Radial
+    // art, so guest snapshots (position only) render identically.
+    const projKey = PROJ_TEX[S.shot];
+    const projGlow = PROJ_GLOW[S.shot];
     const seenP = new Set<string>();
     for (const p of this.projectiles) {
       seenP.add(p.id);
@@ -4564,7 +4691,7 @@ export class GameScene extends Phaser.Scene {
     const mobs: MobSnap[] = [];
     for (const m of this.mobs.values()) {
       if (m.st === 'dead') continue;
-      mobs.push({ id: m.id, kind: m.kind, x: m.x, y: m.y, hp: m.hp, maxHp: m.maxHp, st: m.st, ax: m.ax, ay: m.ay, phase: m.phase, erupt: m.erupt });
+      mobs.push({ id: m.id, kind: m.kind, x: m.x, y: m.y, hp: m.hp, maxHp: m.maxHp, st: m.st, ax: m.ax, ay: m.ay, phase: m.phase, erupt: m.erupt, guard: m.guard });
     }
     const projectiles: ProjSnap[] = this.projectiles.map((p) => ({ id: p.id, x: p.x, y: p.y }));
     this.backend.sendDungeon({ t: 'snap', runId: this.delveRunId, mobs, projectiles });
@@ -4578,7 +4705,7 @@ export class GameScene extends Phaser.Scene {
       const kind = s.kind as MobKind;
       let m = this.mobs.get(s.id);
       if (!m) {
-        m = { id: s.id, kind, x: s.x, y: s.y, hp: s.hp, maxHp: s.maxHp, st: s.st as MobState['st'], t: 0, face: 0, ax: s.ax, ay: s.ay, phase: s.phase, erupt: s.erupt };
+        m = { id: s.id, kind, x: s.x, y: s.y, hp: s.hp, maxHp: s.maxHp, st: s.st as MobState['st'], t: 0, face: 0, ax: s.ax, ay: s.ay, phase: s.phase, erupt: s.erupt, guard: s.guard };
         this.mobs.set(s.id, m);
       } else {
         m.x = s.x;
@@ -4590,6 +4717,7 @@ export class GameScene extends Phaser.Scene {
         m.ay = s.ay;
         m.phase = s.phase;
         m.erupt = s.erupt;
+        m.guard = s.guard;
       }
       m.face = Math.atan2(s.ay - s.y, s.ax - s.x);
     }
@@ -4627,26 +4755,58 @@ export class GameScene extends Phaser.Scene {
     const active = msg.runId === this.delveRunId && this.inDelve;
     const exhausted = msg.runId === this.delveExhaustedRun;
     if (!active && !exhausted) return;
-    // Stage-1 boss fell on the host: claim THIS run's loot and open the door, but
-    // do NOT tear down — the party lingers to descend or leave (ADR-0011 §2).
+    // a Stage boss fell on the host: claim THIS run's loot (the Depth Record
+    // rides the claim) and open the next door, but do NOT tear down — the party
+    // lingers to descend or leave (ADR-0011 §2, endless per ADR-0015). An
+    // Exhausted-out client whose hits landed still collects + gets credited.
     if (msg.reason === 'stagecleared') {
-      if (msg.loot) this.grantStageLoot(msg.loot, active ? this.delveHitLanded : true);
-      if (active && this.delveStage === 1) this.openDeepDoor();
+      const eligible = active ? this.delveHitLanded : true;
+      if (eligible) this.writeDepthRecordAs(msg.participants ?? [], msg.runId);
+      if (msg.loot) this.grantStageLoot(msg.loot, eligible);
+      if (active) this.openDeepDoor();
       this.delveExhaustedRun = null;
       return;
     }
     if (msg.reason === 'victory' && msg.loot) {
+      // legacy wire compat (pre-ADR-0015 hosts): the old "Forgeborn ends it" end
       this.grantStageLoot(msg.loot, active ? this.delveHitLanded : true);
     } else if (active) {
       // host-leave / wipe — name the live Stage in the collapse toast (CONTEXT terms)
-      const deep = this.delveStage === 2;
-      const collapse = msg.reason === 'hostleft'
-        ? deep ? t.toast.deepHostLeftCollapse : t.toast.hostLeftCollapse
-        : deep ? t.toast.deepPartyOverwhelmed : t.toast.partyOverwhelmed;
+      const stage = this.delveStage;
+      const collapse =
+        msg.reason === 'hostleft'
+          ? stage >= 3
+            ? t.toast.depthHostLeftCollapse
+            : stage === 2
+            ? t.toast.deepHostLeftCollapse
+            : t.toast.hostLeftCollapse
+          : stage >= 3
+          ? t.toast.depthPartyOverwhelmed
+          : stage === 2
+          ? t.toast.deepPartyOverwhelmed
+          : t.toast.partyOverwhelmed;
       bus.emit('toast', collapse, 'bad');
     }
     this.delveExhaustedRun = null;
     if (active) this.leaveDelve();
+  }
+
+  /** guest/exhausted-side Depth Record write for a stagecleared broadcast: same
+   *  rules as the host's (participation credit), keyed by the shared Descent id */
+  private writeDepthRecordAs(roster: string[], runId: string): void {
+    const record = { descentId: this.descentId || runId, depth: this.delveStage, roster };
+    void this.backend.claimDelveLoot({}, record).then(() => this.refreshDepthRecords());
+  }
+
+  /** ADR-0015: the Grand Monument's interact — fetch fresh and open the board */
+  private openRecordBoard(): void {
+    this.sfx('blip', 0.4);
+    void this.backend.getDepthRecords().then((r) => bus.emit('records-open', r));
+  }
+
+  /** re-read the World's Depth Records and refresh the Hall panel's teaser line */
+  private refreshDepthRecords(): void {
+    void this.backend.getDepthRecords().then((r) => bus.emit('depth-record', r.descents[0] ?? null));
   }
 
   private onDelvePos(msg: Extract<DungeonMsg, { t: 'pos' }>): void {

@@ -253,6 +253,21 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '............',
     '............',
   ],
+  // ADR-0015 — the Depth Sigil: a rune-graven prestige stone (purple, like the glyphs)
+  depth_sigil: [
+    '............',
+    '....xxxx....',
+    '...xddddx...',
+    '..xdpPPpdx..',
+    '..xdPffPdx..',
+    '..xdPfmPdx..',
+    '..xdpPPpdx..',
+    '..xddpddx...',
+    '...xddddx...',
+    '....xxxx....',
+    '............',
+    '............',
+  ],
   // ADR-0012 — open-world Wildlife loot (hide / meat / trophy) + the cooked meal
   hide: [
     '............',

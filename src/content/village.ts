@@ -252,6 +252,9 @@ export const VILLAGE_CONTRIB: Partial<Record<string, number>> = {
   husk_shard: 3,
   guardian_scale: 15,
   deep_core: 40,
+  // ADR-0015 — the Depth Sigil's only sink for now: a LARGE pool value (its other
+  // sink, trophy decor, is a later pass). Prestige stays prestige — no crafting.
+  depth_sigil: 60,
   // ADR-0012 — Wildlife loot: the "frontier finds" the pool anticipated. Modest
   // per unit; the rare trophy is worth the most.
   hide: 2,

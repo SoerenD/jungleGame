@@ -23,6 +23,14 @@ export const MOB_TEX: Record<MobKind, string> = {
   cinder: 'husk-cinder',
   ember: 'husk-ember',
   forgeborn: 'forgeborn',
+  // the Depth boss kits (ADR-0016) — five variant silhouettes, each shaped so its
+  // mechanic reads from the doorway; drawn in the neutral obsidian-violet palette
+  // (the per-Depth tint re-dresses them exactly like the recycled bosses)
+  ram: 'boss-ram',
+  warden: 'boss-warden',
+  whirl: 'boss-whirl',
+  bulwark: 'boss-bulwark',
+  brood: 'boss-brood',
   // open-world Wildlife (ADR-0012) — side-view quadrupeds, one drawBeast reskinned
   capybara: 'wild-capybara',
   deer: 'wild-deer',
@@ -38,6 +46,11 @@ export const MOB_FRAME: Record<MobKind, { w: number; h: number }> = {
   cinder: { w: 20, h: 22 },
   ember: { w: 20, h: 24 },
   forgeborn: { w: 48, h: 52 },
+  ram: { w: 52, h: 44 },
+  warden: { w: 40, h: 56 },
+  whirl: { w: 54, h: 44 },
+  bulwark: { w: 48, h: 50 },
+  brood: { w: 46, h: 54 },
   // Wildlife: per-species side-profile sheets sized to their true silhouette
   // (capybara from "Naturalist"; deer/boar/jaguar from "Detailed Large-Frame").
   capybara: { w: 26, h: 18 },
@@ -319,6 +332,267 @@ const FORGEBORN: typeof BOSS = {
   coreBloom: '#ff8c2a',
   corona: '#ff5a1e', // molten-orange corona, not violet
 };
+
+// ------------------------------------------ the Depth boss kits (ADR-0016)
+// Five variant silhouettes, one per kit, each shaped so the mechanic reads at a
+// glance and each with the house one-emissive-feature. All wear the neutral
+// obsidian-violet BOSS palette — the per-Depth HSL tint re-dresses them in game.
+
+// the Ram — all forward mass: a flat anvil skull-plate across the shoulders,
+// huge planted knuckle columns. Telegraph: the plate drops low (head down,
+// haunches up) and its seams flood white — a charge is coming.
+function drawRam(ctx: Ctx, ox: number, f: number, P: typeof BOSS = BOSS): void {
+  const oy = f === 0 ? 0 : f === 1 ? -1 : -3;
+  const tel = f === 2;
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 8, 41, 36, 3, P.outline); // ground shadow (planted)
+  R(ctx, ox + 10, 43, 32, 1, '#080610');
+  // planted knuckle columns
+  R(ctx, ox + 2, Y(16), 8, 18, P.base);
+  R(ctx, ox + 0, Y(32), 12, 7, P.base);
+  R(ctx, ox + 0, Y(32), 12, 1, P.highlight);
+  R(ctx, ox + 42, Y(16), 8, 18, P.base);
+  R(ctx, ox + 40, Y(32), 12, 7, P.base);
+  R(ctx, ox + 40, Y(32), 12, 1, P.highlight);
+  R(ctx, ox + 1, 40, 10, 2, P.shadow);
+  R(ctx, ox + 41, 40, 10, 2, P.shadow);
+  // wedge torso — broad shoulders narrowing to hips
+  R(ctx, ox + 10, Y(8), 32, 16, P.base);
+  R(ctx, ox + 10, Y(20), 32, 4, P.shadow);
+  R(ctx, ox + 12, Y(8), 28, 1, P.highlight);
+  R(ctx, ox + 10, Y(8), 1, 10, P.rim);
+  R(ctx, ox + 15, Y(24), 22, 9, P.base);
+  R(ctx, ox + 15, Y(30), 22, 3, P.shadow);
+  R(ctx, ox + 17, Y(33), 7, 6, P.base);
+  R(ctx, ox + 28, Y(33), 7, 6, P.base);
+  // the RAM PLATE — drops low on the telegraph
+  const py = Math.max(0, tel ? Y(9) : Y(0));
+  R(ctx, ox + 8, py, 36, 9, P.base);
+  R(ctx, ox + 8, py, 36, 1, P.rim);
+  R(ctx, ox + 8, py, 2, 2, P.outline);
+  R(ctx, ox + 42, py, 2, 2, P.outline);
+  R(ctx, ox + 12, py + 9, 28, 3, P.shadow); // chin shade
+  R(ctx, ox + 15, py + 10, 2, 1, P.outline); // dim eyes under the plate
+  R(ctx, ox + 35, py + 10, 2, 1, P.outline);
+  // emissive plate seams (the one glowing feature)
+  R(ctx, ox + 16, py + 2, 2, 6, tel ? P.crackHot : P.crackMid);
+  R(ctx, ox + 34, py + 2, 2, 6, tel ? P.crackHot : P.crackMid);
+  R(ctx, ox + 25, py + 1, 2, 7, tel ? '#ffffff' : P.crackHot);
+  R(ctx, ox + 25, py + 3, 2, 2, tel ? '#ffffff' : P.crackWhite);
+  if (tel) {
+    R(ctx, ox + 10, py + 8, 32, 1, P.crackHot); // bloom under the lowered plate
+    R(ctx, ox + 8, py + 4, 1, 3, P.corona);
+    R(ctx, ox + 43, py + 4, 1, 3, P.corona);
+  }
+}
+
+// the Warden — a hovering legless monolith (gap above its shadow), a hooded eye
+// slit, two detached hand shards, and three orbiting orbs that snap into an
+// aligned blazing arc on the telegraph — the volley is coming.
+function drawWarden(ctx: Ctx, ox: number, f: number, P: typeof BOSS = BOSS): void {
+  const oy = f === 0 ? 0 : f === 1 ? -2 : -4; // floats — a bigger bob
+  const tel = f === 2;
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 12, 52, 16, 2, P.outline); // hover shadow, gap below the taper
+  // tapering monolith body
+  R(ctx, ox + 11, Y(14), 18, 6, P.base);
+  R(ctx, ox + 13, Y(14), 14, 1, P.highlight);
+  R(ctx, ox + 11, Y(14), 1, 6, P.rim);
+  R(ctx, ox + 13, Y(20), 14, 18, P.base);
+  R(ctx, ox + 13, Y(34), 14, 4, P.shadow);
+  R(ctx, ox + 15, Y(38), 10, 5, P.base);
+  R(ctx, ox + 17, Y(43), 6, 4, P.shadow);
+  // hooded head + the eye slit (emissive)
+  R(ctx, ox + 14, Y(6), 12, 9, P.base);
+  R(ctx, ox + 16, Y(4), 8, 3, P.base);
+  R(ctx, ox + 14, Y(6), 12, 1, P.rim);
+  R(ctx, ox + 16, Y(10), 8, 4, P.shadow);
+  R(ctx, ox + 17, Y(11), 6, 2, tel ? '#ffffff' : P.coreCenter);
+  R(ctx, ox + 19, Y(11), 2, 2, P.crackWhite);
+  // detached hand shards (raised on the telegraph)
+  const hy = tel ? Y(16) : Y(24);
+  R(ctx, ox + 3, hy, 5, 7, P.base);
+  R(ctx, ox + 3, hy, 5, 1, P.highlight);
+  R(ctx, ox + 3, hy + 6, 5, 1, P.shadow);
+  R(ctx, ox + 32, hy, 5, 7, P.base);
+  R(ctx, ox + 32, hy, 5, 1, P.highlight);
+  R(ctx, ox + 32, hy + 6, 5, 1, P.shadow);
+  // rune vein down the torso
+  R(ctx, ox + 19, Y(22), 2, 12, tel ? P.crackHot : P.crackMid);
+  R(ctx, ox + 19, Y(26), 2, 4, tel ? P.crackWhite : P.crackHot);
+  // the three orbs — loose in idle, an aligned blazing arc on the telegraph
+  const orbs: [number, number][] = f === 0 ? [[5, 28], [33, 18], [9, 7]] : f === 1 ? [[6, 26], [32, 20], [10, 6]] : [[7, 2], [18, 1], [29, 2]];
+  for (const [x, y] of orbs) {
+    if (tel) {
+      R(ctx, ox + x - 1, y - 1, 5, 5, P.corona);
+      R(ctx, ox + x, y, 3, 3, P.coreBloom);
+      R(ctx, ox + x + 1, y + 1, 1, 1, '#ffffff');
+    } else {
+      R(ctx, ox + x, y, 3, 3, P.coreBloom);
+      R(ctx, ox + x + 1, y + 1, 1, 1, P.coreCenter);
+    }
+  }
+}
+
+// the Whirlwind — a compact core with two long scythe arms held straight out
+// (edge glow underneath) and a wrap-around eye band; the telegraph TUCKS the
+// blades against the body, edges blazing, a spin ring charging under its feet.
+function drawWhirl(ctx: Ctx, ox: number, f: number, P: typeof BOSS = BOSS): void {
+  const oy = f === 0 ? 0 : f === 1 ? -1 : -2;
+  const tel = f === 2;
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 11, 41, 32, 3, P.outline);
+  // wide braced legs
+  R(ctx, ox + 16, Y(32), 7, 8, P.base);
+  R(ctx, ox + 31, Y(32), 7, 8, P.base);
+  R(ctx, ox + 15, 40, 9, 2, P.shadow);
+  R(ctx, ox + 30, 40, 9, 2, P.shadow);
+  // compact core body
+  R(ctx, ox + 19, Y(13), 16, 20, P.base);
+  R(ctx, ox + 19, Y(28), 16, 5, P.shadow);
+  R(ctx, ox + 21, Y(13), 12, 1, P.highlight);
+  R(ctx, ox + 19, Y(13), 1, 8, P.rim);
+  // low head dome + the wrap-around eye band (it sees while it spins)
+  R(ctx, ox + 22, Y(8), 10, 6, P.base);
+  R(ctx, ox + 22, Y(8), 10, 1, P.rim);
+  R(ctx, ox + 23, Y(11), 8, 2, tel ? '#ffffff' : P.coreCenter);
+  R(ctx, ox + 24, Y(11), 1, 2, P.crackWhite);
+  R(ctx, ox + 29, Y(11), 1, 2, P.crackWhite);
+  if (!tel) {
+    // blades out wide — shoulder roots, long flats, glowing under-edges
+    R(ctx, ox + 13, Y(16), 6, 6, P.base);
+    R(ctx, ox + 35, Y(16), 6, 6, P.base);
+    R(ctx, ox + 1, Y(17), 13, 5, P.base);
+    R(ctx, ox + 0, Y(18), 3, 3, P.base);
+    R(ctx, ox + 1, Y(17), 13, 1, P.highlight);
+    R(ctx, ox + 1, Y(21), 13, 1, P.crackHot);
+    R(ctx, ox + 40, Y(17), 13, 5, P.base);
+    R(ctx, ox + 51, Y(18), 3, 3, P.base);
+    R(ctx, ox + 40, Y(17), 13, 1, P.highlight);
+    R(ctx, ox + 40, Y(21), 13, 1, P.crackHot);
+    // low counterweight blades
+    R(ctx, ox + 9, Y(26), 9, 3, P.shadow);
+    R(ctx, ox + 36, Y(26), 9, 3, P.shadow);
+  } else {
+    // tucked tight against the body, edges blazing — the spin is wound up
+    R(ctx, ox + 12, Y(14), 8, 15, P.base);
+    R(ctx, ox + 34, Y(14), 8, 15, P.base);
+    R(ctx, ox + 12, Y(14), 8, 1, P.highlight);
+    R(ctx, ox + 34, Y(14), 8, 1, P.highlight);
+    R(ctx, ox + 19, Y(15), 1, 13, '#ffffff');
+    R(ctx, ox + 34, Y(15), 1, 13, '#ffffff');
+    R(ctx, ox + 12, Y(28), 8, 1, P.crackHot);
+    R(ctx, ox + 34, Y(28), 8, 1, P.crackHot);
+    R(ctx, ox + 9, 40, 36, 1, P.corona); // the spin ring charging underfoot
+  }
+}
+
+// the Bulwark — two-thirds hidden behind a rune-carved tower slab (the runes ARE
+// the guard: lit while hits bounce); one wary eye over the rim. Telegraph: the
+// slab lifts high for the counter-slam, corona charging beneath it.
+function drawBulwark(ctx: Ctx, ox: number, f: number, P: typeof BOSS = BOSS): void {
+  const oy = f === 0 ? 0 : f === 1 ? -1 : -3;
+  const tel = f === 2;
+  const sl = tel ? -5 : 0; // the shield lifts on the telegraph
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 6, 46, 36, 3, P.outline);
+  // body behind the slab
+  R(ctx, ox + 27, Y(36), 6, 8, P.base);
+  R(ctx, ox + 35, Y(36), 6, 8, P.base);
+  R(ctx, ox + 26, 44, 8, 2, P.shadow);
+  R(ctx, ox + 34, 44, 8, 2, P.shadow);
+  R(ctx, ox + 24, Y(14), 16, 22, P.base);
+  R(ctx, ox + 24, Y(31), 16, 5, P.shadow);
+  R(ctx, ox + 26, Y(14), 14, 1, P.highlight);
+  // head peeking over the rim — one wary emissive eye
+  R(ctx, ox + 27, Y(6), 11, 9, P.base);
+  R(ctx, ox + 27, Y(6), 11, 1, P.rim);
+  R(ctx, ox + 29, Y(9), 7, 4, P.shadow);
+  R(ctx, ox + 30, Y(10), 4, 2, tel ? '#ffffff' : P.coreCenter);
+  // gripping arm over the shield rim
+  R(ctx, ox + 22, Y(18) + sl, 5, 4, P.base);
+  // THE SHIELD — a tower slab, most of the silhouette
+  const sy = Y(8) + sl;
+  R(ctx, ox + 4, sy, 20, 38, P.base);
+  R(ctx, ox + 4, sy, 20, 2, P.rim);
+  R(ctx, ox + 4, sy, 2, 38, P.highlight);
+  R(ctx, ox + 22, sy, 2, 38, P.shadow);
+  R(ctx, ox + 4, sy + 36, 20, 2, P.outline);
+  R(ctx, ox + 4, sy, 2, 2, P.outline);
+  R(ctx, ox + 22, sy, 2, 2, P.outline);
+  // the carved WARD RUNES — lit while the guard holds, white at the slam
+  const rc = tel ? '#ffffff' : P.crackHot;
+  const rd = tel ? P.crackWhite : P.crackMid;
+  R(ctx, ox + 12, sy + 5, 4, 2, rc);
+  R(ctx, ox + 13, sy + 7, 2, 3, rd);
+  R(ctx, ox + 8, sy + 13, 2, 5, rd);
+  R(ctx, ox + 10, sy + 15, 4, 2, rc);
+  R(ctx, ox + 15, sy + 21, 2, 6, rd);
+  R(ctx, ox + 13, sy + 24, 2, 2, rc);
+  R(ctx, ox + 9, sy + 30, 7, 2, rd);
+  R(ctx, ox + 11, sy + 30, 3, 2, rc);
+  if (tel) R(ctx, ox + 4, 44, 20, 1, P.corona); // the slam charging under the lifted slab
+}
+
+// the Broodmother — rooted on a trunk skirt: a hollow rib-cage torso with the
+// BROOD glowing between the bars (the emissive feature), thin hanging arms, an
+// antler-totem crown. Telegraph: the cage floods white and extra brood appear —
+// the birth is coming.
+function drawBrood(ctx: Ctx, ox: number, f: number, P: typeof BOSS = BOSS): void {
+  const oy = f === 0 ? 0 : f === 1 ? -1 : -3;
+  const tel = f === 2;
+  const Y = (v: number) => v + oy;
+  R(ctx, ox + 10, 51, 26, 3, P.outline);
+  // rooted trunk base — she never walks
+  R(ctx, ox + 15, Y(39), 16, 8, P.base);
+  R(ctx, ox + 17, Y(47), 12, 3, P.shadow);
+  R(ctx, ox + 12, Y(45), 4, 4, P.shadow);
+  R(ctx, ox + 30, Y(45), 4, 4, P.shadow);
+  // the cage torso — hollow, three rib bars
+  R(ctx, ox + 12, Y(17), 22, 22, P.base);
+  R(ctx, ox + 15, Y(20), 16, 16, P.outline);
+  R(ctx, ox + 17, Y(20), 2, 16, P.base);
+  R(ctx, ox + 22, Y(20), 2, 16, P.base);
+  R(ctx, ox + 27, Y(20), 2, 16, P.base);
+  R(ctx, ox + 14, Y(17), 18, 1, P.highlight);
+  R(ctx, ox + 12, Y(17), 1, 10, P.rim);
+  R(ctx, ox + 12, Y(36), 22, 3, P.shadow);
+  // the BROOD between the bars
+  const e1 = tel ? '#ffffff' : P.coreBloom;
+  const e2 = tel ? P.crackWhite : P.crackMid;
+  R(ctx, ox + 19, Y(24), 3, 4, e1);
+  R(ctx, ox + 20, Y(25), 1, 2, tel ? '#ffffff' : P.coreCenter);
+  R(ctx, ox + 24, Y(29), 3, 4, e2);
+  R(ctx, ox + 25, Y(30), 1, 1, P.coreCenter);
+  R(ctx, ox + 15, Y(22), 2, 3, e2);
+  if (tel) {
+    R(ctx, ox + 29, Y(23), 2, 3, e1);
+    R(ctx, ox + 24, Y(20), 3, 3, e2);
+  }
+  // thin hanging arms
+  R(ctx, ox + 8, Y(19), 4, 3, P.base);
+  R(ctx, ox + 7, Y(22), 3, 10, P.base);
+  R(ctx, ox + 7, Y(31), 3, 2, P.shadow);
+  R(ctx, ox + 34, Y(19), 4, 3, P.base);
+  R(ctx, ox + 36, Y(22), 3, 10, P.base);
+  R(ctx, ox + 36, Y(31), 3, 2, P.shadow);
+  // narrow head + antler-totem crown
+  R(ctx, ox + 19, Y(10), 8, 7, P.base);
+  R(ctx, ox + 19, Y(10), 8, 1, P.rim);
+  R(ctx, ox + 21, Y(13), 1, 1, P.outline);
+  R(ctx, ox + 24, Y(13), 1, 1, P.outline);
+  R(ctx, ox + 22, Math.max(0, Y(3)), 2, 7, P.base);
+  R(ctx, ox + 22, Math.max(0, Y(3)), 2, 1, P.rim);
+  R(ctx, ox + 17, Math.max(0, Y(5)), 2, 6, P.base);
+  R(ctx, ox + 15, Math.max(0, Y(4)), 2, 2, P.shadow);
+  R(ctx, ox + 27, Math.max(0, Y(5)), 2, 6, P.base);
+  R(ctx, ox + 29, Math.max(0, Y(4)), 2, 2, P.shadow);
+  if (tel) {
+    R(ctx, ox + 22, Math.max(0, Y(3)), 2, 2, P.crackHot);
+    R(ctx, ox + 17, Math.max(0, Y(5)), 2, 2, P.crackHot);
+    R(ctx, ox + 27, Math.max(0, Y(5)), 2, 2, P.crackHot);
+  }
+}
 
 // -------------------------------------------------------- open-world Wildlife
 // True per-species silhouettes drawn from hand-authored pixel grids. The capybara
@@ -689,6 +963,11 @@ const DRAW: Record<MobKind, (ctx: Ctx, ox: number, f: number) => void> = {
   cinder: (c, ox, f) => drawGrasp(c, ox, f, CINDER),
   ember: (c, ox, f) => drawSpit(c, ox, f, EMBER),
   forgeborn: (c, ox, f) => drawBoss(c, ox, f, FORGEBORN),
+  ram: drawRam,
+  warden: drawWarden,
+  whirl: drawWhirl,
+  bulwark: drawBulwark,
+  brood: drawBrood,
   capybara: (c, ox, f) => drawCapybara(c, ox, f),
   deer: (c, ox, f) => drawLargeFrame(c, ox, f, 'deer'),
   boar: (c, ox, f) => drawLargeFrame(c, ox, f, 'boar'),
@@ -753,10 +1032,8 @@ export const PROJ_GLOW: Record<ProjTheme, { color: number; alpha: number; scale:
   ember: { color: 0xff8c2a, alpha: 0.5, scale: 0.7 }, // molten crackHot orange
 };
 
-/** which Delve Stage fires which projectile theme (Stage 1 acid, the Deep molten) */
-export function projTheme(stage: 1 | 2): ProjTheme {
-  return stage === 1 ? 'acid' : 'ember';
-}
+// (which Stage fires which theme now lives on StageDef.shot — ADR-0015 made the
+// Stage chain endless, so the mapping is content data, not a 1|2 branch here)
 
 const PROJ_LEGEND: Record<ProjTheme, Record<string, string>> = {
   acid: { o: '#0e3d2f', d: '#13563b', b: '#1f9e6b', B: '#39e467', c: '#b6ffcf' },

@@ -19,7 +19,17 @@ import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
 import { inventoryCapacity, milestoneForTier, tierThreshold, TRADEABLE, tradeUnitCost, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
-import type { ChatMsg, Inventory, JourneyState, QuestState, SawmillState, SealResourceId, SealState } from '../backend/types';
+import type {
+  ChatMsg,
+  DepthDescentRecord,
+  DepthRecords,
+  Inventory,
+  JourneyState,
+  QuestState,
+  SawmillState,
+  SealResourceId,
+  SealState,
+} from '../backend/types';
 import { bus } from './bus';
 import { asset } from '../paths';
 import { t, getLang, setLang, LANG_NAMES, zoneName, type Lang } from '../i18n';
@@ -52,6 +62,12 @@ function recipeTab(r: (typeof RECIPES)[number]): CraftTab {
 let fightTimer: number | undefined;
 let buffTimer: number | undefined;
 let festivalTimer: number | undefined;
+// ADR-0015: the World's current deepest Descent (the Hall panel's one-line
+// teaser — tracked from the first Descent even while the Monument is unbuilt)
+let depthTeaser: DepthDescentRecord | null = null;
+/** the Grand Monument's open record board + its active view */
+let depthRecords: DepthRecords | null = null;
+let recordsTab: 'descents' | 'players' = 'descents';
 /** fog-of-war layer for the minimap: 1px per chunk, rebuilt on fog events */
 let fogLayer: HTMLCanvasElement | null = null;
 
@@ -136,6 +152,7 @@ export function initHud(name: string, muted: boolean): void {
       <div class="seal-bar"><div id="village-fill" class="seal-fill village-fill" style="width:0%"></div></div>
       <div id="village-pool"></div>
       <div id="village-milestone"></div>
+      <div id="village-record" data-testid="village-record">${t.village.recordNone}</div>
       <div id="village-hint">${t.village.hint}</div>
     </div>
     <div id="fight-panel" data-testid="fight-panel">
@@ -179,6 +196,15 @@ export function initHud(name: string, muted: boolean): void {
         <div><div class="col-title">${t.crate.yourPack}</div><div id="crate-pack"></div></div>
       </div>
       <button class="ui-btn" id="crate-close">${t.crate.close}</button>
+    </div>
+    <div id="records-panel" class="panel" data-testid="records-panel">
+      <h3>${t.records.title} <span class="sub-note">${t.records.sub}</span></h3>
+      <div id="records-tabs">
+        <button class="craft-tab" id="records-tab-descents" data-testid="records-tab-descents">${t.records.tabDescents}</button>
+        <button class="craft-tab" id="records-tab-players" data-testid="records-tab-players">${t.records.tabPlayers}</button>
+      </div>
+      <div id="records-list" data-testid="records-list"></div>
+      <button class="ui-btn" id="records-close">${t.records.close}</button>
     </div>
     <div id="loot-panel" class="panel" data-testid="loot-panel">
       <h3>${t.loot.title} <span class="sub-note" id="loot-sub"></span></h3>
@@ -601,6 +627,26 @@ export function initHud(name: string, muted: boolean): void {
     } else {
       renderLoot();
     }
+  });
+
+  // ---- ADR-0015: the Grand Monument's Depth Record board + the Hall teaser
+  el('records-close').onclick = () => el('records-panel').classList.remove('open');
+  el('records-tab-descents').onclick = () => {
+    recordsTab = 'descents';
+    renderRecords();
+  };
+  el('records-tab-players').onclick = () => {
+    recordsTab = 'players';
+    renderRecords();
+  };
+  bus.on('records-open', (r: DepthRecords) => {
+    depthRecords = r;
+    el('records-panel').classList.add('open');
+    renderRecords();
+  });
+  bus.on('depth-record', (top: DepthDescentRecord | null) => {
+    depthTeaser = top;
+    renderVillagePanel();
   });
 
   // ---- A3: Village contribution panel (per-resource sliders, ADR-0010)
@@ -1268,7 +1314,49 @@ function renderSealBars(): void {
  * the next threshold, and the milestone the group must raise in-zone to advance.
  * Collective-only — no individual contribution ever appears here.
  */
+/** the Grand Monument's engraved board: Deepest Descents / By Player (ADR-0015) */
+function renderRecords(): void {
+  el('records-tab-descents').classList.toggle('active', recordsTab === 'descents');
+  el('records-tab-players').classList.toggle('active', recordsTab === 'players');
+  const list = el('records-list');
+  list.innerHTML = '';
+  const r = depthRecords;
+  const rows =
+    recordsTab === 'descents'
+      ? (r?.descents ?? []).slice(0, 10).map((d) => ({ label: d.roster.join(', '), depth: d.depth, at: d.achievedAt }))
+      : (r?.bests ?? []).slice(0, 10).map((b) => ({ label: b.name, depth: b.depth, at: b.achievedAt }));
+  if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'records-empty';
+    empty.textContent = t.records.empty;
+    list.append(empty);
+    return;
+  }
+  rows.forEach((row, i) => {
+    const div = document.createElement('div');
+    div.className = 'records-row';
+    const rank = document.createElement('span');
+    rank.className = 'records-rank';
+    rank.textContent = `${i + 1}.`;
+    const depth = document.createElement('b');
+    depth.className = 'records-depth';
+    depth.textContent = t.records.depth(row.depth);
+    const who = document.createElement('span');
+    who.className = 'records-who';
+    who.textContent = row.label;
+    const when = document.createElement('span');
+    when.className = 'records-when';
+    when.textContent = new Date(row.at).toLocaleDateString();
+    div.append(rank, depth, who, when);
+    list.append(div);
+  });
+}
+
 function renderVillagePanel(): void {
+  // the Depth Record teaser renders even before the Village data arrives —
+  // records accrue from the first Descent, Monument or no Monument (ADR-0015)
+  const teaser = el('village-record');
+  if (teaser) teaser.textContent = depthTeaser ? t.village.record(depthTeaser.depth, depthTeaser.roster.join(', ')) : t.village.recordNone;
   if (!village) return;
   const tier = village.tier;
   el('village-tier').innerHTML = `<b>${t.village.tierName(tier)}</b> <span class="v-title">${t.village.tierTitle(tier)}</span>`;

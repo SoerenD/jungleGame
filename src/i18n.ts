@@ -145,6 +145,9 @@ const en = {
     milestoneDone: (name: string) => `✓ ${name} raised`,
     milestoneTodo: (name: string) => `○ Raise a ${name} in the zone`,
     capital: 'The grandest tier — decorate freely!',
+    // ADR-0015 — the one-line Depth Record teaser on the Hall panel
+    record: (depth: number, names: string) => `🗿 Deepest Descent: Depth ${depth} — ${names}`,
+    recordNone: '🗿 No Descent recorded yet — the Delve awaits.',
   },
 
   villageGive: {
@@ -241,6 +244,7 @@ const en = {
     fromGuardian: 'from the Guardian',
     fromDeepGuardian: 'from the Deep Guardian',
     fromForgeborn: 'from the Forgeborn',
+    fromDepthBoss: (boss: string) => `from ${boss}`,
     hint: 'Click an item to take it into your pack',
     take: 'Take',
     takeAll: 'Take all',
@@ -455,6 +459,20 @@ const en = {
     exhaustionDeepYou:
       'Exhaustion takes you — out of the Deep. Any hits you landed still count if the party wins.',
     knockedInDeep: (n: number, max: number) => `Knocked down in the Deep! (${n}/${max})`,
+    // ADR-0015 — the endless generated Depths
+    depthDoorOpens: (zone: string) =>
+      `Another door grinds open in the far wall — press E there to descend into ${zone}, or leave with everything banked.`,
+    descendIntoDepth: (zone: string, n: number) => `You descend into ${zone} with ${n} other${n === 1 ? '' : 's'}...`,
+    descendIntoDepthAlone: (zone: string) => `You descend alone into ${zone}...`,
+    followIntoDepth: (host: string, zone: string) => `You follow ${host} into ${zone}...`,
+    depthBossFalls: (boss: string, parts: string) => `${boss.charAt(0).toUpperCase()}${boss.slice(1)} falls! ${parts}`,
+    depthClearedNoHit: (zone: string) => `${zone} is cleared — but you landed no hit, so no loot.`,
+    knockedInDepth: (n: number, max: number) => `Knocked down in the Depths! (${n}/${max})`,
+    depthHostLeftCollapse: 'The host left — the Depth collapses around you. Everything already banked is safe.',
+    depthPartyOverwhelmed: 'The party is overwhelmed — the Descent ends here. Everything already banked is safe.',
+    exhaustionDepthHost: 'Exhaustion takes the host — the Descent collapses. (No host migration in v1.)',
+    exhaustionDepthYou:
+      'Exhaustion takes you — out of the Descent. Any hits you landed still count if the party wins.',
     // ADR-0012 — open-world Wildlife
     cookMeat: 'You roast the meat over the fire. (Eat it from your inventory.)',
     foraged: (parts: string) => `You forage the wildlife — ${parts}.`,
@@ -469,6 +487,36 @@ const en = {
     sealed: 'Sealed rubble · an Ancient Pickaxe could clear it',
     leave: '⇱ leave',
     descendDeep: 'A door to the Deep · press E to descend',
+    descendDepth: (zone: string) => `A door downward · press E to descend into ${zone}`,
+  },
+
+  // ADR-0015 — the generated Depths' naming word lists. Names are COMPOSED from
+  // these per Depth number (deterministic — identical in every run and World);
+  // the lists live here so no English string is ever baked into content code.
+  depth: {
+    adjectives: ['Umbral', 'Sunken', 'Howling', 'Verdant', 'Ashen', 'Gloaming', 'Riven', 'Silent', 'Thorned', 'Smouldering', 'Frostbound', 'Echoing'],
+    nouns: ['Halls', 'Hollows', 'Galleries', 'Vaults', 'Warrens', 'Chasms', 'Barrows', 'Reaches'],
+    zone: (n: number, adj: string, noun: string) => `Depth ${n} · the ${adj} ${noun}`,
+    huskFamily: (adj: string) => `${adj} Husks`,
+    bossColossus: (adj: string) => `the ${adj} Colossus`,
+    bossForgeborn: (adj: string) => `the ${adj} Forgeborn`,
+    // ADR-0016 — the five Depth boss kits
+    bossRam: (adj: string) => `the ${adj} Juggernaut`,
+    bossWarden: (adj: string) => `the ${adj} Warden`,
+    bossWhirl: (adj: string) => `the ${adj} Whirlwind`,
+    bossBulwark: (adj: string) => `the ${adj} Bulwark`,
+    bossBrood: (adj: string) => `the ${adj} Broodmother`,
+  },
+
+  // ADR-0015 — the Grand Monument's engraved Depth Record board
+  records: {
+    title: '🗿 Depth Records',
+    sub: 'engraved at the Grand Monument',
+    tabDescents: 'Deepest Descents',
+    tabPlayers: 'By Player',
+    empty: 'Nothing is engraved yet — no Descent has felled a Stage boss.',
+    depth: (n: number) => `Depth ${n}`,
+    close: 'Close',
   },
 
   // shared-world chat narration broadcast by the backend as "🌿 Jungle"
@@ -571,6 +619,9 @@ const de: Strings = {
     milestoneDone: (name: string) => `✓ ${name} errichtet`,
     milestoneTodo: (name: string) => `○ Errichte ${name} in der Zone`,
     capital: 'Die höchste Stufe — schmücke nach Herzenslust!',
+    // ADR-0015 — der einzeilige Tiefenrekord-Hinweis auf der Hallen-Tafel
+    record: (depth: number, names: string) => `🗿 Tiefster Abstieg: Tiefe ${depth} — ${names}`,
+    recordNone: '🗿 Noch kein Abstieg verzeichnet — der Schacht wartet.',
   },
 
   villageGive: {
@@ -665,6 +716,9 @@ const de: Strings = {
     fromGuardian: 'vom Wächter',
     fromDeepGuardian: 'vom Tiefenwächter',
     fromForgeborn: 'vom Schmiedegeborenen',
+    // the composed boss name stays nominative ("der Aschene Koloss") — no
+    // preposition, so no case declension can go wrong
+    fromDepthBoss: (boss: string) => boss,
     hint: 'Klick ein Item an, um es in den Rucksack zu nehmen',
     take: 'Nehmen',
     takeAll: 'Alles nehmen',
@@ -876,6 +930,20 @@ const de: Strings = {
     exhaustionDeepYou:
       'Erschöpfung übermannt dich — raus aus der Tiefe. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
     knockedInDeep: (n, max) => `In der Tiefe niedergeschlagen! (${n}/${max})`,
+    // ADR-0015 — die endlosen erzeugten Tiefen
+    depthDoorOpens: (zone) =>
+      `Eine weitere Tür knirscht in der fernen Wand auf — drücke dort E, um in ${zone} hinabzusteigen, oder geh mit allem bereits Gesicherten.`,
+    descendIntoDepth: (zone, n) => `Du steigst mit ${n} ${n === 1 ? 'weiteren' : 'weiteren'} in ${zone} hinab...`,
+    descendIntoDepthAlone: (zone) => `Du steigst allein in ${zone} hinab...`,
+    followIntoDepth: (host, zone) => `Du folgst ${host} in ${zone}...`,
+    depthBossFalls: (boss, parts) => `${boss.charAt(0).toUpperCase()}${boss.slice(1)} fällt! ${parts}`,
+    depthClearedNoHit: (zone) => `${zone} ist bezwungen — doch du hast keinen Treffer gelandet, also keine Beute.`,
+    knockedInDepth: (n, max) => `In den Tiefen niedergeschlagen! (${n}/${max})`,
+    depthHostLeftCollapse: 'Der Host ist gegangen — die Tiefe stürzt um dich herum ein. Alles bereits Gesicherte ist sicher.',
+    depthPartyOverwhelmed: 'Die Gruppe ist überwältigt — der Abstieg endet hier. Alles bereits Gesicherte ist sicher.',
+    exhaustionDepthHost: 'Erschöpfung übermannt den Host — der Abstieg stürzt ein. (Kein Host-Wechsel in v1.)',
+    exhaustionDepthYou:
+      'Erschöpfung übermannt dich — raus aus dem Abstieg. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
     // ADR-0012 — Wildnis
     cookMeat: 'Du röstest das Fleisch über dem Feuer. (Iss es aus deinem Inventar.)',
     foraged: (parts) => `Du sammelst vom Wild — ${parts}.`,
@@ -890,6 +958,36 @@ const de: Strings = {
     sealed: 'Versiegeltes Geröll · eine Uralte Spitzhacke könnte es räumen',
     leave: '⇱ verlassen',
     descendDeep: 'Eine Tür zur Tiefe · drücke E zum Hinabsteigen',
+    descendDepth: (zone) => `Eine Tür abwärts · drücke E, um in ${zone} hinabzusteigen`,
+  },
+
+  // ADR-0015 — Wortlisten der erzeugten Tiefen. Namen werden pro Tiefenzahl aus
+  // ihnen KOMPONIERT (deterministisch — identisch in jedem Zug und jeder Welt);
+  // die Adjektive stehen in der schwachen -e-Form, damit jede Fügung passt.
+  depth: {
+    adjectives: ['Schattenhafte', 'Versunkene', 'Heulende', 'Grünende', 'Aschene', 'Dämmernde', 'Geborstene', 'Stille', 'Dornige', 'Schwelende', 'Frostgebundene', 'Hallende'],
+    nouns: ['Hallen', 'Höhlungen', 'Galerien', 'Gewölbe', 'Gänge', 'Klüfte', 'Grüfte', 'Weiten'],
+    zone: (n, adj, noun) => `Tiefe ${n} · ${adj} ${noun}`,
+    huskFamily: (adj) => `${adj} Hüllen`,
+    bossColossus: (adj) => `der ${adj} Koloss`,
+    bossForgeborn: (adj) => `der ${adj} Schmiedegeborene`,
+    // ADR-0016 — die fünf Tiefen-Boss-Bausätze (schwache Adjektivform wie oben)
+    bossRam: (adj) => `der ${adj} Rammbock`,
+    bossWarden: (adj) => `der ${adj} Wardein`,
+    bossWhirl: (adj) => `der ${adj} Wirbelwind`,
+    bossBulwark: (adj) => `das ${adj} Bollwerk`,
+    bossBrood: (adj) => `die ${adj} Brutmutter`,
+  },
+
+  // ADR-0015 — die gravierte Tiefenrekord-Tafel des Großen Monuments
+  records: {
+    title: '🗿 Tiefenrekorde',
+    sub: 'graviert am Großen Monument',
+    tabDescents: 'Tiefste Abstiege',
+    tabPlayers: 'Nach Spieler',
+    empty: 'Noch nichts graviert — kein Abstieg hat einen Stufenboss gefällt.',
+    depth: (n) => `Tiefe ${n}`,
+    close: 'Schließen',
   },
 
   system: {
