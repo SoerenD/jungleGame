@@ -1,6 +1,7 @@
 import { ITEMS, isBuilding, type ItemId, type StructureId, type ToolId } from '../content/items';
 import {
   applyUiScale,
+  FOG_CHUNK,
   loadUiScale,
   loadVolumes,
   loadWorldLabelScale,
@@ -12,6 +13,8 @@ import {
   WORLD_LABEL_SCALE_MAX,
   WORLD_LABEL_SCALE_MIN,
   WORLD_LABEL_SCALE_STEP,
+  WORLD_VIEW_H,
+  WORLD_VIEW_W,
   type AudioChannel,
 } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine, weaponStatParts } from '../content/guardian';
@@ -26,6 +29,8 @@ import type {
   Inventory,
   JourneyState,
   QuestState,
+  RefinerConfig,
+  RefinerState,
   SawmillState,
   SealResourceId,
   SealState,
@@ -281,6 +286,15 @@ export function initHud(name: string, muted: boolean): void {
         <button class="ui-btn" id="sawmill-deposit" data-testid="sawmill-deposit">${t.sawmill.deposit}</button>
         <button class="ui-btn" id="sawmill-collect" data-testid="sawmill-collect">${t.sawmill.collect}</button>
         <button class="ui-btn" id="sawmill-close">${t.sawmill.close}</button>
+      </div>
+    </div>
+    <div id="refiner-panel" class="panel" data-testid="refiner-panel">
+      <h3 id="refiner-title"></h3>
+      <div id="refiner-status"></div>
+      <div class="sawmill-btns">
+        <button class="ui-btn" id="refiner-deposit" data-testid="refiner-deposit"></button>
+        <button class="ui-btn" id="refiner-collect" data-testid="refiner-collect"></button>
+        <button class="ui-btn" id="refiner-close">${t.refiner.close}</button>
       </div>
     </div>
     <div id="sign-panel" class="panel" data-testid="sign-panel">
@@ -899,6 +913,33 @@ export function initHud(name: string, muted: boolean): void {
     sawmillTimer = window.setInterval(renderSawmill, 500);
   });
 
+  // ---- the generic Refiner panel (ADR-0017 §6): the Sawmill panel's skeleton,
+  // parameterized by the RefinerConfig + display name it was opened with — the
+  // deposit/collect/refresh events echo that target back so GameScene stays stateless
+  el('refiner-close').onclick = () => {
+    openRefiner = null;
+    window.clearInterval(refinerTimer);
+    el('refiner-panel').classList.remove('open');
+  };
+  el('refiner-deposit').onclick = () => {
+    if (openRefiner) bus.emit('refiner-deposit', openRefiner);
+  };
+  el('refiner-collect').onclick = () => {
+    if (openRefiner) bus.emit('refiner-collect', openRefiner);
+  };
+  bus.on('refiner-open', (target: RefinerTarget, state: RefinerState) => {
+    openRefiner = target;
+    refiner = state;
+    refinerOpenedAt = Date.now();
+    el('refiner-title').textContent = t.refiner.title(target.name);
+    el('refiner-deposit').textContent = t.refiner.deposit(ITEMS[target.cfg.inputItem].name);
+    el('refiner-collect').textContent = t.refiner.collect(ITEMS[target.cfg.outputItem].name);
+    el('refiner-panel').classList.add('open');
+    renderRefiner();
+    window.clearInterval(refinerTimer);
+    refinerTimer = window.setInterval(renderRefiner, 500);
+  });
+
   // ---- v3: signpost line prompt (freezes movement via the chat-focus wiring)
   const signInput = el<HTMLInputElement>('sign-input');
   signInput.addEventListener('focus', () => bus.emit('chat-focus'));
@@ -939,6 +980,17 @@ let sawmill: SawmillState | null = null;
 let sawmillOpenedAt = 0;
 let sawmillTimer: number | undefined;
 let sawmillRefreshAt = 0;
+/** the generic Refiner panel's target (ADR-0017 §6): which station, run on what tuning, shown under what name */
+interface RefinerTarget {
+  id: string;
+  cfg: RefinerConfig;
+  name: string;
+}
+let openRefiner: RefinerTarget | null = null;
+let refiner: RefinerState | null = null;
+let refinerOpenedAt = 0;
+let refinerTimer: number | undefined;
+let refinerRefreshAt = 0;
 /** Village contribution panel: what the Player holds of each accepted item… */
 let villageGiveHeld: Inventory = {};
 /** …and how much of each the sliders currently choose to give (0..held) */
@@ -1103,6 +1155,23 @@ function renderSawmill(): void {
   }
 }
 
+function renderRefiner(): void {
+  if (!openRefiner || !refiner) return;
+  const sinceOpen = Date.now() - refinerOpenedAt;
+  const next = refiner.nextMs === null ? null : Math.max(0, refiner.nextMs - sinceOpen);
+  const input = ITEMS[openRefiner.cfg.inputItem].name;
+  const output = ITEMS[openRefiner.cfg.outputItem].name;
+  const parts = [t.refiner.refining(refiner.input, input), t.refiner.ready(refiner.ready, output)];
+  if (next !== null) parts.push(t.refiner.next(Math.ceil(next / 1000), output));
+  el('refiner-status').textContent = parts.join(' · ');
+  // when the countdown runs out, re-derive fresh state from the backend
+  // (lazy timestamps — nothing ticks server-side)
+  if (next === 0 && Date.now() >= refinerRefreshAt) {
+    refinerRefreshAt = Date.now() + 1500;
+    bus.emit('refiner-refresh', openRefiner);
+  }
+}
+
 async function initMinimap(): Promise<void> {
   const canvas = el<HTMLCanvasElement>('minimap');
   const ctx = canvas.getContext('2d')!;
@@ -1119,6 +1188,8 @@ async function initMinimap(): Promise<void> {
   const colors: Record<number, string> = {
     1: '#2f6b36', 2: '#2b6cb0', 3: '#a87848', 4: '#94785c', 5: '#4a5d2a',
     6: '#6b6b6b', 7: '#9aa0a8', 8: '#2f6b36', 9: '#2f6b36', 10: '#337038', 11: '#337038',
+    // the Sunken Mire strip (tile ids 11+): peat, black water, mud, flagstone
+    12: '#332f20', 13: '#332f20', 14: '#332f20', 15: '#152527', 16: '#3a3122', 17: '#4a5348',
   };
   const bg = document.createElement('canvas');
   bg.width = W;
@@ -1130,24 +1201,46 @@ async function initMinimap(): Promise<void> {
       bctx.fillRect(x, y, 1, 1);
     }
   }
-  const sx = canvas.width / (W * 16);
-  const sy = canvas.height / (H * 16);
-  const draw = (pos?: { x: number; y: number; others: { x: number; y: number }[] }) => {
+  // ADR-0017: the minimap renders a VIEW rect — the pinned pre-Realm World, or
+  // (inside a Realm) the district's own rect alone, so each Realm reads as its
+  // own small map. GameScene ships the active district rect on the 'pos' event.
+  type MiniView = { x: number; y: number; w: number; h: number };
+  const worldView: MiniView = { x: 0, y: 0, w: Math.min(W, WORLD_VIEW_W), h: Math.min(H, WORLD_VIEW_H) };
+  const draw = (pos?: { x: number; y: number; others: { x: number; y: number }[]; view?: MiniView }) => {
+    const view = pos?.view ?? worldView;
+    // letterbox the view into the canvas (district rects are rarely square)
+    const scale = Math.min(canvas.width / view.w, canvas.height / view.h); // canvas px per tile
+    const offX = (canvas.width - view.w * scale) / 2;
+    const offY = (canvas.height - view.h * scale) / 2;
+    /** world px → canvas px */
+    const toX = (wx: number) => offX + (wx / 16 - view.x) * scale;
+    const toY = (wy: number) => offY + (wy / 16 - view.y) * scale;
+    /** overlays only draw when their tile lies inside the visible view */
+    const inView = (tx: number, ty: number) => tx >= view.x && tx < view.x + view.w && ty >= view.y && ty < view.y + view.h;
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0b130d';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bg, view.x, view.y, view.w, view.h, offX, offY, view.w * scale, view.h * scale);
     // static v2 landmarks: violet = the Seal monument, dark red = the Guardian
-    ctx.fillStyle = '#b478ff';
-    ctx.fillRect(worldData.sealMonument.tx * 16 * sx - 2, worldData.sealMonument.ty * 16 * sy - 2, 4, 4);
-    ctx.fillStyle = '#c03a2b';
-    ctx.fillRect((worldData.guardianHome.tx + 1.5) * 16 * sx - 2, (worldData.guardianHome.ty + 1.5) * 16 * sy - 2, 4, 4);
+    if (inView(worldData.sealMonument.tx, worldData.sealMonument.ty)) {
+      ctx.fillStyle = '#b478ff';
+      ctx.fillRect(toX(worldData.sealMonument.tx * 16) - 2, toY(worldData.sealMonument.ty * 16) - 2, 4, 4);
+    }
+    if (inView(worldData.guardianHome.tx, worldData.guardianHome.ty)) {
+      ctx.fillStyle = '#c03a2b';
+      ctx.fillRect(toX((worldData.guardianHome.tx + 1.5) * 16) - 2, toY((worldData.guardianHome.ty + 1.5) * 16) - 2, 4, 4);
+    }
     // unexplored chunks stay dark (landmarks hide until discovered; the
-    // Players themselves and the treasure ✕ draw over the fog)
-    if (fogLayer) ctx.drawImage(fogLayer, 0, 0, canvas.width, canvas.height);
+    // Players themselves and the treasure ✕ draw over the fog) — the chunk
+    // layer is cropped to the same view (1 fog px = FOG_CHUNK tiles)
+    if (fogLayer) {
+      ctx.drawImage(fogLayer, view.x / FOG_CHUNK, view.y / FOG_CHUNK, view.w / FOG_CHUNK, view.h / FOG_CHUNK, offX, offY, view.w * scale, view.h * scale);
+    }
     // ADR-0013: the Grand Monument beacon — a home-star on the Hall, drawn OVER the
-    // fog so you can always find your way home
-    if (village?.hall) {
-      const hx = (village.hall.tx + 1) * 16 * sx;
-      const hy = (village.hall.ty + 1) * 16 * sy;
+    // fog so you can always find your way home (hidden while inside a Realm)
+    if (village?.hall && inView(village.hall.tx, village.hall.ty)) {
+      const hx = toX((village.hall.tx + 1) * 16);
+      const hy = toY((village.hall.ty + 1) * 16);
       ctx.fillStyle = '#ffe9c9';
       ctx.beginPath();
       ctx.moveTo(hx, hy - 4);
@@ -1162,13 +1255,14 @@ async function initMinimap(): Promise<void> {
       ctx.fill();
     }
     if (!pos) return;
+    // player dots arrive pre-filtered to this view's region (GameScene)
     ctx.fillStyle = '#ffd166';
-    for (const o of pos.others) ctx.fillRect(o.x * sx - 1, o.y * sy - 1, 3, 3);
+    for (const o of pos.others) ctx.fillRect(toX(o.x) - 1, toY(o.y) - 1, 3, 3);
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(pos.x * sx - 2, pos.y * sy - 2, 4, 4);
-    if (treasureLoc) {
-      const cx = treasureLoc.tx * 16 * sx;
-      const cy = treasureLoc.ty * 16 * sy;
+    ctx.fillRect(toX(pos.x) - 2, toY(pos.y) - 2, 4, 4);
+    if (treasureLoc && inView(treasureLoc.tx, treasureLoc.ty)) {
+      const cx = toX(treasureLoc.tx * 16);
+      const cy = toY(treasureLoc.ty * 16);
       ctx.strokeStyle = '#ff5544';
       ctx.lineWidth = 2;
       ctx.beginPath();

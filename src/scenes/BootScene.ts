@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { AUDIO, OBJECTS, TILESET } from '../assetConfig';
+import { AUDIO, MIRE_TILES, OBJECTS, TILESET } from '../assetConfig';
 import { asset } from '../paths';
 import { GRIDS, PAL } from '../ui/icons';
 import { ITEMS, type ItemId } from '../content/items';
@@ -18,6 +18,7 @@ export class BootScene extends Phaser.Scene {
     // loaded under a -src key: create() copies it into a canvas texture so the
     // water tile can be animated by repainting its pixels
     this.load.image(`${TILESET.key}-src`, asset(TILESET.url));
+    this.load.image(`${TILESET.key}-mire-src`, asset(MIRE_TILES.url));
     this.load.image('water-frames', asset('/assets/tiles/water-frames.png'));
     for (const [key, def] of Object.entries(OBJECTS)) {
       if (def.frameWidth) {
@@ -39,9 +40,14 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
+    // the shared tileset canvas: the downloaded terrain strip + the composed
+    // Mire strip appended after it (tile ids 11+; jungle-map.json's tileset
+    // dims describe this combined strip)
     const src = this.textures.get(`${TILESET.key}-src`).getSourceImage() as HTMLImageElement;
-    const canvasTex = this.textures.createCanvas(TILESET.key, src.width, src.height)!;
+    const mire = this.textures.get(`${TILESET.key}-mire-src`).getSourceImage() as HTMLImageElement;
+    const canvasTex = this.textures.createCanvas(TILESET.key, src.width + mire.width, src.height)!;
     canvasTex.draw(0, 0, src);
+    canvasTex.draw(src.width, 0, mire);
 
     // generated FX textures: radial glow (lights, fireflies) and a tiny leaf
     const glow = this.textures.createCanvas('glow', 64, 64)!;
@@ -86,6 +92,13 @@ export class BootScene extends Phaser.Scene {
     leaf.context.fillStyle = '#2c6b35';
     leaf.context.fillRect(0, 2, 4, 1);
     leaf.refresh();
+    // death-beat puff (J4): ONE tiny white square, tinted per burst at use —
+    // every felled mob/creature poofs from this shared texture, so a death
+    // never allocates a texture or a particle emitter of its own
+    const poof = this.textures.createCanvas('poof', 4, 4)!;
+    poof.context.fillStyle = '#ffffff';
+    poof.context.fillRect(0, 0, 4, 4);
+    poof.refresh();
     // soft elliptical drop shadow (fake-3D grounding for every object)
     const shadow = this.textures.createCanvas('shadow', 48, 24)!;
     const sctx = shadow.context;

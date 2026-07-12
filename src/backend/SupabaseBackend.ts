@@ -75,6 +75,8 @@ import type {
   PlaceResult,
   PlayerPos,
   QuestState,
+  RefinerConfig,
+  RefinerResult,
   SawmillResult,
   SealState,
   Structure,
@@ -100,7 +102,7 @@ interface WorldData {
 }
 
 /** what a Player broadcasts about themselves (presence + position stream) */
-type SelfPos = { name: string; appearance: Appearance; x: number; y: number; dir: Dir; moving: boolean; held?: ItemId };
+type SelfPos = { name: string; appearance: Appearance; x: number; y: number; dir: Dir; moving: boolean; held?: ItemId; swings?: number };
 
 const POS_BROADCAST_MS = 150; // cap the position stream; ~7/player-s keeps an 8-player shared channel under the realtime msg/s cap (remote sprites interpolate, so it stays smooth)
 // Presence refresh: keep the tracked snapshot from going totally stale for
@@ -487,13 +489,16 @@ export class SupabaseBackend implements Backend {
       dir: p.dir ?? 'down',
       moving: !!p.moving,
       held: p.held,
+      swings: p.swings,
     };
   }
 
   // ---------------------------------------------------------------- realtime-ish position
 
-  sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId): void {
-    this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held };
+  sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId, swings?: number): void {
+    // `swings` rides the SAME broadcast payload (and the rare presence
+    // snapshot lastLocal already feeds) — no new channel, packet, or cadence
+    this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held, swings };
     this.broadcastPos(false);
     // B2: my own step out of / into the arena may start/cancel the grace
     if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
@@ -832,6 +837,36 @@ export class SupabaseBackend implements Backend {
 
   async sawmillCollect(sawmillId: string): Promise<SawmillResult> {
     const res = await this.rpc<any>('jw_sawmill_collect', { p_id: sawmillId, p_who: this.me, p_plank_ms: SAWMILL_PLANK_MS });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, state: res.state, inventory: { ...this.inv } };
+  }
+
+  // the generic Refiner kernel (ADR-0017 §6, migration 0012): the client passes
+  // the tuning, SQL is the generic executor — the Sawmill stays on its legacy path
+  private refinerArgs(refinerId: string, cfg: RefinerConfig): Record<string, unknown> {
+    return {
+      p_id: refinerId, p_who: this.me,
+      p_input_item: cfg.inputItem, p_output_item: cfg.outputItem, p_ms: cfg.msPerUnit, p_cap: cfg.cap,
+    };
+  }
+
+  async refinerOpen(refinerId: string, cfg: RefinerConfig): Promise<RefinerResult> {
+    const res = await this.rpc<any>('jw_refiner_open', this.refinerArgs(refinerId, cfg));
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NO_REFINER' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, state: res.state, inventory: { ...this.inv } };
+  }
+
+  async refinerDeposit(refinerId: string, cfg: RefinerConfig): Promise<RefinerResult> {
+    const res = await this.rpc<any>('jw_refiner_deposit', this.refinerArgs(refinerId, cfg));
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, state: res.state, inventory: { ...this.inv } };
+  }
+
+  async refinerCollect(refinerId: string, cfg: RefinerConfig): Promise<RefinerResult> {
+    const res = await this.rpc<any>('jw_refiner_collect', this.refinerArgs(refinerId, cfg));
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING' };
     this.inv = res.inventory as Inventory;
     return { ok: true, state: res.state, inventory: { ...this.inv } };

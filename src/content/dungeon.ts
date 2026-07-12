@@ -1351,16 +1351,18 @@ function stepBrood(
 /**
  * Apply one host-adjudicated player hit to a mob and return the roll. Reuses the
  * ADR-0006 weapon table + rollGuardianDamage so a Sword/axe/etc. deals the same
- * band it would to the Guardian. The host has already validated range + tool
- * ownership (trusted-friends loose validation, ADR-0005). Mutates hp; sets 'dead'
- * at 0. The rng is injected (host passes Math.random) to keep this node-pure.
+ * band it would to the Guardian — including the Village's collective crit buff
+ * (ADR-0013), which the host passes as bonusCrit exactly like the Guardian-hit
+ * path in both backends. The host has already validated range + tool ownership
+ * (trusted-friends loose validation, ADR-0005). Mutates hp; sets 'dead' at 0.
+ * The rng is injected (host passes Math.random) to keep this node-pure.
  */
-export function applyMobHit(m: MobState, tool: ToolId | undefined, rng: () => number): { damage: number; crit: boolean; dead: boolean } {
+export function applyMobHit(m: MobState, tool: ToolId | undefined, rng: () => number, bonusCrit = 0): { damage: number; crit: boolean; dead: boolean } {
   if (m.st === 'dead') return { damage: 0, crit: false, dead: true };
   // the Bulwark's guard (ADR-0016): while the rune slab is up, every hit bounces —
   // damage flows only in the counter-slam + exposed-recover window of its cycle
   if (m.guard) return { damage: 0, crit: false, dead: false };
-  const { damage, crit } = rollGuardianDamage(tool, rng);
+  const { damage, crit } = rollGuardianDamage(tool, rng, bonusCrit);
   m.hp = Math.max(0, m.hp - damage);
   const dead = m.hp <= 0;
   if (dead) m.st = 'dead';

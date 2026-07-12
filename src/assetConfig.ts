@@ -11,6 +11,13 @@ export const TILESET = {
   tileSize: 16,
 };
 
+/**
+ * The Sunken Mire's terrain strip (tools/compose-mire-tiles.ts) — BootScene
+ * draws it into the shared canvas tileset right after terrain.png, so the
+ * downloaded strip is never edited and jungle-map.json's tile ids 11+ resolve.
+ */
+export const MIRE_TILES = { url: '/assets/tiles/mire-tiles.png' };
+
 // Player sprites are no longer loaded from a sheet: every Avatar is composed
 // at runtime from four palette picks (src/avatars.ts) into its own texture.
 
@@ -43,6 +50,9 @@ export const OBJECTS: Record<string, ObjectDef> = {
   obsidian_rock_depleted: { url: '/assets/objects/obsidian-rubble.png' },
   fishing_spot: { url: '/assets/objects/fishing-spot.png' },
   fishing_spot_depleted: { url: '/assets/objects/fishing-spot-calm.png' },
+  // the Sunken Mire's Node (tools/compose-mire-tiles.ts)
+  salt_reed_bed: { url: '/assets/objects/salt-reed-bed.png' },
+  salt_reed_bed_depleted: { url: '/assets/objects/salt-reed-bed-depleted.png' },
 
   st_campfire: { url: '/assets/objects/campfire.png' },
   st_torch: { url: '/assets/objects/torch.png' },
@@ -74,6 +84,9 @@ export const OBJECTS: Record<string, ObjectDef> = {
   // confirmed; the CC-BY Sevarihk sheet (waterfall-fall.png) is the safe fallback.
   // See CREDITS.md.
   waterfall_anim: { url: '/assets/objects/user-falls.png', frameWidth: 96, frameHeight: 193 },
+
+  // the Sunken Mire's gnarled bog snags (foliage, tools/compose-mire-tiles.ts)
+  dead_tree: { url: '/assets/objects/dead-tree.png' },
 
   tablet: { url: '/assets/objects/tablet.png' },
   altar: { url: '/assets/objects/altar.png' },

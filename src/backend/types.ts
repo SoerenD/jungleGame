@@ -27,6 +27,18 @@ export interface PlayerPos {
   moving: boolean;
   /** the Player's in-hand Loadout item (Realtime-broadcast); null when empty */
   held?: ItemId;
+  /**
+   * Count of this Player's swings this session — a monotone counter, NOT a
+   * timestamp. It piggybacks on the existing position stream (no extra packet,
+   * no cadence change) so peers can echo the swing pose + Tool arc on the
+   * sender's remote body: a receiver plays ONE swing when the value has
+   * increased since its last packet — no clock semantics, so skew is
+   * irrelevant and redelivery dedupes itself. The 10Hz stream vs the ~300ms
+   * swing cadence means jumps of 1–2 per packet are normal (still one echo).
+   * Optional: older clients and the Mock's bots never send it and render
+   * exactly as before.
+   */
+  swings?: number;
 }
 
 export type Inventory = Partial<Record<ItemId, number>>;
@@ -284,6 +296,36 @@ export type SawmillResult =
   | { ok: false; reason: 'NO_SAWMILL' | 'NOTHING' }
   | { ok: true; state: SawmillState; inventory: Inventory };
 
+/**
+ * Tuning for one Refiner family (ADR-0017 §6) — the client passes it on every
+ * call and the backend is the generic executor (the jw_contribute_village
+ * pattern). The Sawmill predates the kernel and keeps its own legacy path.
+ */
+export interface RefinerConfig {
+  /** the raw Resource a deposit takes from the pack */
+  inputItem: ItemId;
+  /** the refined Resource a collect pays out */
+  outputItem: ItemId;
+  /** real time to refine ONE unit — lazy timestamps, never a tick (ADR-0001) */
+  msPerUnit: number;
+  /** most raw input the Refiner holds unrefined; deposits clamp to it */
+  cap: number;
+}
+
+/** a Refiner's lazily-computed state — the SawmillState shape, generalized */
+export interface RefinerState {
+  /** raw input still refining */
+  input: number;
+  /** refined output finished and waiting to be collected */
+  ready: number;
+  /** ms until the next unit finishes; null when nothing is refining */
+  nextMs: number | null;
+}
+
+export type RefinerResult =
+  | { ok: false; reason: 'NO_REFINER' | 'NOTHING' | 'BAD_CONFIG' }
+  | { ok: true; state: RefinerState; inventory: Inventory };
+
 export type CookResult =
   | { ok: false; reason: 'NO_FISH' }
   | { ok: true; inventory: Inventory };
@@ -452,8 +494,11 @@ export interface Backend {
    */
   join(name: string, pin: string, appearance: Appearance, world: string): Promise<JoinResult>;
   loadWorld(): Promise<WorldSnapshot>;
-  /** fire-and-forget, like a Realtime broadcast; `held` is the in-hand Loadout item */
-  sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId): void;
+  /**
+   * fire-and-forget, like a Realtime broadcast; `held` is the in-hand Loadout
+   * item, `swings` the session swing counter riding along (see PlayerPos.swings)
+   */
+  sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId, swings?: number): void;
   sendChat(text: string): Promise<void>;
   /** `withTool` is the in-hand Tool the client struck with; the server honours it only if owned */
   hitNode(nodeId: string, withTool?: ToolId): Promise<HitResult>;
@@ -475,6 +520,12 @@ export interface Backend {
   sawmillDeposit(sawmillId: string): Promise<SawmillResult>;
   /** collect finished planks; collecting early yields only what is done */
   sawmillCollect(sawmillId: string): Promise<SawmillResult>;
+  /** the generic Refiner kernel (ADR-0017 §6) — any input→output, lazy timestamps */
+  refinerOpen(refinerId: string, config: RefinerConfig): Promise<RefinerResult>;
+  /** deposit the carried input Resource (clamped to the Refiner's cap) */
+  refinerDeposit(refinerId: string, config: RefinerConfig): Promise<RefinerResult>;
+  /** collect finished output; collecting early yields only what is done */
+  refinerCollect(refinerId: string, config: RefinerConfig): Promise<RefinerResult>;
   /** mark a lore tablet as read */
   readTablet(id: string): Promise<QuestState>;
   /** offer 2 fruit + 2 fiber at the grove altar to open the vine gate */

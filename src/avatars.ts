@@ -13,14 +13,22 @@ import type { Appearance, Dir } from './backend/types';
 export const AVATAR_W = 16;
 export const AVATAR_H = 32;
 
-/** sheet rows top→bottom: down, right, up, left — 4 walk frames each */
+/**
+ * sheet rows top→bottom: down, right, up, left — 5 columns each: 4 walk
+ * frames plus 1 swing pose (frame indices are row-major over the 5-wide sheet)
+ */
 export const AVATAR_WALK: Record<Dir, { start: number; end: number }> = {
   down: { start: 0, end: 3 },
-  right: { start: 4, end: 7 },
-  up: { start: 8, end: 11 },
-  left: { start: 12, end: 15 },
+  right: { start: 5, end: 8 },
+  up: { start: 10, end: 13 },
+  left: { start: 15, end: 18 },
 };
-export const AVATAR_IDLE: Record<Dir, number> = { down: 0, right: 4, up: 8, left: 12 };
+export const AVATAR_IDLE: Record<Dir, number> = { down: 0, right: 5, up: 10, left: 15 };
+/**
+ * The raised-arm swing pose (column 4 of each row): a static frame flashed for
+ * the moment a swing fires (GameScene.playSwingFx), never part of a walk loop.
+ */
+export const AVATAR_SWING: Record<Dir, number> = { down: 4, right: 9, up: 14, left: 19 };
 
 export interface Swatch {
   name: string;
@@ -120,9 +128,12 @@ const shade = (hex: string, f: number): string => {
 };
 
 /**
- * Draw the 16-frame blockhead sheet (4 directions × 4 walk poses) onto a
- * fresh canvas. One fixed shape — cubic head about half the sprite height,
- * boxy body and limbs; only the four colors vary.
+ * Draw the 20-frame blockhead sheet (4 directions × [4 walk poses + 1 swing
+ * pose]) onto a fresh canvas. One fixed shape — cubic head about half the
+ * sprite height, boxy body and limbs; only the four colors vary. The swing
+ * pose (column 4, AVATAR_SWING) is the walk stance with the tool arm thrown
+ * up high — the walk columns stay at 0–3 so consumers that only page through
+ * the walk (the join-screen preview) are unaffected by the extra column.
  */
 export function drawBlockheadSheet(a: Appearance): HTMLCanvasElement {
   const skin = PALETTES.skin[a.skin].hex;
@@ -130,7 +141,7 @@ export function drawBlockheadSheet(a: Appearance): HTMLCanvasElement {
   const shirt = PALETTES.shirt[a.shirt].hex;
   const pants = PALETTES.pants[a.pants].hex;
   const canvas = document.createElement('canvas');
-  canvas.width = AVATAR_W * 4;
+  canvas.width = AVATAR_W * 5;
   canvas.height = AVATAR_H * 4;
   const ctx = canvas.getContext('2d')!;
   const px = (x: number, y: number, w: number, h: number, color: string) => {
@@ -141,16 +152,17 @@ export function drawBlockheadSheet(a: Appearance): HTMLCanvasElement {
   const dirs: Dir[] = ['down', 'right', 'up', 'left'];
   for (let row = 0; row < 4; row++) {
     const dir = dirs[row];
-    for (let pose = 0; pose < 4; pose++) {
+    for (let pose = 0; pose < 5; pose++) {
       ctx.save();
       ctx.translate(pose * AVATAR_W, row * AVATAR_H);
       if (dir === 'left') {
-        // left is the mirrored right row
+        // left is the mirrored right row (the swing column mirrors with it)
         ctx.translate(AVATAR_W, 0);
         ctx.scale(-1, 1);
       }
       const d: Dir = dir === 'left' ? 'right' : dir;
-      const step = pose === 1 ? 1 : pose === 3 ? -1 : 0; // stride phase
+      const swing = pose === 4; // AVATAR_SWING: standing, tool arm raised
+      const step = swing ? 0 : pose === 1 ? 1 : pose === 3 ? -1 : 0; // stride phase
       const bob = step !== 0 ? 1 : 0; // torso bobs down mid-step
 
       // ---- legs (pants) — alternate with the stride
@@ -171,16 +183,21 @@ export function drawBlockheadSheet(a: Appearance): HTMLCanvasElement {
       if (d === 'down' || d === 'up') {
         px(3, 18 + bob, 10, 7 - bob, shirt);
         px(3, 23, 10, 2, shade(shirt, 0.8)); // hem
-        // arms swing opposite the legs
+        // arms swing opposite the legs; the swing pose replaces the tool-side
+        // arm with the raised one drawn after the head (see below)
         px(1, 18 + bob + (step === -1 ? 1 : 0), 2, 6, shirt);
-        px(13, 18 + bob + (step === 1 ? 1 : 0), 2, 6, shirt);
-        px(1, 23 + bob + (step === -1 ? 1 : 0), 2, 1, skin); // hands
-        px(13, 23 + bob + (step === 1 ? 1 : 0), 2, 1, skin);
+        px(1, 23 + bob + (step === -1 ? 1 : 0), 2, 1, skin); // hand
+        if (!swing) {
+          px(13, 18 + bob + (step === 1 ? 1 : 0), 2, 6, shirt);
+          px(13, 23 + bob + (step === 1 ? 1 : 0), 2, 1, skin);
+        }
       } else {
         px(4, 18 + bob, 8, 7 - bob, shirt);
         px(4, 23, 8, 2, shade(shirt, 0.8));
-        px(7 - step, 18 + bob, 2, 6, shade(shirt, 0.9)); // the near arm
-        px(7 - step, 23 + bob, 2, 1, skin);
+        if (!swing) {
+          px(7 - step, 18 + bob, 2, 6, shade(shirt, 0.9)); // the near arm
+          px(7 - step, 23 + bob, 2, 1, skin);
+        }
       }
 
       // ---- cubic head (about half the sprite height)
@@ -207,6 +224,19 @@ export function drawBlockheadSheet(a: Appearance): HTMLCanvasElement {
         px(12, hy + 6, 2, 2, '#1c1c26');
         px(2, hy + 4, 2, 7, hair); // hair trails on the far side
       }
+      // ---- swing pose: the tool arm thrown up to brow height. Drawn AFTER
+      // the head on purpose — the raised fist overlapping the head block is
+      // what sells "arm raised" on a sprite that is half head.
+      if (swing) {
+        if (d === 'down' || d === 'up') {
+          px(13, 12, 2, 7, shirt); // raised arm, straight up beside the head
+          px(13, 10, 2, 2, skin); // the fist, at brow height
+        } else {
+          px(8, 17, 3, 2, shirt); // upper arm reaches forward…
+          px(10, 12, 2, 5, shade(shirt, 0.9)); // …forearm punches up past the face
+          px(10, 10, 2, 2, skin); // the fist, at brow height
+        }
+      }
       ctx.restore();
     }
   }
@@ -226,6 +256,9 @@ export function ensureAvatarTexture(scene: Phaser.Scene, key: string, a: Appeara
   }
   const canvas = drawBlockheadSheet(a);
   const tex = scene.textures.addCanvas(key, canvas)!;
+  // register every cell of the sheet, row-major — this scan is what makes the
+  // AVATAR_WALK/AVATAR_IDLE/AVATAR_SWING indices real frames (the static swing
+  // column needs no animation, only its frame)
   let frame = 0;
   for (let y = 0; y + AVATAR_H <= canvas.height; y += AVATAR_H) {
     for (let x = 0; x + AVATAR_W <= canvas.width; x += AVATAR_W) {

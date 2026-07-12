@@ -5,6 +5,8 @@ export type ResourceId =
   | 'stone'
   | 'fiber'
   | 'fruit'
+  // the Sunken Mire's raw Resource (ADR-0017 rung 1: salt-reed → tideglass)
+  | 'saltreed'
   | 'map_piece'
   // v2 — Guardian drops and tier-2 Resources
   | 'guardian_scale'
@@ -121,6 +123,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   stone: { name: 'Stone', kind: 'resource', desc: 'Broken out of rocks.' },
   fiber: { name: 'Fiber', kind: 'resource', desc: 'Cut from vines — needs a machete.' },
   fruit: { name: 'Fruit', kind: 'resource', desc: 'Picked from fruit bushes.' },
+  saltreed: { name: 'Salt-Reed', kind: 'resource', desc: 'Pale brine-crusted reeds cut from the banks of the Sunken Mire. One day a Brine Kiln will temper them into tideglass.' },
   map_piece: { name: 'Torn Map Piece', kind: 'resource', desc: 'A scrap of an old treasure map. Collect 3 and an X appears on your minimap — dig there!' },
   guardian_scale: { name: 'Guardian Scale', kind: 'resource', desc: 'A stone-hard scale shed by the Guardian of the Ruins. Every Player who lands a hit in a victorious fight earns them.' },
   hardwood: { name: 'Ancient Hardwood', kind: 'resource', desc: 'Timber from the oldest trees — only an Ancient Axe can cut it.' },
@@ -205,6 +208,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   stone: { name: 'Stein', desc: 'Aus Felsen herausgebrochen.' },
   fiber: { name: 'Fasern', desc: 'Von Ranken geschnitten — braucht eine Machete.' },
   fruit: { name: 'Frucht', desc: 'Von Obststräuchern gepflückt.' },
+  saltreed: { name: 'Salzried', desc: 'Blasse, salzverkrustete Riede von den Ufern des Versunkenen Moors. Eines Tages wird ein Sole-Ofen sie zu Gezeitenglas härten.' },
   map_piece: { name: 'Zerrissener Kartenfetzen', desc: 'Ein Fetzen einer alten Schatzkarte. Sammle 3 und ein ✕ erscheint auf deiner Minikarte — grabe dort!' },
   guardian_scale: { name: 'Wächterschuppe', desc: 'Eine steinharte Schuppe, abgeworfen vom Wächter der Ruinen. Jeder Spieler, der in einem siegreichen Kampf einen Treffer landet, verdient sie.' },
   hardwood: { name: 'Uraltes Hartholz', desc: 'Holz der ältesten Bäume — nur eine Uralte Axt kann es schlagen.' },

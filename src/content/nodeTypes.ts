@@ -3,7 +3,7 @@ import { getLang } from '../i18n';
 import type { Inventory } from '../backend/types';
 import type { ResourceId, ToolId } from './items';
 
-export type NodeTypeId = 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot';
+export type NodeTypeId = 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed';
 
 export interface NodeType {
   id: NodeTypeId;
@@ -112,6 +112,18 @@ const BASE_NODE_TYPES: Record<NodeTypeId, NodeType> = {
     regrowMs: regrow(90_000),
     blocks: false,
   },
+  // the Sunken Mire's own Node (ADR-0017 rung 1): free to cut bare-handed —
+  // it is the Realm's basic Resource — a machete halves the work. T5's Tide
+  // will gate its exposure; until then it regrows like a vine.
+  salt_reed_bed: {
+    id: 'salt_reed_bed',
+    name: 'Salt-Reed Bed',
+    maxHp: 3,
+    yield: { saltreed: 2 },
+    bonusTool: 'machete',
+    regrowMs: regrow(150_000),
+    blocks: false,
+  },
 };
 
 /** German display names for the Resource Nodes (all other fields stay shared) */
@@ -123,6 +135,7 @@ const NODE_NAMES_DE: Record<NodeTypeId, string> = {
   hardwood_tree: 'Uralter Hartholzbaum',
   obsidian_rock: 'Obsidianfels',
   fishing_spot: 'Angelstelle',
+  salt_reed_bed: 'Salzried-Bett',
 };
 
 export const NODE_TYPES: Record<NodeTypeId, NodeType> =

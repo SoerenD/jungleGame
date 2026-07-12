@@ -832,6 +832,7 @@ button.ui-btn:disabled {
 /* ---------------- v3: crate, Sawmill, signpost ---------------- */
 #crate-panel,
 #sawmill-panel,
+#refiner-panel,
 #sign-panel {
   position: absolute;
   top: 45%;
@@ -842,6 +843,7 @@ button.ui-btn:disabled {
 }
 #crate-panel.open,
 #sawmill-panel.open,
+#refiner-panel.open,
 #sign-panel.open {
   display: block;
 }
@@ -985,10 +987,12 @@ button.ui-btn:disabled {
   display: flex;
   gap: 8px;
 }
-#sawmill-panel {
+#sawmill-panel,
+#refiner-panel {
   width: 340px;
 }
-#sawmill-status {
+#sawmill-status,
+#refiner-status {
   font-size: calc(13px * var(--ui-scale));
   color: var(--dim);
   margin-bottom: 10px;

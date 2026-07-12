@@ -43,7 +43,7 @@ export const DELVE_QUEST_STEPS: { id: string; label: string; done: (p: DelveProg
   { id: 'break_seal', label: pick('Break the Seal at the Ruins', 'Das Siegel bei den Ruinen brechen'), done: (p) => !!p.seal?.broken },
   { id: 'best_guardian', label: pick('Defeat the Guardian — earn Guardian Scales', 'Den Wächter bezwingen — Wächterschuppen verdienen'), done: (p) => (p.inventory.guardian_scale ?? 0) > 0 },
   { id: 'forge_pickaxe', label: pick('Forge an Ancient Pickaxe', 'Eine Uralte Spitzhacke schmieden'), done: (p) => (p.inventory.ancient_pickaxe ?? 0) > 0 },
-  { id: 'open_shaft', label: pick('Clear the sealed mine shaft in the South Quarry', 'Den versiegelten Minenschacht im Südlichen Steinbruch freilegen'), done: (p) => !!p.quest?.delveOpen },
+  { id: 'open_shaft', label: pick('Clear the sealed mine shaft at The Cavern Mouth', 'Den versiegelten Minenschacht am Höhlenschlund freilegen'), done: (p) => !!p.quest?.delveOpen },
   { id: 'descend', label: pick('Descend into the Delve and claim its spoils', 'In den Schacht hinabsteigen und seine Beute holen'), done: (p) => (p.inventory.husk_shard ?? 0) > 0 || (p.inventory.deep_core ?? 0) > 0 },
 ];
 

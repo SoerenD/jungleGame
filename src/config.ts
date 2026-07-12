@@ -1,10 +1,25 @@
+import type { RefinerConfig } from './backend/types';
+
 export const TILE = 16;
 // Frontier expansion (ADR-0009): the World grew 200 → 300 by FAR-EDGE growth
 // (east + south). The original 200×200 is pinned in place — spawn, every build,
 // and every node id stay put (no save migration); the new space is an L-shaped
 // frontier appended by tools/generate-map.ts.
-export const MAP_W = 300;
-export const MAP_H = 300;
+// Realm expansion (ADR-0017 §2): the grid then grew 300 → 384 — once, in both
+// axes — to hold the Warden Realms as sealed far-edge districts. The pre-Realm
+// 300×300 World is pinned byte-for-byte; the space beyond is void cliff plus
+// district rects entered by gate teleport only. Camera and minimap keep
+// clamping to WORLD_VIEW_* while the Player is not inside a district.
+// NOTE fog: explored-chunk indices encode the stride ceil(MAP_W / FOG_CHUNK);
+// growing MAP_W re-strides them exactly like the 200 → 300 growth did — old
+// indices decode to shifted chunks, a cosmetic scramble of the revealed map
+// that is accepted per the ADR-0009 growth discipline (no version marker, no
+// migration — see GameScene.initFog).
+export const MAP_W = 384;
+export const MAP_H = 384;
+/** the pinned pre-Realm World rect — camera + minimap clamp to it in the World */
+export const WORLD_VIEW_W = 300;
+export const WORLD_VIEW_H = 300;
 export const PLAYER_SPEED = 130;
 export const INTERACT_RANGE = 30;
 // Whole-number zoom only: the tileset is packed edge-to-edge, so nearest-
@@ -37,6 +52,21 @@ export const FAST_REGROW_MS = 20_000;
 export const SAWMILL_PLANK_MS = FAST_REGROW ? 5_000 : 120_000;
 /** a Sawmill holds at most this much unmilled wood */
 export const SAWMILL_WOOD_CAP = 10;
+
+// ---------------------------------------------------------------- Refiners (ADR-0017 §6)
+// The generic Refiner kernel: each Refiner family is ONE RefinerConfig the
+// client passes on every call — Mock/SQL are the generic executors. The live
+// Sawmill predates the kernel and stays on its own table/RPCs.
+// ?refinertest = dev-only test Refiner: E on a Sawmill opens the generic
+// refiner panel with TEST_REFINER instead of the Sawmill panel, so the kernel
+// is exercisable before any player-facing Refiner Structure ships.
+export const DEV_REFINER_TEST = params.has('refinertest');
+export const TEST_REFINER: RefinerConfig = {
+  inputItem: 'stone',
+  outputItem: 'plank',
+  msPerUnit: FAST_REGROW ? 5_000 : 120_000,
+  cap: 10,
+};
 
 // ---------------------------------------------------------------- fog of war
 /** exploration is tracked in chunks of this many tiles per side */
@@ -217,6 +247,10 @@ export const DEV_WILD = params.has('wild');
 // point, plus a stock of tradeables. Lets the resource-exchange / Name & Crest /
 // Chronicle / Trophy panels be reached on foot for solo UI verification.
 export const DEV_VILLAGE = params.has('village');
+// ?realmtest = T2 stub: every Realm gate stands OPEN without its Warden's
+// defeat, so districts are enterable for testing. Without the flag the gates
+// are dormant and inert — the real gate-key gating arrives with T4/T5.
+export const DEV_REALM_TEST = params.has('realmtest');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006

@@ -15,10 +15,23 @@ import { ARENA_W, ARENA_H } from '../src/content/guardian';
 // before — same RNG order → identical node ids, no save migration. Everything
 // under "FRONTIER" below is APPENDED after the core, so core ids never shift.
 // CORE_W/CORE_H bound every core-only loop; W/H are the full map.
-const W = 300;
-const H = 300;
+//
+// Realm expansion (ADR-0017 §2): the grid then grew 300 → 384 ONCE, in both
+// axes — big enough for all three planned Realm district rects, so the fog
+// stride consequence of a width change is paid a single time. The pre-Realm
+// 300×300 map is PINNED exactly the way the core was at the last growth:
+// PREV_W/PREV_H bound every loop that used to run to the old W/H, and ALL
+// district randomness draws from its own separate stream (rng2) — the main
+// stream's draw order is untouched, so every pre-existing tile value, node id
+// and zone rect stays byte-for-byte identical. See "REALM DISTRICTS" below.
+const W = 384;
+const H = 384;
 const CORE_W = 200;
 const CORE_H = 200;
+// bounds of the pinned pre-Realm map (the walkable World proper); everything
+// beyond is Realm district space sealed in unwalkable void cliff
+const PREV_W = 300;
+const PREV_H = 300;
 
 // ---------------------------------------------------------------- tileset mapping
 // Indices into public/assets/tiles/terrain.png (0-based tile ids; gid = id + 1).
@@ -28,8 +41,11 @@ const TILESET = {
   name: 'terrain',
   image: '../assets/tiles/terrain.png',
   tileSize: 16,
-  columns: 11,
-  imagewidth: 176,
+  // 11 downloaded tiles + 9 Mire tiles (mire-tiles.png, tools/compose-mire-tiles.ts).
+  // BootScene composes both strips into one canvas texture at runtime, so the
+  // downloaded terrain.png is never edited; these dims describe the COMPOSED strip.
+  columns: 20,
+  imagewidth: 320,
   imageheight: 16,
 };
 
@@ -44,6 +60,14 @@ const T: Record<string, number[]> = {
   stone_floor: [6],
   flower: [7],
   plant: [8],
+  // the Sunken Mire strip (ADR-0017 rung 1) — ids 11+ live in mire-tiles.png
+  mire_peat: [11, 11, 11, 12, 13],
+  mire_water: [14],
+  mire_mud: [15],
+  mire_flagstone: [16],
+  reeds: [17],
+  cattails: [18],
+  lilypad: [19],
 };
 
 // ---------------------------------------------------------------- deterministic RNG
@@ -60,6 +84,12 @@ function mulberry32(seed: number) {
 const rng = mulberry32(7);
 const rand = (min: number, max: number) => min + rng() * (max - min);
 const pick = <T>(arr: T[]): T => arr[Math.floor(rng() * arr.length)];
+// Realm districts draw from their OWN stream (ADR-0017): inserting draws into
+// the main stream would reshuffle everything generated after them — the
+// 200→300 growth taught that lesson for the frontier; districts never touch it.
+const rng2 = mulberry32(1017);
+const rand2 = (min: number, max: number) => min + rng2() * (max - min);
+const pick2 = <T>(arr: T[]): T => arr[Math.floor(rng2() * arr.length)];
 
 // ---------------------------------------------------------------- grid
 type Ground =
@@ -69,7 +99,12 @@ type Ground =
   | 'dirt'
   | 'swamp'
   | 'cliff'
-  | 'stone_floor';
+  | 'stone_floor'
+  // the Sunken Mire's palette (district space only — never on the pinned map)
+  | 'mire_peat'
+  | 'mire_water'
+  | 'mire_mud'
+  | 'mire_flagstone';
 
 const ground: Ground[][] = Array.from({ length: H }, () => Array<Ground>(W).fill('grass'));
 const decor: (string | null)[][] = Array.from({ length: H }, () => Array<string | null>(W).fill(null));
@@ -311,6 +346,11 @@ const zones = [
   { name: 'Overgrown Temple', x: 214, y: 116, w: 72, h: 76, dangerous: true }, // east-south: tier-2 grove + lore
   { name: 'Mangrove Coast', x: 100, y: 226, w: 108, h: 70, dangerous: true }, // south: fishing + shipwreck treasure
   { name: 'The Cavern Mouth', x: 16, y: 222, w: 80, h: 74, dangerous: true }, // south-west: the Delve entrance
+  // ---- REALM district Zones (ADR-0017), appended last. Every rect lies wholly
+  // beyond the pinned 300×300 map (x>=300 or y>=300), so no pre-existing tile
+  // can ever match one — zoneAt for the old World is unchanged, first-hit order
+  // preserved. Deliberately NOT dangerous: predators never spawn in a Realm.
+  { name: 'The Sunken Mire', x: 100, y: 300, w: 108, h: 72, dangerous: false }, // rung 1 Realm (T2 stub; T5 fills it in)
 ];
 
 function zoneAt(x: number, y: number): string {
@@ -323,7 +363,7 @@ function zoneAt(x: number, y: number): string {
 // ---------------------------------------------------------------- resource nodes + foliage
 interface NodeOut {
   id: string;
-  type: 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot';
+  type: 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed';
   tx: number;
   ty: number;
 }
@@ -401,7 +441,9 @@ function tryPlaceNode(type: NodeOut['type'], x: number, y: number): void {
   const key = `${x},${y}`;
   if (occupied.has(key)) return;
   const g = ground[y][x];
-  if (g !== 'grass' && g !== 'swamp' && !((type === 'rock' || type === 'obsidian_rock') && g === 'stone_floor')) return;
+  // mire_peat/mire_mud only exist in district space, so accepting them cannot
+  // change any pinned-map placement outcome
+  if (g !== 'grass' && g !== 'swamp' && g !== 'mire_peat' && g !== 'mire_mud' && !((type === 'rock' || type === 'obsidian_rock') && g === 'stone_floor')) return;
   if (Math.abs(x - SPAWN.tx) <= 2 && Math.abs(y - SPAWN.ty) <= 2) return;
   if ((type === 'tree' || type === 'hardwood_tree') && nearWater(x, y)) return;
   occupied.add(key);
@@ -494,13 +536,13 @@ function placeFishingSpotNear(cx: number, cy: number, maxR = 12): void {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const x = cx + dx;
         const y = cy + dy;
-        if (!inBounds(x, y) || occupied.has(`${x},${y}`) || ground[y][x] !== 'water') continue;
+        if (!inBounds(x, y) || occupied.has(`${x},${y}`) || (ground[y][x] !== 'water' && ground[y][x] !== 'mire_water')) continue;
         let shore = false;
         for (let ny = -1; ny <= 1 && !shore; ny++) {
           for (let nx = -1; nx <= 1 && !shore; nx++) {
             if (!inBounds(x + nx, y + ny)) continue;
             const g = ground[y + ny][x + nx];
-            if (g === 'grass' || g === 'sand' || g === 'dirt' || g === 'stone_floor' || g === 'swamp') shore = true;
+            if (g === 'grass' || g === 'sand' || g === 'dirt' || g === 'stone_floor' || g === 'swamp' || g === 'mire_mud' || g === 'mire_peat' || g === 'mire_flagstone') shore = true;
           }
         }
         if (!shore) continue;
@@ -695,8 +737,9 @@ carveFrontierPath([[60, 202], [58, 232], [56, 258]]); // → the Cavern Mouth sh
 carveFrontierPath([[252, 96], [256, 130], [252, 150]]); // Crags ↔ Temple along the east edge
 
 // beaches: frontier grass adjacent to the new mangrove water becomes sand
-for (let y = CORE_H; y < H; y++) {
-  for (let x = 0; x < W; x++) {
+// (bounded to the pinned pre-Realm map — district space is generated below)
+for (let y = CORE_H; y < PREV_H; y++) {
+  for (let x = 0; x < PREV_W; x++) {
     if (ground[y][x] !== 'grass') continue;
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as [number, number][]) {
       if (inBounds(x + dx, y + dy) && ground[y + dy][x + dx] === 'water') { ground[y][x] = 'sand'; break; }
@@ -704,9 +747,12 @@ for (let y = CORE_H; y < H; y++) {
   }
 }
 
-// ---- frontier ambient nodes: same density logic, appended ids (core untouched)
-for (let gy = 1; gy < H - 1; gy += 2) {
-  for (let gx = 1; gx < W - 1; gx += 2) {
+// ---- frontier ambient nodes: same density logic, appended ids (core untouched).
+// BOUNDED TO THE PINNED 300×300 MAP: the exact same iteration + RNG sequence as
+// before the Realm growth, so every frontier node id stays byte-stable too
+// (district nodes are authored below, RNG-free, ids appended after these).
+for (let gy = 1; gy < PREV_H - 1; gy += 2) {
+  for (let gx = 1; gx < PREV_W - 1; gx += 2) {
     if (gx < CORE_W && gy < CORE_H) continue; // the core was generated above
     const x = gx + Math.floor(rand(0, 2));
     const y = gy + Math.floor(rand(0, 2));
@@ -745,11 +791,216 @@ for (const [x, y] of [[44, 252], [72, 266], [80, 248], [38, 274]] as [number, nu
   placeNodeNear('obsidian_rock', x, y);
 }
 
-// decor: flowers and small plants on open grass
+// ============================================================ REALM DISTRICTS (ADR-0017 §2)
+// A Realm reads as its own small map but is a rectangular district appended in
+// the unused grid space beyond the pinned 300×300 World — gate teleport is the
+// ONLY way in (no walkable connection; camera/minimap clamp sell the illusion).
+// Everything here is APPENDED: node ids continue the one sequence (placement is
+// RNG-free), and all terrain randomness uses the separate rng2 stream, so the
+// pinned map's draws — terrain, nodes, decor, tile variants — never shift.
+
+interface DistrictOut {
+  id: string;
+  /** English display name — the HUD localizes it like a zone name (ZONE_DE) */
+  name: string;
+  rect: { x: number; y: number; w: number; h: number };
+  /** the paired teleport gates: the world-side arch and its district-side twin */
+  gate: { worldTx: number; worldTy: number; districtTx: number; districtTy: number };
+}
+const districts: DistrictOut[] = [];
+
+// void filler: every appended tile starts as unwalkable cliff — cheap to
+// render, impossible to walk, and the moat that seals district space off from
+// the World's open south/east edges. District interiors are carved out below.
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
+    if (x < PREV_W && y < PREV_H) continue;
+    ground[y][x] = 'cliff';
+  }
+}
+
+/** deterministic spiral for a clear world-side gate spot near (cx,cy): solid
+ *  walkable ground on the gate tile AND the tile south of it (the returning
+ *  Player appears there), nothing already standing on either. No RNG and no
+ *  terrain writes — the pinned map is never edited to host a gate. */
+function findGateSpot(cx: number, cy: number, maxR = 10): { tx: number; ty: number } {
+  const okGround = (x: number, y: number) => {
+    const g = inBounds(x, y) ? ground[y][x] : null;
+    return g === 'grass' || g === 'dirt' || g === 'sand' || g === 'swamp' || g === 'stone_floor';
+  };
+  for (let r = 0; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (!okGround(x, y) || !okGround(x, y + 1)) continue;
+        if (occupied.has(`${x},${y}`) || occupied.has(`${x},${y + 1}`)) continue;
+        return { tx: x, ty: y };
+      }
+    }
+  }
+  throw new Error(`no clear Realm-gate spot near ${cx},${cy}`);
+}
+
+// ---- rung 1: The Sunken Mire, south of the Mangrove Coast. A drowned peat
+// bog: near-black channels wind through dark peat, wet mud banks carry pale
+// reeds, an old flagstone causeway sinks southward from the gate to a ruined
+// islet (where T5's Brine Kiln and the Tide will live). Dead trees watch.
+{
+  const rect = { x: 100, y: 300, w: 108, h: 72 }; // keep in sync with its Zone rect above
+  // interior: the rect keeps a 1-tile cliff ring of its own (the void already
+  // provides one, but the ring survives any future neighbouring district)
+  fillRect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2, 'mire_peat');
+
+  // the drowned heart — a broad lake off-center…
+  fillCircle(154, 339, 11, 'mire_water', ['mire_peat']);
+  fillCircle(146, 331, 8, 'mire_water', ['mire_peat']);
+  fillCircle(164, 346, 8, 'mire_water', ['mire_peat']);
+  // …with winding channels wandering off it (chained blobs, rng2 stream)
+  let cx = 143;
+  let cy = 332;
+  for (let i = 0; i < 15; i++) {
+    cx -= rand2(1.5, 3.5);
+    cy += rand2(-2.5, 2);
+    fillCircle(cx, cy, rand2(1.8, 3.2), 'mire_water', ['mire_peat']);
+  }
+  cx = 165;
+  cy = 347;
+  for (let i = 0; i < 15; i++) {
+    cx += rand2(1.5, 3.5);
+    cy += rand2(-1.5, 2.5);
+    fillCircle(cx, cy, rand2(1.8, 3.2), 'mire_water', ['mire_peat']);
+  }
+  cx = 161;
+  cy = 333;
+  for (let i = 0; i < 11; i++) {
+    cx += rand2(1, 3);
+    cy -= rand2(1, 2.5);
+    fillCircle(cx, cy, rand2(1.5, 2.6), 'mire_water', ['mire_peat']);
+  }
+  // scattered black pools
+  for (let i = 0; i < 18; i++) {
+    fillCircle(rand2(rect.x + 8, rect.x + rect.w - 8), rand2(rect.y + 10, rect.y + rect.h - 8), rand2(1.2, 3), 'mire_water', ['mire_peat']);
+  }
+
+  // the gate landing — an old paved threshold, always dry (painted after the
+  // pools so the arch approach can never flood)
+  const dGate = { tx: 153, ty: 303 };
+  fillRect(dGate.tx - 3, dGate.ty - 1, 7, 5, 'mire_peat');
+  fillRect(dGate.tx - 2, dGate.ty, 5, 3, 'mire_flagstone');
+
+  // wet mud banks: every peat tile touching black water becomes shore
+  for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) {
+    for (let x = rect.x + 1; x < rect.x + rect.w - 1; x++) {
+      if (ground[y][x] !== 'mire_peat') continue;
+      if (
+        ground[y - 1][x] === 'mire_water' ||
+        ground[y + 1][x] === 'mire_water' ||
+        ground[y][x - 1] === 'mire_water' ||
+        ground[y][x + 1] === 'mire_water'
+      ) {
+        ground[y][x] = 'mire_mud';
+      }
+    }
+  }
+
+  // the ruined islet at the lake's heart — T5's altar/Brine Kiln ground
+  // (all drowned flagstone: clean World stone would glare against the murk)
+  fillCircle(154, 339, 3.6, 'mire_flagstone', ['mire_water', 'mire_mud', 'mire_peat']);
+  foliage.push({ kind: 'ruin_pillar', tx: 152, ty: 337 });
+  foliage.push({ kind: 'ruin_pillar', tx: 156, ty: 341 });
+  occupied.add('152,337');
+  occupied.add('156,341');
+
+  // the drowned causeway: gate landing → islet, two slabs wide, wandering but
+  // bending home toward the islet. The bog may swallow ONE slab of a row —
+  // and only when the path isn't drifting sideways, never two rows running,
+  // with the next row holding its line — so the surviving slabs always stack
+  // 4-adjacent and the islet (which has no other dry approach) stays walkable.
+  let px = 153.5;
+  let prevGx = 153;
+  let lastGap: boolean = false;
+  for (let py = dGate.ty + 3; py <= 336; py++) {
+    px += rand2(-0.5, 0.5) + (154 - px) * 0.12;
+    let gx = Math.round(px);
+    if (lastGap) {
+      gx = prevGx; // hold the line right after a swallowed slab
+      px = prevGx;
+    }
+    const roll = rng2();
+    const gap: boolean = py <= 333 && !lastGap && gx === prevGx && roll < 0.22;
+    const dropDx = roll < 0.11 ? -1 : 0;
+    for (let dx = -1; dx <= 0; dx++) {
+      if (gap && dx === dropDx) continue;
+      if (inBounds(gx + dx, py)) ground[py][gx + dx] = 'mire_flagstone';
+    }
+    lastGap = gap;
+    prevGx = gx;
+  }
+
+  // reeds and cattails crowd the banks; lily pads drift on the still water
+  for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) {
+    for (let x = rect.x + 1; x < rect.x + rect.w - 1; x++) {
+      const g = ground[y][x];
+      if (g === 'mire_mud' && rng2() < 0.34) decor[y][x] = rng2() < 0.7 ? 'reeds' : 'cattails';
+      else if (g === 'mire_peat' && rng2() < 0.035) decor[y][x] = 'reeds';
+      else if (g === 'mire_water' && rng2() < 0.05) decor[y][x] = 'lilypad';
+    }
+  }
+
+  // dead bog trees — gnarled silhouettes on open peat, never crowding the
+  // causeway's line of sight from the gate
+  let planted = 0;
+  for (let i = 0; i < 40 && planted < 14; i++) {
+    const tx = Math.round(rand2(rect.x + 5, rect.x + rect.w - 6));
+    const ty = Math.round(rand2(rect.y + 6, rect.y + rect.h - 6));
+    if (ground[ty][tx] !== 'mire_peat' || decor[ty][tx] || occupied.has(`${tx},${ty}`)) continue;
+    if (Math.abs(tx - dGate.tx) < 4 && ty < 315) continue;
+    foliage.push({ kind: 'dead_tree', tx, ty });
+    occupied.add(`${tx},${ty}`);
+    planted++;
+  }
+
+  // the Mire's OWN Resource: salt-reed beds crowd the banks around the lake
+  // and channels (ADR-0017 rung 1 chain — T5's Brine Kiln refines the reeds).
+  // Bare-handed harvest; the Tide will gate their exposure once T5 lands.
+  for (const [x, y] of [
+    [148, 328], [160, 330], [146, 344], [162, 350], [152, 346], [140, 334], [168, 342],
+    [132, 326], [172, 330], [120, 340], [184, 352], [156, 324], [136, 352], [176, 346],
+  ] as [number, number][]) {
+    placeNodeNear('salt_reed_bed', x, y);
+  }
+  // fiber vines as the familiar secondary pull; no jungle trees in here —
+  // lush canopy would break the drowned-bog read (bogwood snags come with T5)
+  for (const [x, y] of [[120, 316], [138, 340], [168, 322], [186, 350], [150, 358], [112, 344], [128, 330], [176, 336]] as [number, number][]) {
+    placeNodeNear('fiber_vine', x, y);
+  }
+  placeFishingSpotNear(148, 336);
+  const worldGate = findGateSpot(152, 290); // Mangrove Coast, by the south road's end
+  districts.push({
+    id: 'sunken_mire',
+    name: 'The Sunken Mire',
+    rect,
+    gate: { worldTx: worldGate.tx, worldTy: worldGate.ty, districtTx: dGate.tx, districtTy: dGate.ty },
+  });
+}
+
+// decor: flowers and small plants on open grass. Loop 1 is the pinned 300×300
+// map in its exact old row-major order (same main-stream RNG draws); loop 2 is
+// the appended district space, drawing from the district stream.
+for (let y = 0; y < PREV_H; y++) {
+  for (let x = 0; x < PREV_W; x++) {
     if (ground[y][x] === 'grass' && !occupied.has(`${x},${y}`) && rng() < 0.035) {
       decor[y][x] = rng() < 0.5 ? 'flower' : 'plant';
+    }
+  }
+}
+for (let y = 0; y < H; y++) {
+  for (let x = 0; x < W; x++) {
+    if (x < PREV_W && y < PREV_H) continue; // pinned above
+    if (ground[y][x] === 'grass' && !occupied.has(`${x},${y}`) && rng2() < 0.035) {
+      decor[y][x] = rng2() < 0.5 ? 'flower' : 'plant';
     }
   }
 }
@@ -810,7 +1061,7 @@ const blocked = new Array<number>(W * H).fill(0);
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
     const g = ground[y][x];
-    blocked[y * W + x] = g === 'water' ? 1 : g === 'cliff' ? 2 : 0;
+    blocked[y * W + x] = g === 'water' || g === 'mire_water' ? 1 : g === 'cliff' ? 2 : 0;
   }
 }
 // the Guardian's 3x3 resting place is solid — it is always physically there
@@ -820,17 +1071,36 @@ for (let dy = 0; dy < 3; dy++) {
   }
 }
 
+// tile-variant picks: the pinned 300×300 map draws FIRST, in its exact old
+// row-major order from the main stream (identical variants at every
+// pre-existing tile); the appended district space draws from the district
+// stream. The flat Tiled arrays are then assembled row-major over the full grid.
+const groundGid: number[][] = Array.from({ length: H }, () => Array<number>(W).fill(0));
+const decorGid: number[][] = Array.from({ length: H }, () => Array<number>(W).fill(0));
+const pickTile = (x: number, y: number, p: <U>(arr: U[]) => U) => {
+  groundGid[y][x] = p(T[ground[y][x]]) + 1;
+  const d = decor[y][x];
+  decorGid[y][x] = d ? p(T[d]) + 1 : 0;
+};
+for (let y = 0; y < PREV_H; y++) {
+  for (let x = 0; x < PREV_W; x++) pickTile(x, y, pick);
+}
+for (let y = 0; y < H; y++) {
+  for (let x = 0; x < W; x++) {
+    if (x < PREV_W && y < PREV_H) continue; // pinned above
+    pickTile(x, y, pick2);
+  }
+}
 const groundData: number[] = [];
 const decorData: number[] = [];
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
-    groundData.push(pick(T[ground[y][x]]) + 1);
-    const d = decor[y][x];
-    decorData.push(d ? pick(T[d]) + 1 : 0);
+    groundData.push(groundGid[y][x]);
+    decorData.push(decorGid[y][x]);
   }
 }
 
-const collide = [...new Set([...T.water, ...T.cliff])].map((i) => i + 1);
+const collide = [...new Set([...T.water, ...T.cliff, ...T.mire_water])].map((i) => i + 1);
 
 const tiledMap = {
   type: 'map',
@@ -885,6 +1155,8 @@ const worldData = {
   welcomeStone,
   // faux-elevation regions (ADR-0009): GameScene draws the shadow/faces + depth bump
   elevation: { regions: elevationRegions },
+  // Realm districts (ADR-0017 §2): far-edge rects + their paired teleport gates
+  districts,
 };
 
 const outDir = path.resolve(import.meta.dirname, '../public/map');
@@ -898,3 +1170,8 @@ console.log(`Map written: ${W}x${H}, ${keptNodes.length} nodes`, counts);
 console.log(`Secrets: ${tablets.length} tablets, ${gate.length} gate tiles, ${treasureSpots.length} treasure spots`);
 console.log(`Arena at (${ARENA.x},${ARENA.y}) ${ARENA.w}x${ARENA.h}, seal gate ${SEAL_GATE.map((g) => `${g.tx},${g.ty}`).join(' ')}`);
 console.log(`Zones: ${zones.map((z) => z.name).join(', ')}`);
+console.log(
+  `Districts: ${districts
+    .map((d) => `${d.id} @ ${d.rect.x},${d.rect.y} ${d.rect.w}x${d.rect.h} · gate ${d.gate.worldTx},${d.gate.worldTy} ⇄ ${d.gate.districtTx},${d.gate.districtTy}`)
+    .join('; ')}`,
+);

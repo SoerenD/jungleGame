@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { OBJECTS, TILESET } from '../assetConfig';
-import { AVATAR_H, AVATAR_IDLE, AVATAR_W, ensureAvatarTexture } from '../avatars';
+import { AVATAR_H, AVATAR_IDLE, AVATAR_SWING, AVATAR_W, ensureAvatarTexture } from '../avatars';
 import type {
   Backend,
   ChatMsg,
@@ -18,6 +18,7 @@ import type {
   PlayerPos,
   ProjSnap,
   QuestState,
+  RefinerConfig,
   SealState,
   Structure,
 } from '../backend/types';
@@ -26,6 +27,8 @@ import {
   DAY_CYCLE_MS,
   DEV_DEEP,
   DEV_DUNGEON,
+  DEV_REALM_TEST,
+  DEV_REFINER_TEST,
   DEV_WILD,
   EXHAUSTION_KNOCKDOWNS,
   FOG_CHUNK,
@@ -51,6 +54,7 @@ import {
   PLAYER_SPEED,
   SPEED_BUFF_FACTOR,
   SWING_CADENCE_MS,
+  TEST_REFINER,
   TILE,
   ZOOM,
   CREATURE_DENSITY,
@@ -64,6 +68,8 @@ import {
   WILD_EXHAUSTION_KNOCKDOWNS,
   WILD_BROADCAST_MS,
   WILD_SPAWN_TICK_MS,
+  WORLD_VIEW_H,
+  WORLD_VIEW_W,
   loadWorldLabelScale,
 } from '../config';
 import {
@@ -107,7 +113,7 @@ import {
 } from '../content/dungeon';
 import { footprint, isBuilding, ITEMS, type ItemId, type ResourceId, type StructureId, type ToolId } from '../content/items';
 import { TABLETS } from '../content/lore';
-import { NODE_TYPES } from '../content/nodeTypes';
+import { NODE_TYPES, type NodeTypeId } from '../content/nodeTypes';
 import {
   canAcceptItem,
   emptyVillage,
@@ -164,6 +170,23 @@ interface WorldData {
   welcomeStone: { tx: number; ty: number };
   /** faux-elevation regions (ADR-0009) — omitted on pre-frontier maps */
   elevation?: { regions: ElevationRegion[] };
+  /** Realm districts (ADR-0017 §2) — omitted on pre-Realm maps */
+  districts?: DistrictDef[];
+}
+
+/**
+ * A Realm district (ADR-0017 §2): presented as its own small map, implemented
+ * as a far-edge rect on the one grid, sealed in void cliff and entered only
+ * through its paired teleport gates. Plain persistent map space — builds,
+ * nodes and fog work inside unchanged (deliberately NOT the Delve's instanced
+ * overlay). `name` is the English display id, localized like a Zone name.
+ */
+interface DistrictDef {
+  id: string;
+  name: string;
+  rect: { x: number; y: number; w: number; h: number };
+  /** the world-side arch and its district-side twin */
+  gate: { worldTx: number; worldTy: number; districtTx: number; districtTy: number };
 }
 
 /** a faux-elevation terrace (ADR-0009): plateau + cliff faces + ramp + a fog-lifting vista */
@@ -224,6 +247,12 @@ interface RemoteView {
   moving: boolean;
   /** JSON of the composed Appearance — texture regenerates when it changes */
   look: string;
+  /**
+   * High-water mark of PlayerPos.swings seen from this peer; a packet above it
+   * plays one swing echo. Undefined until the peer first sends the field
+   * (bots/old clients never do — they render exactly as before).
+   */
+  swings?: number;
 }
 
 /**
@@ -242,6 +271,39 @@ const HELD_HAND: Record<Dir, { x: number; y: number; flip: boolean; behind: bool
 const TORCH_TINT = 0xff5a0a;
 
 /**
+ * Cosmetic swing echo (playSwingFx): purely visual. Swings are adjudicated
+ * solely by the cadence stamps in the two update() paths (SWING_CADENCE_MS /
+ * the per-weapon combat cadences of ADR-0006 — both untouched); this merely
+ * makes an already-counted swing visible on the body: the avatar flashes its
+ * raised-arm frame while the in-hand Tool sweeps a quick arc.
+ */
+const SWING_POSE_MS = 100; // how long the raised-arm frame outranks walk/idle
+const SWING_ARC_MS = 120; // the tool's rotation sweep
+const SWING_ARC_FROM_DEG = -60; // cocked back over the shoulder…
+const SWING_ARC_TO_DEG = 40; // …swept forward past vertical (mirrored when flipped)
+/**
+ * Pivot of the arc as a texture-space origin: the handle end of the 12x12
+ * held-item art (every Tool grid draws its grip at the bottom-left corner).
+ * flipX mirrors the texture inside its frame but NOT the origin point, so the
+ * x is mirrored by hand for the left profile. Applied only for the arc's
+ * ~120ms and restored to the (0.5, 0.5) rest origin right after — positionHeld
+ * and everything else may keep assuming the centered default.
+ */
+const SWING_GRIP_X = 0.2;
+const SWING_GRIP_Y = 0.85;
+/** sprite-data keys for the per-entity swing state (data, not fields, so the
+ *  same fx can later run on a REMOTE Player's sprite/heldSprite pair) */
+const SWING_POSE_KEY = 'swingPoseUntil';
+const SWING_TWEEN_KEY = 'swingTween';
+/**
+ * A peer's swings counter arriving THIS far below our stored high-water mark
+ * means their session restarted (the counter is per-session and reboots at 0),
+ * not that a stale presence meta interleaved — metas lag the broadcast stream
+ * by at most a couple of swings, never by ~9s of continuous swinging.
+ */
+const REMOTE_SWING_RESET_GAP = 30;
+
+/**
  * Design size for in-world name tags (Node hover tooltips + Player name plates):
  * world-space text is magnified by the camera ZOOM, so this scales it back down
  * to a small tag over the head. The Settings ▸ Name label size slider multiplies
@@ -257,7 +319,11 @@ function setHeldTexture(scene: Phaser.Scene, img: Phaser.GameObjects.Image, id: 
   else img.setVisible(false);
 }
 
-/** place a held-item Image at the character's hand for the given facing */
+/**
+ * Place a held-item Image at the character's hand for the given facing.
+ * Writes position/flip/depth ONLY — never angle or origin — so the per-frame
+ * placement composes with the transient swing-arc rotation (playSwingFx).
+ */
 function positionHeld(img: Phaser.GameObjects.Image, px: number, py: number, dir: Dir): void {
   const h = HELD_HAND[dir];
   img.setPosition(px + h.x, py + h.y);
@@ -281,6 +347,76 @@ interface MobView {
   shadow: Phaser.GameObjects.Image;
   tele: Phaser.GameObjects.Graphics;
   bar: Phaser.GameObjects.Rectangle;
+}
+
+/**
+ * J4 death-beat tuning — the Guardian's death throes (shatterGuardian: blown-out
+ * tintFill flash, then the heavy settle) replayed as a ~300ms miniature on every
+ * felled Husk and hunted predator, so a kill's payoff frame is a death, not a
+ * despawn blink. Pure client presentation: by the time the beat runs the kill is
+ * fully adjudicated and the loot paid.
+ */
+const DEATH_FLASH_MS = 60; // blown-out white payoff frame
+const DEATH_SQUASH_MS = 250; // squash-into-the-ground fade that follows it
+const DEATH_SETTLE_PX = 5; // slight downward settle riding the squash
+const DEATH_SNUFF_TINT = 0x4a4650; // the flash snuffs to the Guardian's dead-stone grey
+const DEATH_PUFF_COUNT = 6; // tiny tinted squares of the shared 'poof' texture
+const DEATH_PUFF_TINT_DELVE = 0xcfc8e0; // pale ruin-dust for Husks
+const DEATH_PUFF_TINT_WILD = 0xd8c9a2; // dry earth for Wildlife
+/** one sweep destroys every beat object; must outlast the longest tween
+ *  (flash 60 + squash 250; the last puff ends ≈ 320 + 5·30 = 470ms) */
+const DEATH_FX_TTL_MS = 620;
+
+/**
+ * J3 harvest impact kit — the most-repeated verb in the game (hold-E on a
+ * Resource Node) finally answers back: per-hit debris chips tinted by node
+ * type, a ~40ms squash punch on the sprite, and quiet damage pips while a
+ * node sits below max HP. Pure client presentation over the shared 'poof'
+ * texture (BootScene) — no new textures, no emitters, and no standing
+ * per-node display objects (there are 3,854 node sprites; everything here
+ * exists only at the point of impact and is reaped by a TTL sweep or its own
+ * fade). Adjudication, yields, cadence and the wire are untouched.
+ */
+const CHIP_COUNT_HIT = 5; // chips per landed swing
+const CHIP_COUNT_FINISH = 9; // the finishing hit pays a slightly larger burst
+/**
+ * Debris tints per Node type — muted, matching the mature palette: bark brown
+ * with a leaf fleck for wood, granite greys for stone, leaf green with a fruit
+ * fleck for the bush, pale dry fiber, water droplets for a Fishing Spot, and
+ * the tier-2 pair in dense heartwood dark / volcanic-glass violet.
+ */
+const CHIP_TINTS: Record<NodeTypeId, number[]> = {
+  tree: [0x7a5a34, 0x5d4426, 0x4f7a3a],
+  rock: [0x9aa0a6, 0x6e747a, 0xb9bec2],
+  fruit_bush: [0x4f7a3a, 0x6f9c46, 0xc75b52],
+  fiber_vine: [0xd9cf9e, 0xb5ab7c, 0x8ba75f],
+  hardwood_tree: [0x4a3826, 0x6b5232, 0x8c7444],
+  obsidian_rock: [0x2e2838, 0x554a6a, 0x8f84b8],
+  fishing_spot: [0x66b8e0, 0x9ad4ee, 0x3f86b8],
+  salt_reed_bed: [0xb3a76e, 0x8f855a, 0xd8dcd2],
+};
+/** damage pips: 2px cells above a damaged node — shown only while it was hit
+ *  recently, then faded out (the mob HP bar's idea, smaller and quieter) */
+const NODE_PIP_SIZE = 2; // px — pixel-scale cells, no cartoon bar
+const NODE_PIP_GAP = 1;
+const NODE_PIP_HOLD_MS = 1500; // readable-at-a-glance window after the last hit
+const NODE_PIP_FADE_MS = 250;
+const NODE_PIP_FILL = 0xcfd6a8; // pale reed — far quieter than the mobs' bright green bar
+const NODE_PIP_LOST = 0x4a4a40; // spent pips go dark, keeping max HP readable
+const NODE_PUNCH_MS = 40; // squash punch per leg: rest → ~1.06 wide → rest (yoyo)
+/** sprite-data key holding a node's in-flight punch tween (kill-restart, like SWING_TWEEN_KEY) */
+const NODE_PUNCH_KEY = 'nodePunchTween';
+
+/**
+ * A node sprite's rest scale, re-derived instead of stored: trees plant at
+ * 0.9 + (idHash % 40)/100, everything else at 1. The SINGLE source of truth —
+ * addNode() plants with it, the regrow tween settles back to it, and the punch
+ * tween kill-restarts against it, so the three can never drift apart.
+ * Re-deriving (not storing) keeps the hot path free of any per-node
+ * DataManager/field allocation across all 3,854 sprites.
+ */
+function nodeRestScale(state: NodeState): number {
+  return state.type === 'tree' ? 0.9 + (idHash(state.id) % 40) / 100 : 1;
 }
 /** a host-simulated Husk/boss projectile (tile units; velocity tiles/second) */
 interface DelveProjectile {
@@ -319,6 +455,13 @@ export class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private nodes = new Map<string, NodeView>();
   private nodesByTile = new Map<string, string>();
+  /**
+   * J3: the damage-pip displays live ONLY here — created lazily on the first
+   * damage shown for a node, destroyed by their own fade (or hideNodePips), so
+   * steady state carries zero pip objects. Keyed by node id; at most a
+   * screenful of entries exists even under heavy group harvesting.
+   */
+  private nodePips = new Map<string, { gfx: Phaser.GameObjects.Graphics; tween: Phaser.Tweens.Tween | null }>();
   /** reusable tooltip showing the name of the Resource Node under the cursor */
   private nodeHoverLabel: Phaser.GameObjects.Text | null = null;
   /** player-set multiplier on WORLD_LABEL_BASE_SCALE (Settings ▸ Name label size) */
@@ -338,6 +481,12 @@ export class GameScene extends Phaser.Scene {
   private ghostCells: Phaser.GameObjects.Graphics | null = null;
   private lastPosSent = 0;
   private lastSwingAt = 0;
+  /**
+   * Count of MY swings this session — incremented ONLY at the two lastSwingAt
+   * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
+   * the position stream (PlayerPos.swings) so peers can echo my swings.
+   */
+  private swingCount = 0;
   private currentZone = '';
   private muted = false;
   /** per-channel 0..1 volume mix, editable from the settings menu */
@@ -420,6 +569,10 @@ export class GameScene extends Phaser.Scene {
   /** host: authoritative mob state (HP lives ONLY here — never the DB). Peers: last snapshot. */
   private mobs = new Map<string, MobState>();
   private mobViews = new Map<string, MobView>();
+  /** J4: death-beat orphans mid-animation (views detached from mobViews so the
+   *  render-sync sweep can't kill them) — reaped by teardownDelve so leaving
+   *  the instance mid-tween never leaks a sprite or its puffs */
+  private delveDeathFx = new Set<Phaser.GameObjects.GameObject[]>();
   /** host: live projectiles. Peers render them from snapshots. */
   private projectiles: DelveProjectile[] = [];
   private projViews = new Map<string, { sprite: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image }>();
@@ -459,6 +612,9 @@ export class GameScene extends Phaser.Scene {
   /** host: authoritative creature state (HP lives ONLY here — never the DB). Guests: last snapshot. */
   private wildMobs = new Map<string, MobState>();
   private wildViews = new Map<string, MobView>();
+  /** J4: death-beat orphans mid-animation (views detached from wildViews) —
+   *  reaped by clearWildMobs so a creature-host change mid-beat never leaks */
+  private wildDeathFx = new Set<Phaser.GameObjects.GameObject[]>();
   /** host-side gentle-roam state for idle peaceful creatures (orchestration, not engine AI) */
   private wildWander = new Map<string, { ang: number; until: number }>();
   /** am I the elected creature host? (lowest-sorting online name — deterministic, zero negotiation) */
@@ -488,6 +644,10 @@ export class GameScene extends Phaser.Scene {
   private playerShadow!: Phaser.GameObjects.Image;
   private nightOverlay!: Phaser.GameObjects.Rectangle;
   private duskOverlay!: Phaser.GameObjects.Rectangle;
+  /** the Sunken Mire's ambience: veil + mist banks, 0..1 blend (update()) */
+  private mireVeil!: Phaser.GameObjects.Rectangle;
+  private mirePuffs: Phaser.GameObjects.Image[] = [];
+  private mireAmbience = 0;
   private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leavesActive = false;
@@ -502,6 +662,11 @@ export class GameScene extends Phaser.Scene {
   private highGround = new Map<string, number>();
   private vistaRegions: ElevationRegion[] = [];
   private vistaLifted = new Set<string>();
+  // ---- Realm districts (ADR-0017 §2): the "separate map" presentation state
+  /** the district the Player stands in (camera clamp + minimap crop + dot filter); null = the World */
+  private activeDistrict: DistrictDef | null = null;
+  /** both arches of every Realm gate, for the E-interaction scan */
+  private realmGates: { d: DistrictDef; side: 'world' | 'district'; x: number; y: number }[] = [];
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
@@ -717,7 +882,12 @@ export class GameScene extends Phaser.Scene {
       .setVisible(false);
 
     const cam = this.cameras.main;
-    cam.setBounds(0, 0, MAP_W * TILE, MAP_H * TILE);
+    // clamp to the region the Player stands in: a Realm district's rect, or the
+    // pinned pre-Realm World (never the full grown grid — the void band and the
+    // districts beyond must not scroll into view). Re-derived on the checkZone
+    // tick, so every cross-region reposition (gates, Exhaustion wake, recall,
+    // login inside a district) re-clamps without touching each call site.
+    this.applyCameraRegion(true);
     cam.setZoom(ZOOM);
     cam.startFollow(this.player, true, 0.15, 0.15);
     this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
@@ -756,6 +926,16 @@ export class GameScene extends Phaser.Scene {
           waterFrame = (waterFrame + 1) % 3;
           tilesTex.context.clearRect(16, 0, 16, 16);
           tilesTex.context.drawImage(frames, waterFrame * 16, 0, 16, 16, 16, 0, 16, 16);
+          // the Mire's black water breathes on the same clock — the frame is
+          // drowned under dark teal so it barely glints (tile id 14, x=224)
+          const mx = 14 * 16;
+          tilesTex.context.clearRect(mx, 0, 16, 16);
+          tilesTex.context.drawImage(frames, waterFrame * 16, 0, 16, 16, mx, 0, 16, 16);
+          tilesTex.context.save();
+          tilesTex.context.globalCompositeOperation = 'source-atop';
+          tilesTex.context.fillStyle = 'rgba(10, 30, 29, 0.82)';
+          tilesTex.context.fillRect(mx, 0, 16, 16);
+          tilesTex.context.restore();
           tilesTex.refresh();
         },
       });
@@ -836,6 +1016,20 @@ export class GameScene extends Phaser.Scene {
     // ---- atmosphere: day/night overlays, player glow, fireflies, leaves
     this.duskOverlay = this.add.rectangle(0, 0, 10, 10, 0xff7b39).setAlpha(0).setDepth(899_998);
     this.nightOverlay = this.add.rectangle(0, 0, 10, 10, 0x0a1433).setAlpha(0).setDepth(899_999);
+    // the Sunken Mire's stagnant air (ADR-0017): a cold teal veil plus slow
+    // mist banks, faded in while the Player stands inside that district.
+    // Both sit UNDER the fog overlay so the unexplored dark stays black.
+    this.mireVeil = this.add.rectangle(0, 0, 10, 10, 0x0e2622).setAlpha(0).setDepth(899_985);
+    for (let i = 0; i < 7; i++) {
+      this.mirePuffs.push(
+        this.add
+          .image(0, 0, 'glow')
+          .setTint(0xa8c4b8)
+          .setAlpha(0)
+          .setDepth(899_986)
+          .setScale(3.2 + (i % 3) * 1.7, 1.5 + (i % 2) * 0.8),
+      );
+    }
     // both ambient emitters stay parked at (0,0) forever and are fed with
     // emitParticleAt — moving a Phaser 3.60+ emitter drags every live
     // particle with it, which used to fill the night screen with fast dots
@@ -866,6 +1060,7 @@ export class GameScene extends Phaser.Scene {
     this.initFog();
     this.wireDragPlace();
     this.buildDelveEntrance();
+    this.buildRealmGates();
 
     if (DEV_WILD) {
       // ADR-0012 solo verify: drop into a danger-flagged frontier Zone (The Cavern
@@ -1042,6 +1237,11 @@ export class GameScene extends Phaser.Scene {
   private applySeal(seal: SealState): void {
     this.seal = seal;
     bus.emit('seal', seal);
+    // The Seal breaks once, forever — a Player joining after the break can never
+    // lay an Offering (contributeSeal is toast-only then), which would deadlock
+    // the Journey's last step and the tracker handover. The World's broken Seal
+    // counts as this Player's Offering; tickJourney is idempotent.
+    if (seal.broken) this.tickJourney('first_offering');
   }
 
   // ------------------------------------------------------------ A3: the Village (ADR-0010)
@@ -2027,6 +2227,170 @@ export class GameScene extends Phaser.Scene {
     this.gateParts = [];
   }
 
+  // ------------------------------------------------------------ Realm districts (ADR-0017 §2)
+
+  /** the Realm district containing tile (tx,ty), or null in the World proper */
+  private districtOf(tx: number, ty: number): DistrictDef | null {
+    for (const d of this.world.districts ?? []) {
+      const r = d.rect;
+      if (tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h) return d;
+    }
+    return null;
+  }
+
+  /**
+   * Clamp the camera to the region the Player is standing in — a district's
+   * rect inside a Realm, the pinned pre-Realm World otherwise (the void band
+   * and other districts must never scroll into view). Derived POSITIONALLY on
+   * the checkZone tick rather than in the gate interaction, so every
+   * cross-region reposition — Exhaustion wake, Victory Arch recall, login
+   * inside a district, dev teleports — re-clamps without touching a call site.
+   * (The Delve owns the camera while inside; checkZone pauses then.)
+   */
+  private applyCameraRegion(force = false): void {
+    const d = this.districtOf(Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE));
+    if (!force && d === this.activeDistrict) return;
+    this.activeDistrict = d;
+    const cam = this.cameras.main;
+    if (d) cam.setBounds(d.rect.x * TILE, d.rect.y * TILE, d.rect.w * TILE, d.rect.h * TILE);
+    else cam.setBounds(0, 0, WORLD_VIEW_W * TILE, WORLD_VIEW_H * TILE);
+  }
+
+  /** is this Realm's gate open? T2 stub: only via the ?realmtest dev flag —
+   *  the Warden-defeat gate-key world flag replaces this in T4/T5 */
+  private realmGateOpen(_d: DistrictDef): boolean {
+    return DEV_REALM_TEST;
+  }
+
+  /** both arches of every Realm gate: a standing stone arch in the World and
+   *  its twin inside the district. E teleports through (Delve-shaft interaction
+   *  pattern, but NO instancing/roster/overlay — plain persistent map space). */
+  private buildRealmGates(): void {
+    for (const d of this.world.districts ?? []) {
+      this.buildRealmGate(d, 'world', d.gate.worldTx, d.gate.worldTy);
+      this.buildRealmGate(d, 'district', d.gate.districtTx, d.gate.districtTy);
+    }
+  }
+
+  private buildRealmGate(d: DistrictDef, side: 'world' | 'district', tx: number, ty: number): void {
+    const x = (tx + 0.5) * TILE;
+    const y = (ty + 0.5) * TILE;
+    const open = this.realmGateOpen(d);
+    const c = this.add.container(x, y);
+    // the Realm Arch: a weathered megalith gate — two pillars of stacked,
+    // slightly off-line stones under a cracked lintel and capstone, moss on
+    // every shelf, vines off the ends, and carved glyphs across the lintel
+    // that wake teal once the way stands open. The passage is a black void
+    // while dormant; open, it breathes with a slow shimmer.
+    const portal = this.add.rectangle(0, -6, 16, 26, open ? 0x123830 : 0x07090c).setStrokeStyle(1, 0x05070a);
+    const shimmer = this.add.rectangle(0, -6, 16, 26, 0x2a7a62).setAlpha(0);
+    const parts: Phaser.GameObjects.GameObject[] = [portal, shimmer];
+    const stone = (sx: number, sy: number, w: number, h: number, fill: number) => {
+      parts.push(this.add.rectangle(sx, sy, w, h, fill).setStrokeStyle(1, 0x2c332c));
+    };
+    // pillars — three weathered blocks each, brighter toward the sky
+    stone(-11, 3, 8, 10, 0x59635a);
+    stone(11, 3, 8, 10, 0x555f56);
+    stone(-10, -5, 7, 8, 0x646e5f);
+    stone(10, -5, 7, 8, 0x606a5b);
+    stone(-11, -13, 8, 8, 0x6d7766);
+    stone(11, -13, 8, 8, 0x69735f);
+    // the lintel and its capstone
+    stone(0, -20, 34, 7, 0x717b68);
+    stone(0, -25, 18, 5, 0x7a8470);
+    // moss claims every shelf; two drips run down the stones
+    const moss = (mx: number, my: number, w: number, h: number, tone = 0x4a5230) => {
+      parts.push(this.add.rectangle(mx, my, w, h, tone));
+    };
+    moss(-12, -17, 6, 2);
+    moss(10, -17, 5, 2);
+    moss(-2, -27, 7, 2, 0x53603a);
+    moss(-13, -9, 2, 5);
+    moss(12, 0, 2, 6);
+    moss(-9, 7, 3, 2, 0x424a2b);
+    // carved glyphs across the lintel — dead grey, or smoldering teal
+    const glyphs: Phaser.GameObjects.Rectangle[] = [];
+    for (const gx of [-11, -5, 1, 7]) {
+      const gl = this.add.rectangle(gx, -20, 2, 3, open ? 0x63e0b8 : 0x3d463f);
+      glyphs.push(gl);
+      parts.push(gl);
+    }
+    // hanging vines off the lintel ends
+    for (const [vx, vlen] of [[-16, 9], [16, 7]] as const) {
+      const vine = this.add.rectangle(vx, -17, 2, vlen, 0x435030).setOrigin(0.5, 0);
+      parts.push(vine, this.add.rectangle(vx, -17 + vlen, 2, 2, 0x53603a).setOrigin(0.5, 0));
+    }
+    const label = this.add
+      .text(0, -32, side === 'district' ? t.realm.return : open ? t.realm.gateTo(zoneName(d.name)) : t.realm.dormant, {
+        fontSize: '8px',
+        color: open || side === 'district' ? '#9fe0c9' : '#8a938c',
+        stroke: '#000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5)
+      .setResolution(4);
+    parts.push(label);
+    c.add(parts);
+    c.setDepth((ty + 1) * TILE);
+    if (open || side === 'district') {
+      this.tweens.add({ targets: shimmer, alpha: { from: 0.12, to: 0.38 }, duration: 1700, yoyo: true, repeat: -1, ease: 'sine.inout' });
+      for (const gl of glyphs) {
+        this.tweens.add({ targets: gl, alpha: { from: 0.65, to: 1 }, duration: 1100 + 200 * glyphs.indexOf(gl), yoyo: true, repeat: -1, ease: 'sine.inout' });
+      }
+    }
+    this.addBlockerBody(tx, ty);
+    this.addShadow(x, y + 8, 30);
+    if (open || side === 'district') {
+      const glow = this.add
+        .image(x, y - 4, 'glow')
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setTint(0x4fd8a8)
+        .setScale(0.9)
+        .setAlpha(0)
+        .setDepth(890_000);
+      this.glows.push({ img: glow, base: 0.35, x, y: y - 4 });
+    }
+    this.realmGates.push({ d, side, x, y });
+  }
+
+  /** E at a Realm gate: step through (open), or explain the dormant arch.
+   *  Leaving a district is NEVER gated — the way back always works. */
+  private realmGateAction(px: number, py: number): EAction | null {
+    for (const g of this.realmGates) {
+      if (Phaser.Math.Distance.Between(px, py, g.x, g.y) > INTERACT_RANGE + 10) continue;
+      if (g.side === 'district') return { swing: false, run: () => this.leaveDistrict(g.d) };
+      if (this.realmGateOpen(g.d)) return { swing: false, run: () => this.enterDistrict(g.d) };
+      return { swing: false, run: () => bus.emit('toast', t.toast.realmGateDormant, 'info') };
+    }
+    return null;
+  }
+
+  /** step through the world-side arch into the Realm */
+  private enterDistrict(d: DistrictDef): void {
+    this.teleportThroughGate((d.gate.districtTx + 0.5) * TILE, (d.gate.districtTy + 1.5) * TILE);
+    bus.emit('toast', t.toast.realmEntered(zoneName(d.name)), 'good');
+  }
+
+  /** step back through the district-side arch, out beside the world gate */
+  private leaveDistrict(d: DistrictDef): void {
+    this.teleportThroughGate((d.gate.worldTx + 0.5) * TILE, (d.gate.worldTy + 1.5) * TILE);
+    bus.emit('toast', t.toast.realmLeft, 'info');
+  }
+
+  /** the shared gate-step: reposition, re-clamp, broadcast, banner — no
+   *  instancing, no roster; the district is ordinary persistent World space */
+  private teleportThroughGate(x: number, y: number): void {
+    if (this.placing) this.exitPlaceMode();
+    this.player.setPosition(x, y);
+    this.player.setVelocity(0, 0);
+    this.cameras.main.flash(300, 8, 14, 11);
+    this.sfx('blip', 0.5);
+    this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined, this.swingCount);
+    // immediate re-derive: camera clamp, zone banner and the minimap's district
+    // view all update on this one pass instead of waiting for the 300 ms tick
+    this.checkZone();
+  }
+
   // ------------------------------------------------------------ fog of war
 
   /**
@@ -2041,6 +2405,13 @@ export class GameScene extends Phaser.Scene {
     this.fogRT.setDepth(899_990);
     this.fogRT.fill(0x06120a, 0.96);
     this.fogRT.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    // Explored-chunk indices encode the fog stride (fogChunksW = ceil(MAP_W/4)).
+    // Map growth re-strides them — 200→300 did, and the 300→384 Realm growth
+    // (ADR-0017) does again: indices saved under the old stride decode to
+    // shifted chunks, a cosmetic scramble of the revealed map that is ACCEPTED
+    // per the ADR-0009 growth discipline (no version marker exists, so no
+    // remap is possible; no DB migration). The range guard below drops nothing
+    // on growth — every old index stays in range under the larger grid.
     for (const c of this.me.explored) {
       if (c >= 0 && c < this.fogChunksW * this.fogChunksH) this.explored.add(c);
     }
@@ -2329,7 +2700,7 @@ export class GameScene extends Phaser.Scene {
       if (progress < 1) return;
       this.player.setVelocity(0, 0);
       this.player.setPosition((tx + 0.5) * TILE, (ty + 0.5) * TILE);
-      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined);
+      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined, this.swingCount);
       cam.fadeIn(200, 0, 0, 0);
       this.sfx('blip', 0.5);
       bus.emit('toast', t.toast.recalled, 'good');
@@ -2423,7 +2794,7 @@ export class GameScene extends Phaser.Scene {
       this.heldItem = id;
       this.applyHeldSprite();
       // broadcast promptly so every other Player's in-hand item updates now
-      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined);
+      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined, this.swingCount);
     });
     // Settings ▸ Name label size — re-scale every live in-world name tag now
     bus.on('world-label-scale', (mult: number) => {
@@ -2531,6 +2902,34 @@ export class GameScene extends Phaser.Scene {
         bus.emit('inventory', this.inventory);
         bus.emit('sawmill-open', sawmillId, res.state);
         bus.emit('toast', t.toast.collectPlanks, 'good');
+        this.sfx('harvest', 0.6);
+      });
+    });
+    // the generic Refiner panel (ADR-0017 §6): ONE wiring for every Refiner
+    // family — the HUD echoes back the {id, cfg, name} target it was opened with
+    bus.on('refiner-deposit', (o: { id: string; cfg: RefinerConfig; name: string }) => {
+      void this.backend.refinerDeposit(o.id, o.cfg).then((res) => {
+        if (!res.ok) {
+          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.refinerFullOrEmpty(ITEMS[o.cfg.inputItem].name), 'bad');
+          return;
+        }
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('refiner-open', o, res.state);
+        this.sfx('place', 0.5);
+      });
+    });
+    bus.on('refiner-refresh', (o: { id: string; cfg: RefinerConfig; name: string }) => this.openRefiner(o.id, o.cfg, o.name));
+    bus.on('refiner-collect', (o: { id: string; cfg: RefinerConfig; name: string }) => {
+      void this.backend.refinerCollect(o.id, o.cfg).then((res) => {
+        if (!res.ok) {
+          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.refinerNotReady, 'bad');
+          return;
+        }
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('refiner-open', o, res.state);
+        bus.emit('toast', t.toast.refinerCollected(ITEMS[o.cfg.outputItem].name), 'good');
         this.sfx('harvest', 0.6);
       });
     });
@@ -2679,7 +3078,7 @@ export class GameScene extends Phaser.Scene {
     this.makeNodeHoverable(sprite, state.type);
     const h = idHash(state.id);
     if (state.type === 'tree') {
-      sprite.setScale(0.9 + (h % 40) / 100);
+      sprite.setScale(nodeRestScale(state));
       sprite.setFlipX(h % 2 === 0);
       this.addShadow(x, y - 1, 26 * sprite.scaleX);
     } else if (state.type === 'fruit_bush') {
@@ -2708,6 +3107,11 @@ export class GameScene extends Phaser.Scene {
   private updateNode(state: NodeState): void {
     const view = this.nodes.get(state.id);
     if (!view) return;
+    // J3: hp changes land HERE and only here (my own hit via the backend's
+    // nodeChanged relay, a friend's hit via the shared event, regrowth via
+    // checkRegrowthVisuals) — so the pip display hooks this exact spot and can
+    // never show a value the authoritative state doesn't hold.
+    const prevHp = view.state.hp;
     view.state = state;
     const alive = state.hp > 0;
     if (alive === view.depletedShown) {
@@ -2715,10 +3119,25 @@ export class GameScene extends Phaser.Scene {
       view.depletedShown = !alive;
       this.setObjTexture(view.sprite, alive ? state.type : `${state.type}_depleted`);
       if (view.body) (view.body.body as Phaser.Physics.Arcade.StaticBody).enable = alive;
+      // J3: the finishing hit is the payoff beat — a slightly larger debris
+      // burst rides the depletion squash below. Fired only on the flip (not on
+      // repeated depleted events) and only when actually visible: nodeChanged
+      // arrives for EVERY node on the map, and off-screen (or under the Delve
+      // overlay) a burst would be nothing but invisible tween churn.
+      if (!alive && this.nodeFxVisible(view)) this.nodeChipBurst(view, true);
     }
     if (!alive) {
+      // J3: a punch tween still mid-flight would hand the squash below a
+      // drifting start scale — settle the sprite at rest before the payoff
+      this.settleNodePunch(view);
+      this.hideNodePips(state.id); // depletion is the payoff beat; pips leave with it
       // depleting hit lands: little poof of scale
       this.tweens.add({ targets: view.sprite, scaleX: 1.15, scaleY: 0.9, duration: 80, yoyo: true });
+    } else if (state.hp < prevHp) {
+      // a landed hit left the node damaged — surface the authoritative hp
+      this.showNodePips(view);
+    } else if (state.hp > prevHp) {
+      this.hideNodePips(state.id); // regrown/refreshed — stale pips must not survive
     }
   }
 
@@ -2730,11 +3149,170 @@ export class GameScene extends Phaser.Scene {
       if (now >= view.state.harvestedAt + t.regrowMs) {
         view.depletedShown = false;
         view.state = { ...view.state, hp: t.maxHp, harvestedAt: null };
+        this.hideNodePips(view.state.id); // J3: back at max — no pips may linger
         this.setObjTexture(view.sprite, view.state.type);
         if (view.body) (view.body.body as Phaser.Physics.Arcade.StaticBody).enable = true;
-        this.tweens.add({ targets: view.sprite, scaleX: { from: 0.6, to: 1 }, scaleY: { from: 0.6, to: 1 }, duration: 250 });
+        // settle back to the sprite's PLANTED scale (trees vary by idHash) — a
+        // regrown tree left at flat 1.0 would visibly snap on its next punch
+        const rest = nodeRestScale(view.state);
+        this.tweens.add({ targets: view.sprite, scaleX: { from: rest * 0.6, to: rest }, scaleY: { from: rest * 0.6, to: rest }, duration: 250 });
       }
     }
+  }
+
+  // ------------------------------------------------- J3: harvest impact kit
+
+  /**
+   * Should node impact FX (chips, pips) render right now? nodeChanged events
+   * arrive for the WHOLE map — a friend harvesting three Zones away must not
+   * spawn invisible tweens here — and the Delve overlay (depth 900k+) hides
+   * the World entirely, so anything fired beneath it would be pure churn.
+   * Cheap: one rectangle-contains against the camera's live worldView.
+   */
+  private nodeFxVisible(view: NodeView): boolean {
+    return !this.inDelve && this.cameras.main.worldView.contains(view.sprite.x, view.sprite.y - TILE / 2);
+  }
+
+  /** chip debris off a node, tinted by its type, at roughly swing height */
+  private nodeChipBurst(view: NodeView, big: boolean): void {
+    const s = view.sprite;
+    this.burstChips(s.x, s.y - s.displayHeight * 0.4, s.depth + 2, CHIP_TINTS[view.state.type], big);
+  }
+
+  /**
+   * A short-lived burst of 2-3px debris chips — J4's death-puff pattern
+   * (tweened images off the shared 4px 'poof' texture, tinted per burst)
+   * tightened into impact debris: constant pixel size (0.5/0.75 of the 4px
+   * texture = whole 2/3px — no fractional-scaling shimmer), a flat outward
+   * scatter with a slight lift, and a hard TTL sweep so nothing strays. Never
+   * allocates a texture or an emitter — chips exist only at the impact point.
+   */
+  private burstChips(x: number, y: number, depth: number, tints: number[], big: boolean): void {
+    const n = big ? CHIP_COUNT_FINISH : CHIP_COUNT_HIT;
+    for (let i = 0; i < n; i++) {
+      const ang = (Math.PI * 2 * i) / n + (i % 2) * 0.7;
+      const dist = (big ? 12 : 8) + (i % 3) * 4;
+      const chip = this.add
+        .image(x + Math.cos(ang) * 2, y + Math.sin(ang), 'poof')
+        .setTint(tints[i % tints.length])
+        .setScale(i % 2 ? 0.5 : 0.75) // 2px / 3px off the 4px texture — whole pixels
+        .setDepth(depth);
+      this.tweens.add({
+        targets: chip,
+        x: x + Math.cos(ang) * dist,
+        y: y + Math.sin(ang) * dist * 0.5 - (big ? 6 : 4), // flattened scatter, slight lift
+        alpha: 0,
+        duration: 250 + (i % 4) * 40,
+        ease: 'Quad.out',
+        // each chip has exactly ONE tween, so its onComplete is the reap — no
+        // TTL constant to hand-sync against tween durations, nothing to leak
+        // if a duration is ever retuned. Scene teardown destroys chip and
+        // tween alike, so there is no orphan window.
+        onComplete: () => chip.destroy(),
+      });
+    }
+  }
+
+  /**
+   * The ~40ms hit punch: a squash (wider, slightly shorter) layered on the
+   * existing ±3° wobble — different properties (scale vs angle), so the two
+   * tweens compose freely. Kill-restart discipline like playSwingFx: a held-E
+   * cadence re-punches before the last settled, so the old tween dies and the
+   * sprite snaps back to its exact rest scale first (re-derived, never read
+   * mid-tween — see nodeRestScale) to rule out cumulative drift.
+   */
+  private punchNode(view: NodeView): void {
+    const s = view.sprite;
+    this.settleNodePunch(view);
+    const rest = nodeRestScale(view.state);
+    const tween = this.tweens.add({
+      targets: s,
+      scaleX: rest * 1.06,
+      scaleY: rest * 0.96,
+      duration: NODE_PUNCH_MS,
+      yoyo: true,
+      ease: 'Quad.out',
+      onComplete: () => {
+        s.setScale(rest);
+        s.setData(NODE_PUNCH_KEY, null);
+      },
+    });
+    s.setData(NODE_PUNCH_KEY, tween);
+  }
+
+  /** kill an in-flight punch and restore rest scale (no-op when none is running) */
+  private settleNodePunch(view: NodeView): void {
+    // Phaser's getData lazily ALLOCATES a DataManager on first touch, and this
+    // runs for every map-wide depletion event — most on sprites only remote
+    // Players ever hit, which can never hold a punch (punchNode is local-only).
+    // A punch implies punchNode's setData already built the manager, so a
+    // data-less sprite provably has no punch: bail before allocating.
+    if (!view.sprite.data) return;
+    const prev = view.sprite.getData(NODE_PUNCH_KEY) as Phaser.Tweens.Tween | null | undefined;
+    if (!prev) return;
+    prev.remove();
+    view.sprite.setScale(nodeRestScale(view.state));
+    view.sprite.setData(NODE_PUNCH_KEY, null);
+  }
+
+  /**
+   * Damage pips over a partially-damaged node: one 2px cell per max HP, lit
+   * for remaining hp — the mob HP bar's job in a quieter voice (no bright
+   * green, no outline; a whisper of UI fitting the restrained art direction).
+   * Draws from view.state.hp, which updateNode has just set from the
+   * authoritative event, so pips can never show a stale value. The display is
+   * created lazily, redrawn (kill-restart on its fade) while hits keep
+   * landing, and destroys ITSELF after hold+fade — steady state holds zero
+   * pip objects, satisfying the no-standing-overhead constraint.
+   */
+  private showNodePips(view: NodeView): void {
+    const st = view.state;
+    const max = NODE_TYPES[st.type].maxHp;
+    if (st.hp <= 0 || st.hp >= max) {
+      this.hideNodePips(st.id);
+      return;
+    }
+    if (!this.nodeFxVisible(view)) return;
+    let pip = this.nodePips.get(st.id);
+    if (!pip) {
+      pip = { gfx: this.add.graphics(), tween: null };
+      this.nodePips.set(st.id, pip);
+    }
+    const g = pip.gfx;
+    const w = max * (NODE_PIP_SIZE + NODE_PIP_GAP) - NODE_PIP_GAP;
+    // integer world position keeps the 2px cells on whole pixels at integer zoom
+    g.setPosition(Math.round(view.sprite.x - w / 2), Math.round(view.sprite.y - view.sprite.displayHeight) - 6);
+    g.setDepth(view.sprite.depth + 2);
+    g.setAlpha(1);
+    g.clear();
+    g.fillStyle(0x000000, 0.35); // faint backing so pips read on bright foliage
+    g.fillRect(-1, -1, w + 2, NODE_PIP_SIZE + 2);
+    for (let i = 0; i < max; i++) {
+      g.fillStyle(i < st.hp ? NODE_PIP_FILL : NODE_PIP_LOST, 1);
+      g.fillRect(i * (NODE_PIP_SIZE + NODE_PIP_GAP), 0, NODE_PIP_SIZE, NODE_PIP_SIZE);
+    }
+    // hold, then fade and self-destruct; another hit inside the window simply
+    // kill-restarts the countdown (the ~1.5s window measures from the LAST hit)
+    pip.tween?.remove();
+    pip.tween = this.tweens.add({
+      targets: g,
+      alpha: 0,
+      delay: NODE_PIP_HOLD_MS,
+      duration: NODE_PIP_FADE_MS,
+      onComplete: () => {
+        g.destroy();
+        this.nodePips.delete(st.id);
+      },
+    });
+  }
+
+  /** drop a node's pip display immediately (depletion payoff, regrowth) */
+  private hideNodePips(nodeId: string): void {
+    const pip = this.nodePips.get(nodeId);
+    if (!pip) return;
+    pip.tween?.remove();
+    pip.gfx.destroy();
+    this.nodePips.delete(nodeId);
   }
 
   /**
@@ -2750,6 +3328,9 @@ export class GameScene extends Phaser.Scene {
     // the sealed mine shaft (clear it with an Ancient Pickaxe) / open shaft (enter)
     const delve = this.delveEntranceAction(px, py);
     if (delve) return delve;
+    // a Realm gate (ADR-0017): step through, or learn that it is dormant
+    const realm = this.realmGateAction(px, py);
+    if (realm) return realm;
 
     // special interactables take priority over nodes
     if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
@@ -2868,7 +3449,14 @@ export class GameScene extends Phaser.Scene {
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
     if (st) {
       if (st.type === 'crate') return { swing: false, run: () => this.openCrate(st.id) };
-      if (st.type === 'sawmill') return { swing: false, run: () => this.openSawmill(st.id) };
+      // ?refinertest (dev-only, ADR-0017 §6): the Sawmill tile doubles as the
+      // generic test Refiner so the kernel is exercisable end-to-end before any
+      // player-facing Refiner Structure ships — the live Sawmill path is untouched
+      // without the flag
+      if (st.type === 'sawmill') {
+        if (DEV_REFINER_TEST) return { swing: false, run: () => this.openRefiner(st.id, TEST_REFINER, t.refiner.testName) };
+        return { swing: false, run: () => this.openSawmill(st.id) };
+      }
       return {
         swing: false,
         run: () => {
@@ -2900,24 +3488,51 @@ export class GameScene extends Phaser.Scene {
     if (view.state.type === 'fishing_spot' && this.heldItem === 'fishing_rod') {
       return { swing: false, run: () => this.startFishing(view) };
     }
+    // ADR-0013 pack cap, resolved BEFORE the verb: a client-refused swing must
+    // not read as one — swing:false skips the cadence stamp, the pose/arc AND
+    // the peers' swing echo, so a full pack never mimes chopping to friends.
+    if (this.packWouldOverflow(view)) {
+      return { swing: false, run: () => this.packFullToast() };
+    }
     return { swing: true, run: () => this.swingAtNode(view) };
   }
 
-  private swingAtNode(view: NodeView): void {
-    // ADR-0013: client-side pack cap — a full pack leaves the resource in the
-    // world (no held item is ever lost). Block only when the node's yield needs
-    // a NEW slot we lack room for; stacks of kinds already held always grow.
+  /**
+   * ADR-0013: true when the Node's yield needs a NEW pack slot we lack room
+   * for (stacks of kinds already held always grow — a full pack leaves the
+   * resource in the world, no held item is ever lost). A pure read, safe
+   * inside the side-effect-free resolveEAction.
+   */
+  private packWouldOverflow(view: NodeView): boolean {
     const cap = inventoryCapacity(this.village.tier);
     const yields = Object.keys(NODE_TYPES[view.state.type]?.yield ?? {});
-    if (yields.some((it) => !canAcceptItem(this.inventory, it, cap))) {
-      const now = Date.now();
-      if (now - this.packFullToastAt > 1500) {
-        bus.emit('toast', t.toast.packFull, 'bad');
-        this.packFullToastAt = now;
-      }
+    return yields.some((it) => !canAcceptItem(this.inventory, it, cap));
+  }
+
+  /** the pack-full refusal toast, throttled so repeats don't spam it */
+  private packFullToast(): void {
+    const now = Date.now();
+    if (now - this.packFullToastAt > 1500) {
+      bus.emit('toast', t.toast.packFull, 'bad');
+      this.packFullToastAt = now;
+    }
+  }
+
+  private swingAtNode(view: NodeView): void {
+    // pack-cap backstop: resolveEAction already resolves a full pack to
+    // swing:false, but the cap is CLIENT-side (ADR-0005) — a hit slipping
+    // through here would reach hitNode and overfill the pack, so keep the net.
+    if (this.packWouldOverflow(view)) {
+      this.packFullToast();
       return;
     }
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
+    // J3: debris chips + the squash punch ride the same optimism as the
+    // wobble/sfx above — fired on the swing, not the roundtrip (a server-
+    // refused hit still sparks, exactly as it already thunks). The pips and
+    // the yield float stay on the authoritative result, byte-identical.
+    this.nodeChipBurst(view, false);
+    this.punchNode(view);
     const nodeType = view.state.type;
     const swingSfx = nodeType === 'tree' || nodeType === 'hardwood_tree' ? 'chop' : nodeType === 'rock' || nodeType === 'obsidian_rock' ? 'pick' : 'harvest';
     this.sfx(swingSfx, 0.5);
@@ -2978,6 +3593,17 @@ export class GameScene extends Phaser.Scene {
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
       bus.emit('sawmill-open', sawmillId, res.state);
+      this.sfx('blip', 0.4);
+    });
+  }
+
+  /** open the generic Refiner panel on a station, run on the passed tuning (ADR-0017 §6) */
+  private openRefiner(refinerId: string, cfg: RefinerConfig, name: string): void {
+    void this.backend.refinerOpen(refinerId, cfg).then((res) => {
+      if (!res.ok) return;
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      bus.emit('refiner-open', { id: refinerId, cfg, name }, res.state);
       this.sfx('blip', 0.4);
     });
   }
@@ -3471,15 +4097,215 @@ export class GameScene extends Phaser.Scene {
       r.held = held;
       setHeldTexture(this, r.heldSprite, held);
     }
+    // swing echo (PlayerPos.swings): the counter grew since the last packet →
+    // they swung. Exactly ONE pose+arc per packet however big the jump (the
+    // 10Hz stream batches the ~300ms cadence, so +1/+2 is normal); first sight
+    // of the field initializes silently, so a mid-session joiner never replays
+    // a burst. The mark is a high-water mark against small dips: presence-sync
+    // snapshots refresh far slower than the broadcast stream, and a stale meta
+    // interleaving with fresh packets must not re-echo an already-played swing.
+    // A LARGE dip is different: swingCount restarts at 0 on reload, and a fast
+    // reload keeps the presence key (the name) live so this RemoteView — and a
+    // huge stale mark — survives. Without the reset the rejoined peer's echoes
+    // would stay muted until they out-swung their whole previous session.
+    if (p.swings !== undefined) {
+      const stale = r.swings !== undefined && r.swings - p.swings > REMOTE_SWING_RESET_GAP;
+      if (stale) {
+        r.swings = p.swings; // their session restarted — adopt silently
+      } else {
+        if (r.swings !== undefined && p.swings > r.swings) {
+          this.playSwingFx(r.sprite, r.heldSprite, r.dir);
+        }
+        r.swings = Math.max(r.swings ?? p.swings, p.swings);
+      }
+    }
   }
 
   private applyAnim(sprite: Phaser.GameObjects.Sprite, dir: Dir, moving: boolean): void {
+    // a live swing pose (playSwingFx) outranks walk/idle for its short window —
+    // gated here because this method re-writes the frame every update and
+    // would otherwise stomp the pose on the very next frame
+    const poseUntil = sprite.getData(SWING_POSE_KEY) as number | undefined;
+    if (poseUntil !== undefined && poseUntil > Date.now()) {
+      sprite.anims.stop();
+      sprite.setFrame(AVATAR_SWING[dir]);
+      return;
+    }
     if (moving) {
       sprite.anims.play(`${sprite.texture.key}-walk-${dir}`, true);
     } else {
       sprite.anims.stop();
       sprite.setFrame(AVATAR_IDLE[dir]);
     }
+  }
+
+  /**
+   * The ONE way a local swing happens: the cadence stamp, the peers' echo
+   * counter and the body's pose/arc, fused so they can never desync — the
+   * PlayerPos.swings contract (and the friends watching) depends on all three
+   * firing together. Only the two update() cadence gates call this, and only
+   * for an action that truly swings (a refused verb resolves swing:false and
+   * never gets here).
+   */
+  private markSwing(now: number): void {
+    this.lastSwingAt = now;
+    this.swingCount++; // rides the position stream so peers echo it
+    this.playSwingFx(this.player, this.heldSprite, this.lastDir);
+  }
+
+  /**
+   * The cosmetic body of a swing: flash the avatar's raised-arm frame for
+   * ~100ms and sweep the in-hand Tool through a ~120ms grip-pivoted arc.
+   * Reached through markSwing() for the local Player and the swing echo for
+   * remotes — never from adjudication itself, so it fires exactly once per
+   * swing and never touches timing (the cadences of ADR-0002/0006 stay authoritative).
+   *
+   * Deliberately takes the sprite/heldSprite/dir triple instead of reading
+   * `this.player`/`this.heldSprite`, so a later pass can replay a REMOTE
+   * Player's swing on their RemoteView pair with the same code.
+   */
+  private playSwingFx(sprite: Phaser.GameObjects.Sprite, heldSprite: Phaser.GameObjects.Image, dir: Dir): void {
+    // pose: applyAnim honors the window on every following frame; set the
+    // frame directly too so the pose shows THIS frame, not one update later
+    sprite.setData(SWING_POSE_KEY, Date.now() + SWING_POSE_MS);
+    sprite.anims.stop();
+    sprite.setFrame(AVATAR_SWING[dir]);
+
+    // bare hands (heldSprite hidden when nothing is held): pose only, no arc
+    if (!heldSprite.visible) return;
+
+    // kill-restart, never stack: a combat cadence can re-swing before the last
+    // arc settled — the old tween dies and the new one restarts at the wind-up
+    const prev = heldSprite.getData(SWING_TWEEN_KEY) as Phaser.Tweens.Tween | null;
+    if (prev) prev.remove();
+
+    // grip pivot + mirrored arc for the flipped left profile. positionHeld()
+    // owns position/flip/depth per frame and never writes angle/origin, so the
+    // rotation composes with it; onComplete restores both to rest exactly.
+    const flip = HELD_HAND[dir].flip;
+    const sign = flip ? -1 : 1;
+    heldSprite.setOrigin(flip ? 1 - SWING_GRIP_X : SWING_GRIP_X, SWING_GRIP_Y);
+    heldSprite.setAngle(sign * SWING_ARC_FROM_DEG);
+    const restore = () => {
+      heldSprite.setAngle(0).setOrigin(0.5, 0.5); // back to rest — idle rendering unchanged
+      heldSprite.setData(SWING_TWEEN_KEY, null);
+    };
+    const tween = this.tweens.add({
+      targets: heldSprite,
+      angle: sign * SWING_ARC_TO_DEG,
+      duration: SWING_ARC_MS,
+      ease: 'Quad.easeIn', // accelerate into the hit, like a real chop
+      // positionHeld() re-flips the texture per frame from the CURRENT facing;
+      // a left↔right turn mid-arc would leave this tween sweeping around the
+      // stale mirrored grip — the tool visibly orbits its tip end — so bail to
+      // rest the moment the live flip no longer matches the arc's facing.
+      onUpdate: () => {
+        if (heldSprite.flipX !== flip) {
+          tween.remove();
+          restore();
+        }
+      },
+      onComplete: restore,
+    });
+    heldSprite.setData(SWING_TWEEN_KEY, tween);
+  }
+
+  /**
+   * J4 — deaths, not despawns: flash-squash-poof for a felled mob/creature.
+   * The caller has already DETACHED the view from its synced map (mobViews /
+   * wildViews), so the render-sync sweep — which destroys any view whose
+   * MobState vanished — can no longer erase it mid-tween; from here the orphan
+   * animates frozen at the death spot. ~60ms blown-out tintFill flash, then a
+   * 250ms squash (scaleY→0 onto the feet origin) with a slight downward settle,
+   * plus a small burst of tinted puffs from the shared 'poof' texture (tweened
+   * images — no per-death emitter or texture allocation). Attached decals leave
+   * with the body: telegraph/HP bar hide instantly, the shadow fades under it.
+   * One TTL sweep destroys every piece and drops the registry entry; the
+   * registry lets teardown (leaveDelve, creature-host change) reap a mid-beat
+   * orphan, so nothing leaks. Purely visual — adjudication, loot, participation
+   * and the wire are all settled before this runs (ADR-0005/0007 untouched).
+   */
+  private playDeathBeat(v: MobView, puffTint: number, registry: Set<Phaser.GameObjects.GameObject[]>): void {
+    const spr = v.sprite;
+    if (!spr.scene) return; // already torn down — nothing to animate
+    v.tele.clear();
+    v.tele.setVisible(false);
+    v.bar.setVisible(false);
+    spr.anims.stop();
+    spr.setTintFill(0xffffff); // the blown-out payoff flash
+    const objs: Phaser.GameObjects.GameObject[] = [spr, v.shadow, v.tele, v.bar];
+    // the poof: a handful of tinted squares drifting out and gently up from the
+    // body's centre (the sprite origin sits at the feet, so step up from there)
+    const cx = spr.x;
+    const cy = spr.y - spr.displayHeight * 0.35;
+    for (let i = 0; i < DEATH_PUFF_COUNT; i++) {
+      const ang = (Math.PI * 2 * i) / DEATH_PUFF_COUNT + (i % 2) * 0.5;
+      const puff = this.add
+        .image(cx + Math.cos(ang) * 3, cy + Math.sin(ang) * 2, 'poof')
+        .setTint(puffTint)
+        .setAlpha(0.9)
+        .setDepth(spr.depth + 2);
+      objs.push(puff);
+      this.tweens.add({
+        targets: puff,
+        x: cx + Math.cos(ang) * (10 + (i % 3) * 5),
+        y: cy + Math.sin(ang) * 6 - 7,
+        alpha: 0,
+        scale: 2.4,
+        duration: 320 + i * 30,
+        ease: 'Quad.out',
+      });
+    }
+    registry.add(objs);
+    // flash → squash: the white blows out for a beat, snuffs to dead grey, and
+    // the body collapses onto its own shadow
+    this.time.delayedCall(DEATH_FLASH_MS, () => {
+      if (!spr.scene) return; // reaped mid-flash (teardown raced the timer)
+      spr.setTint(DEATH_SNUFF_TINT);
+      this.tweens.add({
+        targets: spr,
+        scaleY: 0,
+        scaleX: spr.scaleX * 1.3, // squash: widen as it flattens
+        alpha: 0,
+        y: spr.y + DEATH_SETTLE_PX,
+        duration: DEATH_SQUASH_MS,
+        ease: 'Quad.in',
+      });
+      this.tweens.add({ targets: v.shadow, alpha: 0, duration: DEATH_SQUASH_MS, ease: 'Quad.in' });
+    });
+    // one sweep ends the beat — destroy() is idempotent, so racing a teardown
+    // reap (or the delveObjects sweep, which also holds these) is harmless
+    this.time.delayedCall(DEATH_FX_TTL_MS, () => {
+      for (const o of objs) o.destroy();
+      registry.delete(objs);
+    });
+  }
+
+  /** J4: detach a Delve mob's view from the render-sync map and play its death beat */
+  private delveDeathBeat(id: string): void {
+    const v = this.mobViews.get(id);
+    if (!v) return;
+    this.mobViews.delete(id);
+    this.playDeathBeat(v, DEATH_PUFF_TINT_DELVE, this.delveDeathFx);
+  }
+
+  /** J4: detach a Wildlife creature's view and play its death beat (kills only — culls stay silent) */
+  private wildDeathBeat(id: string): void {
+    const v = this.wildViews.get(id);
+    if (!v) return;
+    this.wildViews.delete(id);
+    this.playDeathBeat(v, DEATH_PUFF_TINT_WILD, this.wildDeathFx);
+  }
+
+  /** J4: reap every death-beat orphan still animating — teardown mid-beat must not leak */
+  private clearDeathFx(registry: Set<Phaser.GameObjects.GameObject[]>): void {
+    for (const objs of registry) {
+      for (const o of objs) {
+        this.tweens.killTweensOf(o);
+        o.destroy();
+      }
+    }
+    registry.clear();
   }
 
   // ------------------------------------------------------------ helpers
@@ -3510,10 +4336,19 @@ export class GameScene extends Phaser.Scene {
 
   private checkZone(): void {
     if (this.inDelve) return; // the Delve owns the zone banner while you're inside
+    // ADR-0017: positional region derivation — camera clamp per district/World
+    this.applyCameraRegion();
+    // the minimap 'pos' stream: dots filter BOTH ways by district (a Player in
+    // the World never sees Realm dots and vice versa; same-district Players see
+    // each other), and the active district rect crops the minimap's view
+    const here = this.activeDistrict;
     bus.emit('pos', {
       x: this.player.x,
       y: this.player.y,
-      others: [...this.remotes.values()].map((r) => ({ x: r.sprite.x, y: r.sprite.y })),
+      others: [...this.remotes.values()]
+        .filter((r) => this.districtOf(Math.floor(r.sprite.x / TILE), Math.floor(r.sprite.y / TILE)) === here)
+        .map((r) => ({ x: r.sprite.x, y: r.sprite.y })),
+      view: here ? here.rect : undefined,
     });
     const tx = this.player.x / TILE;
     const ty = this.player.y / TILE;
@@ -3642,6 +4477,10 @@ export class GameScene extends Phaser.Scene {
     this.sfx('pick', 0.5);
     this.cameras.main.shake(110, 0.003);
     this.floatText(this.delveEntrance.x, this.delveEntrance.y - 10, '*chip*', '#c9b28a', 9);
+    // J3: the sealed shaft is not a Resource Node (its 4 hits live only in
+    // this.rubbleHits), but it IS rock being picked — so it borrows the rock
+    // debris from the harvest impact kit for a consistent read
+    this.burstChips(this.delveEntrance.x, this.delveEntrance.y - 6, this.delveEntrance.y + 2, CHIP_TINTS.rock, false);
     if (++this.rubbleHits < 4) return;
     this.rubbleHits = 0;
     void this.backend.openDelve().then((res) => {
@@ -3981,7 +4820,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private teardownDelve(): void {
-    for (const o of this.delveObjects) o.destroy();
+    for (const o of this.delveObjects) {
+      // repeat:-1 flicker/door tweens outlive destroy() — kill them or every
+      // Descent strands zombie tweens (door glow lives INSIDE a container)
+      this.tweens.killTweensOf(o);
+      if (o instanceof Phaser.GameObjects.Container) for (const child of o.list) this.tweens.killTweensOf(child);
+      o.destroy();
+    }
     this.delveObjects = [];
     for (const key of this.delveFloorKeys) if (this.textures.exists(key)) this.textures.remove(key);
     this.delveFloorKeys = [];
@@ -3994,6 +4839,9 @@ export class GameScene extends Phaser.Scene {
       v.bar.destroy();
     }
     this.mobViews.clear();
+    // J4: a death beat still animating is an orphan (already out of mobViews) —
+    // reap it explicitly or leaving mid-tween would leak its puffs and tweens
+    this.clearDeathFx(this.delveDeathFx);
     for (const v of this.projViews.values()) {
       v.sprite.destroy();
       v.glow.destroy();
@@ -4025,10 +4873,11 @@ export class GameScene extends Phaser.Scene {
     this.teardownDelve();
     for (const c of this.worldColliders) c.active = true;
     const cam = this.cameras.main;
-    cam.setBounds(0, 0, MAP_W * TILE, MAP_H * TILE);
     cam.flash(300, 6, 8, 12);
     this.player.setPosition((this.delveEntrance.tx + 0.5) * TILE, (this.delveEntrance.ty + 1.5) * TILE);
     this.player.setVelocity(0, 0);
+    // back to the positional region clamp (the shaft is never inside a district)
+    this.applyCameraRegion(true);
     this.stunnedUntil = 0;
     this.delveExhausted = false;
     bus.emit('zone', this.currentZone || 'Ancient Ruins');
@@ -4276,7 +5125,7 @@ export class GameScene extends Phaser.Scene {
     const m = this.mobs.get(mobId);
     if (!m || m.st === 'dead') return;
     if (!this.delveHitInRange(by, m)) return; // loose trusted-friends range check (ADR-0005)
-    const roll = applyMobHit(m, tool, Math.random);
+    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance);
     this.delveParticipants.add(by);
     if (by === this.me.name) this.delveHitLanded = true;
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
@@ -4310,6 +5159,14 @@ export class GameScene extends Phaser.Scene {
 
   private onMobFelled(m: MobState): void {
     this.sfx('harvest', 0.5);
+    // J4: detach the view BEFORE the MobState vanishes — renderDelve's sweep
+    // destroys any view whose mob is gone, which used to erase the sprite the
+    // same frame and make the kill read as a glitch, not a victory. The
+    // orphaned view plays the flash-squash-poof at the death spot instead.
+    // The Stage boss gets the same miniature: its stage-clear presentation
+    // (onStageBossFelled's shake/flash/roar) is screen-level, not sprite-level,
+    // so the two layer rather than double up.
+    this.delveDeathBeat(m.id);
     if (!isBossKind(m.kind)) {
       this.delveKills++;
       this.mobs.delete(m.id);
@@ -4378,6 +5235,8 @@ export class GameScene extends Phaser.Scene {
     if (this.delveBackdrop) this.delveBackdrop.setPosition(cam.midPoint.x, cam.midPoint.y).setSize(cam.displayWidth + 8, cam.displayHeight + 8);
     this.nightOverlay.setAlpha(0);
     this.duskOverlay.setAlpha(0);
+    this.mireVeil.setAlpha(0);
+    for (const p of this.mirePuffs) p.setAlpha(0);
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
       .setAlpha(this.heldItem === 'hand_torch' ? 0.5 : 0.22)
@@ -4449,7 +5308,7 @@ export class GameScene extends Phaser.Scene {
           if (action?.swing) {
             const cad = action.cadenceMs ?? SWING_CADENCE_MS;
             if (now - this.lastSwingAt >= cad) {
-              this.lastSwingAt = now;
+              this.markSwing(now); // stamp + peer echo counter + pose/arc, fused
               action.run();
             }
           } else if (action && ePressed) {
@@ -4721,7 +5580,15 @@ export class GameScene extends Phaser.Scene {
       }
       m.face = Math.atan2(s.ay - s.y, s.ax - s.x);
     }
-    for (const id of [...this.mobs.keys()]) if (!alive.has(id)) this.mobs.delete(id);
+    for (const id of [...this.mobs.keys()]) {
+      if (alive.has(id)) continue;
+      this.mobs.delete(id);
+      // J4 guest path: a mob missing from a live snap was FELLED — dead mobs
+      // drop off the wire (broadcastMobSnap skips st==='dead') and the Delve
+      // never culls for range — so a guest plays the same death beat the host
+      // saw, frozen at the view's last snapshot spot, not a silent removal.
+      this.delveDeathBeat(id);
+    }
     this.projectiles = msg.projectiles.map((p) => ({ id: p.id, x: p.x, y: p.y, vx: 0, vy: 0, r: 0.8, life: 2000 }));
   }
 
@@ -4869,6 +5736,9 @@ export class GameScene extends Phaser.Scene {
     this.wildViews.clear();
     this.wildMobs.clear();
     this.wildWander.clear();
+    // J4: reap any death beat mid-animation — its objects are orphans (out of
+    // wildViews) and a host handover must not strand them
+    this.clearDeathFx(this.wildDeathFx);
   }
 
   /** real online Player positions in TILE units (self + rendered peers; not sim bots) */
@@ -5068,7 +5938,25 @@ export class GameScene extends Phaser.Scene {
         m.ay = s.ay;
       }
     }
-    for (const id of [...this.wildMobs.keys()]) if (!alive.has(id)) this.wildMobs.delete(id);
+    for (const [id, m] of [...this.wildMobs]) {
+      if (alive.has(id)) continue;
+      this.wildMobs.delete(id);
+      // J4: DEATH vs DESPAWN on a guest. A creature gone from the host's snap
+      // was either range-CULLED (maintainWildPool — must stay a silent, instant
+      // vanish) or FELLED by the host itself (kills by other Players arrive as
+      // an explicit 'felled' broadcast; the host's own kills get no message,
+      // and pure presentation may not add wire traffic — ADR-0005). Tell them
+      // apart by wounds AND proximity: the cull only removes creatures farther
+      // than CREATURE_DESPAWN_TILES from EVERY Player, so a vanished creature
+      // still near ME cannot have been culled — hurt + near ⇒ genuinely felled.
+      // (Wounds alone are not enough: at min zoom the viewport spans ~40 tiles,
+      // so a wounded fleeing creature can be culled ON-SCREEN; the near-gate
+      // keeps that a silent vanish. The -2 slop absorbs the host's lerped view
+      // of my position. A real host kill farther out stays a silent miss —
+      // rare and barely readable at that distance, never a wrong poof.)
+      const nearMe = Math.hypot(m.x - this.player.x / TILE, m.y - this.player.y / TILE) <= CREATURE_DESPAWN_TILES - 2;
+      if (m.hp < m.maxHp && nearMe) this.wildDeathBeat(id);
+    }
   }
 
   /** dispatch an open-world Wildlife message (ADR-0012) */
@@ -5087,6 +5975,15 @@ export class GameScene extends Phaser.Scene {
         }
         break;
       case 'felled':
+        // J4: every guest sees the kill, not just the hunter — the host has
+        // already removed the creature authoritatively and the next 'sync'
+        // would only silent-drop it, so detach the view here and play the
+        // death beat at the spot it fell. (On the adjudicating host the
+        // creature is already gone — delete() is false, no second beat.)
+        if (this.wildMobs.delete(msg.id)) {
+          this.wildWander.delete(msg.id);
+          this.wildDeathBeat(msg.id);
+        }
         if (msg.by === this.me.name) this.grantWildLoot(msg.loot, 'hunted');
         break;
     }
@@ -5250,7 +6147,7 @@ export class GameScene extends Phaser.Scene {
   private applyWildHit(id: string, tool: ToolId | undefined, by: string): void {
     const m = this.wildMobs.get(id);
     if (!m || m.st === 'dead') return;
-    const roll = applyMobHit(m, tool, Math.random);
+    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance);
     const prof = profileOf(m.kind);
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
     const fy = m.y * TILE - prof.radius * TILE - 8;
@@ -5264,6 +6161,9 @@ export class GameScene extends Phaser.Scene {
   private onWildFelled(m: MobState, by: string): void {
     this.sfx('harvest', 0.5);
     const loot = rollWildLoot(m.kind as WildKind, Math.random);
+    // J4: detach + flash-squash-poof BEFORE the state vanishes — renderWild's
+    // sweep would otherwise destroy the view this same frame (a despawn blink)
+    this.wildDeathBeat(m.id);
     this.wildMobs.delete(m.id);
     this.wildWander.delete(m.id);
     if (by === this.me.name) this.grantWildLoot(loot, 'hunted');
@@ -5326,6 +6226,29 @@ export class GameScene extends Phaser.Scene {
       .setPosition(cam.midPoint.x, cam.midPoint.y)
       .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
       .setAlpha(Math.max(0, 1 - Math.abs(night - 0.5) * 4) * 0.12);
+    // the Mire's stagnant air fades in over ~a second as the Player crosses
+    // the gate (and back out again) — no hard cut on teleport
+    const mireTarget = this.activeDistrict?.id === 'sunken_mire' ? 1 : 0;
+    this.mireAmbience += (mireTarget - this.mireAmbience) * Math.min(1, delta / 450);
+    if (this.mireAmbience > 0.005) {
+      // the veil yields to the night overlay — stacked full-strength they
+      // drown the bog in unreadable black
+      this.mireVeil
+        .setPosition(cam.midPoint.x, cam.midPoint.y)
+        .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
+        .setAlpha(this.mireAmbience * 0.2 * (1 - Math.pow(night, 1.6) * 0.7));
+      const v = cam.worldView;
+      for (let i = 0; i < this.mirePuffs.length; i++) {
+        const p = this.mirePuffs[i];
+        const span = v.width + 260;
+        const drift = (i * 197 + time * 0.011 * (1 + i * 0.17)) % span;
+        p.setPosition(v.x - 130 + drift, v.y + ((i * 131 + Math.sin(time / 2400 + i * 1.7) * 26) % Math.max(1, v.height)));
+        p.setAlpha(this.mireAmbience * (0.055 + 0.03 * Math.sin(time / 900 + i * 2.3)));
+      }
+    } else {
+      this.mireVeil.setAlpha(0);
+      for (const p of this.mirePuffs) p.setAlpha(0);
+    }
     // v4: light follows only a held Hand Torch (warm orange, dim like a flame)
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
@@ -5550,7 +6473,7 @@ export class GameScene extends Phaser.Scene {
 
     if (time - this.lastPosSent > 100) {
       this.lastPosSent = time;
-      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined);
+      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined, this.swingCount);
     }
 
     // placement ghost — centred over the whole footprint (ADR-0008). Uses
@@ -5611,7 +6534,7 @@ export class GameScene extends Phaser.Scene {
         if (action?.swing) {
           const cadence = action.cadenceMs ?? SWING_CADENCE_MS;
           if (now - this.lastSwingAt >= cadence) {
-            this.lastSwingAt = now;
+            this.markSwing(now); // stamp + peer echo counter + pose/arc, fused
             action.run();
           }
         } else if (action && ePressed) {

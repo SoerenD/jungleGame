@@ -81,6 +81,8 @@ const ZONE_DE: Record<string, string> = {
   'Overgrown Temple': 'Überwucherter Tempel',
   'Mangrove Coast': 'Mangrovenküste',
   'The Cavern Mouth': 'Der Höhlenschlund',
+  // Realm districts (ADR-0017)
+  'The Sunken Mire': 'Das Versunkene Moor',
 };
 
 /** translate a zone id for display; internal comparisons keep the English id */
@@ -262,6 +264,20 @@ const en = {
     next: (s: number) => `next plank in ${s}s`,
   },
 
+  // the generic Refiner panel (ADR-0017 §6): one skeleton for every Refiner
+  // family — the station name and item names arrive as parameters
+  refiner: {
+    title: (name: string) => `⚗️ ${name}`,
+    deposit: (item: string) => `Deposit ${item}`,
+    collect: (item: string) => `Collect ${item}`,
+    close: 'Close',
+    refining: (n: number, item: string) => `refining: ${n} ${item}`,
+    ready: (n: number, item: string) => `ready: ${n} ${item}`,
+    next: (s: number, item: string) => `next ${item} in ${s}s`,
+    /** the ?refinertest dev station's display name */
+    testName: 'Test Refiner',
+  },
+
   sign: {
     title: '🪧 Signpost',
     placeholder: 'Write a short line...',
@@ -393,6 +409,9 @@ const en = {
     millFullOrNoWood: 'The mill is full or you carry no wood.',
     noPlankYet: 'No plank is finished yet — the mill works slowly.',
     collectPlanks: 'You collect the finished planks.',
+    refinerFullOrEmpty: (item: string) => `The refiner is full or you carry no ${item}.`,
+    refinerNotReady: 'Nothing is finished yet — the refiner works slowly.',
+    refinerCollected: (item: string) => `You collect the finished ${item}.`,
     warmHearty: 'Warm and hearty — your step quickens! (+20% speed)',
     hostLeftCollapse: 'The host left — the Delve collapses around you. No loot.',
     groveOpen: 'The grove already stands open.',
@@ -480,6 +499,10 @@ const en = {
     knockedInWild: (n: number, max: number) => `A predator knocks you down! (${n}/${max} — the third means Exhaustion)`,
     wildExhaustionHammock: 'Exhaustion overtakes you in the wilds — you wake in your Hammock, pack fully intact.',
     wildExhaustionSpawn: 'Exhaustion overtakes you in the wilds — you wake at the spawn, pack fully intact.',
+    // ADR-0017 — Realm gates (T2 stub; the Warden gate-key gating arrives with T4/T5)
+    realmGateDormant: 'The gate is dormant — what lies beyond still slumbers.',
+    realmEntered: (name: string) => `You step through the gate — ${name}.`,
+    realmLeft: 'You step back through the gate into the World.',
   },
 
   delve: {
@@ -488,6 +511,13 @@ const en = {
     leave: '⇱ leave',
     descendDeep: 'A door to the Deep · press E to descend',
     descendDepth: (zone: string) => `A door downward · press E to descend into ${zone}`,
+  },
+
+  // ADR-0017 — the Realm gates' floating labels (the districts beyond the World's far edge)
+  realm: {
+    gateTo: (name: string) => `Realm gate · press E to enter ${name}`,
+    dormant: 'A dormant Realm gate',
+    return: 'Realm gate · press E to return to the World',
   },
 
   // ADR-0015 — the generated Depths' naming word lists. Names are COMPOSED from
@@ -502,7 +532,7 @@ const en = {
     bossForgeborn: (adj: string) => `the ${adj} Forgeborn`,
     // ADR-0016 — the five Depth boss kits
     bossRam: (adj: string) => `the ${adj} Juggernaut`,
-    bossWarden: (adj: string) => `the ${adj} Warden`,
+    bossWarden: (adj: string) => `the ${adj} Sentinel`,
     bossWhirl: (adj: string) => `the ${adj} Whirlwind`,
     bossBulwark: (adj: string) => `the ${adj} Bulwark`,
     bossBrood: (adj: string) => `the ${adj} Broodmother`,
@@ -736,6 +766,17 @@ const de: Strings = {
     next: (s) => `nächstes Brett in ${s}s`,
   },
 
+  refiner: {
+    title: (name) => `⚗️ ${name}`,
+    deposit: (item) => `${item} einlegen`,
+    collect: (item) => `${item} holen`,
+    close: 'Schließen',
+    refining: (n, item) => `veredelt: ${n} ${item}`,
+    ready: (n, item) => `fertig: ${n} ${item}`,
+    next: (s, item) => `${item}: nächste Einheit in ${s}s`,
+    testName: 'Test-Veredler',
+  },
+
   sign: {
     title: '🪧 Wegweiser',
     placeholder: 'Schreib eine kurze Zeile...',
@@ -864,6 +905,9 @@ const de: Strings = {
     millFullOrNoWood: 'Das Werk ist voll oder du trägst kein Holz.',
     noPlankYet: 'Noch kein Brett fertig — das Werk arbeitet langsam.',
     collectPlanks: 'Du sammelst die fertigen Bretter ein.',
+    refinerFullOrEmpty: (item) => `Der Veredler ist voll oder dir fehlt: ${item}.`,
+    refinerNotReady: 'Noch nichts fertig — der Veredler arbeitet langsam.',
+    refinerCollected: (item) => `Du sammelst die fertige Ware ein: ${item}.`,
     warmHearty: 'Warm und herzhaft — dein Schritt wird schneller! (+20% Tempo)',
     hostLeftCollapse: 'Der Host ist gegangen — der Schacht stürzt um dich herum ein. Keine Beute.',
     groveOpen: 'Der Hain steht bereits offen.',
@@ -951,6 +995,10 @@ const de: Strings = {
     knockedInWild: (n, max) => `Ein Raubtier schlägt dich nieder! (${n}/${max} — der dritte bedeutet Erschöpfung)`,
     wildExhaustionHammock: 'Erschöpfung übermannt dich in der Wildnis — du erwachst in deiner Hängematte, Rucksack unversehrt.',
     wildExhaustionSpawn: 'Erschöpfung übermannt dich in der Wildnis — du erwachst am Startpunkt, Rucksack unversehrt.',
+    // ADR-0017 — Reichstore (T2-Stummel; die Wächter-Schlüssel-Freischaltung kommt mit T4/T5)
+    realmGateDormant: 'Das Tor ruht — was dahinter liegt, schlummert noch.',
+    realmEntered: (name) => `Du trittst durch das Tor — ${name}.`,
+    realmLeft: 'Du trittst durch das Tor zurück in die Welt.',
   },
 
   delve: {
@@ -959,6 +1007,13 @@ const de: Strings = {
     leave: '⇱ verlassen',
     descendDeep: 'Eine Tür zur Tiefe · drücke E zum Hinabsteigen',
     descendDepth: (zone) => `Eine Tür abwärts · drücke E, um in ${zone} hinabzusteigen`,
+  },
+
+  // ADR-0017 — die schwebenden Beschriftungen der Reichstore
+  realm: {
+    gateTo: (name) => `Reichstor · drücke E, um ${name} zu betreten`,
+    dormant: 'Ein ruhendes Reichstor',
+    return: 'Reichstor · drücke E zur Rückkehr in die Welt',
   },
 
   // ADR-0015 — Wortlisten der erzeugten Tiefen. Namen werden pro Tiefenzahl aus
@@ -973,7 +1028,7 @@ const de: Strings = {
     bossForgeborn: (adj) => `der ${adj} Schmiedegeborene`,
     // ADR-0016 — die fünf Tiefen-Boss-Bausätze (schwache Adjektivform wie oben)
     bossRam: (adj) => `der ${adj} Rammbock`,
-    bossWarden: (adj) => `der ${adj} Wardein`,
+    bossWarden: (adj) => `die ${adj} Schildwache`,
     bossWhirl: (adj) => `der ${adj} Wirbelwind`,
     bossBulwark: (adj) => `das ${adj} Bollwerk`,
     bossBrood: (adj) => `die ${adj} Brutmutter`,

@@ -89,6 +89,9 @@ import type {
   PlaceResult,
   PlayerPos,
   QuestState,
+  RefinerConfig,
+  RefinerResult,
+  RefinerState,
   SawmillResult,
   SawmillState,
   SealResourceId,
@@ -170,6 +173,8 @@ interface Db {
   crates?: Record<string, Inventory>;
   /** per-sawmill queue: wood still milling since `since` (lazy timestamps) */
   sawmills?: Record<string, { wood: number; since: number }>;
+  /** per-Refiner queue (generic kernel, ADR-0017 §6): raw input refining since `since` */
+  refiners?: Record<string, { input: number; since: number }>;
   chatLog: ChatMsg[];
   world?: {
     gateOpen: boolean;
@@ -276,6 +281,7 @@ export class MockBackend implements Backend {
     this.db.world.depthRecords ??= { descents: {}, bests: {} };
     this.db.crates ??= {};
     this.db.sawmills ??= {};
+    this.db.refiners ??= {};
     // drop anything whose id is no longer a known item — retired Structures/Tools
     // (e.g. the fence, the Stone Path) vanish for good instead of crashing later
     // lookups in placed structures, player packs, and crate storage
@@ -788,10 +794,12 @@ export class MockBackend implements Backend {
 
   // ---------------------------------------------------------------- realtime-ish
 
-  sendPosition(x: number, y: number, _dir: Dir, _moving: boolean, _held?: ItemId): void {
-    // `_held` is a Realtime-broadcast field in a real backend (a SupabaseBackend
-    // relays it to other clients for the overhead icon); the single-client Mock
-    // has no peers to echo it to, so it is accepted and dropped.
+  sendPosition(x: number, y: number, _dir: Dir, _moving: boolean, _held?: ItemId, _swings?: number): void {
+    // `_held`/`_swings` are Realtime-broadcast fields in a real backend (a
+    // SupabaseBackend relays them to other clients for the in-hand icon and
+    // the swing echo); the single-client Mock has no peers to echo them to, so
+    // they are accepted and dropped. Its bots likewise never SEND `swings` —
+    // the field is optional, so they render exactly as before.
     const p = this.me ? this.db.players[this.me] : null;
     if (p) {
       p.x = x;
@@ -960,6 +968,9 @@ export class MockBackend implements Backend {
     // functional-Structure state dies with the Structure
     if (s.type === 'crate') delete this.db.crates?.[id];
     if (s.type === 'sawmill') delete this.db.sawmills?.[id];
+    // the generic Refiner kernel is type-blind (keyed by structure id alone),
+    // so ANY Refiner's queue dies here — no per-type case ever needed
+    delete this.db.refiners?.[id];
     if (s.type === 'hammock' && p.wakePoint && p.wakePoint.tx === s.tx && p.wakePoint.ty === s.ty) {
       delete p.wakePoint; // its wake point retires with it
     }
@@ -1092,6 +1103,67 @@ export class MockBackend implements Backend {
     p.inventory.plank = (p.inventory.plank ?? 0) + done;
     this.saveNow();
     return { ok: true, state: this.sawmillPublic(m), inventory: { ...p.inventory } };
+  }
+
+  // ------------------------------------------------------------ generic Refiners (ADR-0017 §6)
+
+  /**
+   * The Sawmill's lazy-timestamp semantics, generalized: one unit refines every
+   * `config.msPerUnit`; nothing ticks, everything derives from `since` when the
+   * Refiner is next touched. Type-blind like the SQL twin — the row is keyed by
+   * structure id alone, the client decides which Structures are Refiners.
+   */
+  private refinerOf(refinerId: string): { input: number; since: number } | null {
+    if (!Object.values(this.db.structures).some((st) => st.id === refinerId)) return null;
+    return (this.db.refiners![refinerId] ??= { input: 0, since: 0 });
+  }
+
+  private refinerPublic(m: { input: number; since: number }, cfg: RefinerConfig): RefinerState {
+    const now = Date.now();
+    const done = m.input > 0 ? Math.min(m.input, Math.floor((now - m.since) / cfg.msPerUnit)) : 0;
+    const refining = m.input - done;
+    return {
+      input: refining,
+      ready: done,
+      nextMs: refining > 0 ? cfg.msPerUnit - ((now - m.since) % cfg.msPerUnit) : null,
+    };
+  }
+
+  async refinerOpen(refinerId: string, cfg: RefinerConfig): Promise<RefinerResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const m = this.refinerOf(refinerId);
+    if (!m || !p) return { ok: false, reason: 'NO_REFINER' };
+    return { ok: true, state: this.refinerPublic(m, cfg), inventory: { ...p.inventory } };
+  }
+
+  async refinerDeposit(refinerId: string, cfg: RefinerConfig): Promise<RefinerResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const m = this.refinerOf(refinerId);
+    if (!m || !p) return { ok: false, reason: 'NO_REFINER' };
+    const give = Math.min(p.inventory[cfg.inputItem] ?? 0, cfg.cap - m.input);
+    if (give <= 0) return { ok: false, reason: 'NOTHING' };
+    if (m.input === 0) m.since = Date.now(); // work starts on the first deposit
+    p.inventory[cfg.inputItem]! -= give;
+    m.input += give;
+    this.saveNow();
+    return { ok: true, state: this.refinerPublic(m, cfg), inventory: { ...p.inventory } };
+  }
+
+  async refinerCollect(refinerId: string, cfg: RefinerConfig): Promise<RefinerResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const m = this.refinerOf(refinerId);
+    if (!m || !p) return { ok: false, reason: 'NO_REFINER' };
+    const now = Date.now();
+    const done = m.input > 0 ? Math.min(m.input, Math.floor((now - m.since) / cfg.msPerUnit)) : 0;
+    if (done <= 0) return { ok: false, reason: 'NOTHING' }; // collecting early yields only what is finished
+    m.input -= done;
+    m.since += done * cfg.msPerUnit; // keep the partial progress of the next unit
+    p.inventory[cfg.outputItem] = (p.inventory[cfg.outputItem] ?? 0) + done;
+    this.saveNow();
+    return { ok: true, state: this.refinerPublic(m, cfg), inventory: { ...p.inventory } };
   }
 
   async readTablet(id: string): Promise<QuestState> {
