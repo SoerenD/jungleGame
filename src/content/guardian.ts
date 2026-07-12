@@ -12,12 +12,50 @@
  *
  * This module must stay importable from node tools (generate-map) — no
  * browser globals, no ../config import (the awake window length is passed in).
+ *
+ * ADR-0017 T0: every schedule function is parameterized by a WardenKit and
+ * defaults to GUARDIAN_KIT, so a future Warden is a second kit object — never
+ * a second engine. Existing exports keep their signatures and behavior.
  */
 import type { ToolId } from './items';
 
 /** arena playfield in tiles (matches the arena rect in world-data.json) */
 export const ARENA_W = 17;
 export const ARENA_H = 13;
+
+// ------------------------------------------------------------- Warden kits
+
+/**
+ * One authored fight's parameter bundle. Kits are pure data + pure functions,
+ * node-importable like the rest; nothing in a kit may key on HP or Players.
+ */
+export interface WardenKit {
+  /** stable id for art/i18n lookups — never enters the schedule maths */
+  id: string;
+  /** arena playfield in tiles */
+  arenaW: number;
+  arenaH: number;
+  /** authored escalation phases; phases[i+1] applies past furyThresholds[i] */
+  phases: FuryPhase[];
+  /** phase transitions at fixed fractions of the awake window — TIME ONLY, never HP */
+  furyThresholds: readonly number[];
+  /** deterministic danger pattern of slam wave `index` as an arenaW*arenaH grid */
+  waveTiles(index: number, density: number): boolean[];
+  /** seed of the pre-determined lunge-landing sequence */
+  lungeSeed: number;
+  /** landing zone half-size: lunges knock down a (2z+1)² square around the spot */
+  lungeZone: number;
+  /** melee danger-ring band, Chebyshev distance from the scripted centre */
+  meleeRingMin: number;
+  meleeRingMax: number;
+  /** the ring is hot from this fraction of the wind-up through to the slam */
+  meleeRingHotFrom: number;
+  /** fraction of a telegraph spent rearing up before going airborne */
+  lungeWindupFrac: number;
+  /** engage leap (wave 0 Ward slam): beat held at the gate / return-arc length */
+  engageHoldMs: number;
+  engageReturnMs: number;
+}
 
 /** server-side tolerance for client→server latency when validating hits/knockdowns */
 export const ADJUDICATION_SLACK_MS = 700;
@@ -62,13 +100,17 @@ export const BARE_HANDS: WeaponCombat = { min: 1, max: 2, critChance: 0, critMul
  * Intended relationships (hold these when tuning integers): Bow ≈ 60% of melee
  * DPS (a safety tax for hitting from range); axe ≈ pickaxe DPS but opposite feel
  * (axe wide/swingy/high-crit, pickaxe fast/steady/narrow); ancients a ~×1.6 band
- * scale-up with the base tool's crit + cadence.
+ * scale-up with the base tool's crit. The Ancient Pickaxe alone pays a small
+ * cadence tax over its base tool (460 vs 400 ms) so the whole top CRAFTED melee
+ * tier — ancient axe/pickaxe, Sword, Forgebrand — converges at ~9.4 net DPS:
+ * the harvest key that opens the Delve must never outclass the pure-combat
+ * weapons forged from its loot (only the Fabled tier sits above, ~12+).
  */
 export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   bow: { min: 2, max: 2, critChance: 0.06, critMult: 1.5, attackMs: 500 },
   pickaxe: { min: 2, max: 3, critChance: 0.1, critMult: 1.8, attackMs: 400 },
   axe: { min: 2, max: 4, critChance: 0.16, critMult: 2.0, attackMs: 556 },
-  ancient_pickaxe: { min: 3, max: 5, critChance: 0.1, critMult: 1.8, attackMs: 400 },
+  ancient_pickaxe: { min: 3, max: 5, critChance: 0.1, critMult: 1.8, attackMs: 460 },
   ancient_axe: { min: 3, max: 6, critChance: 0.16, critMult: 2.0, attackMs: 556 },
   // The Sword (ADR-0007): the game's first PURE-COMBAT weapon — no harvest use.
   // It sits at the top of the melee band (≈ ancient-axe DPS) with its own crit +
@@ -206,11 +248,12 @@ export const FURY_PHASES: FuryPhase[] = [
 /** phase transitions at fixed fractions of the awake window — TIME ONLY, never HP */
 export const FURY_THRESHOLDS = [0.4, 0.75] as const;
 
-export function furyPhaseAt(elapsedMs: number, awakeMs: number): FuryPhase {
+export function furyPhaseAt(elapsedMs: number, awakeMs: number, kit: WardenKit = GUARDIAN_KIT): FuryPhase {
   const f = elapsedMs / awakeMs;
-  if (f >= FURY_THRESHOLDS[1]) return FURY_PHASES[2];
-  if (f >= FURY_THRESHOLDS[0]) return FURY_PHASES[1];
-  return FURY_PHASES[0];
+  for (let i = kit.furyThresholds.length - 1; i >= 0; i--) {
+    if (f >= kit.furyThresholds[i]) return kit.phases[i + 1];
+  }
+  return kit.phases[0];
 }
 
 // ------------------------------------------------------------- the wave walk
@@ -232,12 +275,12 @@ export interface WaveInfo {
  * length and kind come from the fury phase at the wave's START, so the whole
  * walk is reproducible from `engagedAt` alone (~90 iterations for a full fight).
  */
-export function waveInfoAt(elapsedMs: number, awakeMs: number): WaveInfo {
+export function waveInfoAt(elapsedMs: number, awakeMs: number, kit: WardenKit = GUARDIAN_KIT): WaveInfo {
   let startMs = 0;
   let index = 0;
   let lungeCount = 0;
   for (;;) {
-    const phase = furyPhaseAt(startMs, awakeMs);
+    const phase = furyPhaseAt(startMs, awakeMs, kit);
     const kind: WaveInfo['kind'] = index > 0 && index % phase.lungeEvery === 0 ? 'lunge' : 'slam';
     if (elapsedMs < startMs + phase.wavePeriodMs) {
       return { index, startMs, phase, msIntoWave: elapsedMs - startMs, kind, lungeCount };
@@ -261,72 +304,80 @@ function mulberry32(seed: number) {
 }
 
 /**
- * Danger tiles of a slam wave, in arena-local coordinates, as a W*H boolean
- * grid. The four authored pattern families are unchanged from v2; fury only
- * parameterizes them with extra scattered pounds (`density`). Each leaves
- * dodgeable safe ground.
+ * The Guardian's four authored slam families (ring / cross / rhythm stripes /
+ * scattered pounds), unchanged from v2, as a kit-pluggable factory: a future
+ * Warden may reuse them on its own arena + seed, or bring its own pattern fn.
+ * Fury only parameterizes them with extra scattered pounds (`density`). Each
+ * leaves dodgeable safe ground.
  */
-export function waveTiles(index: number, density = 1): boolean[] {
-  const grid = new Array<boolean>(ARENA_W * ARENA_H).fill(false);
-  const rng = mulberry32(0x9e3779b9 ^ (index * 2654435761));
-  const set = (x: number, y: number) => {
-    if (x >= 0 && y >= 0 && x < ARENA_W && y < ARENA_H) grid[y * ARENA_W + x] = true;
-  };
-  const family = index % 4;
-  if (family === 0) {
-    // ring around the arena center — safe inside and outside
-    const cx = ARENA_W / 2 - 0.5;
-    const cy = ARENA_H / 2 - 0.5;
-    const r = 2.5 + rng() * (Math.min(ARENA_W, ARENA_H) / 2 - 3);
-    for (let y = 0; y < ARENA_H; y++) {
-      for (let x = 0; x < ARENA_W; x++) {
-        const d = Math.hypot(x - cx, y - cy);
-        if (Math.abs(d - r) <= 1.1) set(x, y);
+export function makeSlamFamilyWaveTiles(w: number, h: number, seed: number): WardenKit['waveTiles'] {
+  return (index: number, density: number): boolean[] => {
+    const grid = new Array<boolean>(w * h).fill(false);
+    const rng = mulberry32(seed ^ (index * 2654435761));
+    const set = (x: number, y: number) => {
+      if (x >= 0 && y >= 0 && x < w && y < h) grid[y * w + x] = true;
+    };
+    const family = index % 4;
+    if (family === 0) {
+      // ring around the arena center — safe inside and outside
+      const cx = w / 2 - 0.5;
+      const cy = h / 2 - 0.5;
+      const r = 2.5 + rng() * (Math.min(w, h) / 2 - 3);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const d = Math.hypot(x - cx, y - cy);
+          if (Math.abs(d - r) <= 1.1) set(x, y);
+        }
+      }
+    } else if (family === 1) {
+      // cross: one 2-wide row band + one 2-wide column band
+      const ry = 1 + Math.floor(rng() * (h - 3));
+      const cx = 1 + Math.floor(rng() * (w - 3));
+      for (let x = 0; x < w; x++) {
+        set(x, ry);
+        set(x, ry + 1);
+      }
+      for (let y = 0; y < h; y++) {
+        set(cx, y);
+        set(cx + 1, y);
+      }
+    } else if (family === 2) {
+      // rhythm stripes: alternating 2-wide column bands, parity flips per wave
+      const parity = Math.floor(rng() * 2);
+      for (let x = 0; x < w; x++) {
+        if (Math.floor(x / 2) % 2 === parity) {
+          for (let y = 0; y < h; y++) set(x, y);
+        }
+      }
+    } else {
+      // scattered slams: a handful of 2x2 pounds
+      const blobs = 5 + Math.floor(rng() * 3);
+      for (let b = 0; b < blobs; b++) {
+        const x = Math.floor(rng() * (w - 1));
+        const y = Math.floor(rng() * (h - 1));
+        set(x, y);
+        set(x + 1, y);
+        set(x, y + 1);
+        set(x + 1, y + 1);
       }
     }
-  } else if (family === 1) {
-    // cross: one 2-wide row band + one 2-wide column band
-    const ry = 1 + Math.floor(rng() * (ARENA_H - 3));
-    const cx = 1 + Math.floor(rng() * (ARENA_W - 3));
-    for (let x = 0; x < ARENA_W; x++) {
-      set(x, ry);
-      set(x, ry + 1);
-    }
-    for (let y = 0; y < ARENA_H; y++) {
-      set(cx, y);
-      set(cx + 1, y);
-    }
-  } else if (family === 2) {
-    // rhythm stripes: alternating 2-wide column bands, parity flips per wave
-    const parity = Math.floor(rng() * 2);
-    for (let x = 0; x < ARENA_W; x++) {
-      if (Math.floor(x / 2) % 2 === parity) {
-        for (let y = 0; y < ARENA_H; y++) set(x, y);
-      }
-    }
-  } else {
-    // scattered slams: a handful of 2x2 pounds
-    const blobs = 5 + Math.floor(rng() * 3);
-    for (let b = 0; b < blobs; b++) {
-      const x = Math.floor(rng() * (ARENA_W - 1));
-      const y = Math.floor(rng() * (ARENA_H - 1));
+    // fury densification: extra 2x2 pounds on top of the base family
+    const extra = Math.round((density - 1) * 6);
+    for (let b = 0; b < extra; b++) {
+      const x = Math.floor(rng() * (w - 1));
+      const y = Math.floor(rng() * (h - 1));
       set(x, y);
       set(x + 1, y);
       set(x, y + 1);
       set(x + 1, y + 1);
     }
-  }
-  // fury densification: extra 2x2 pounds on top of the base family
-  const extra = Math.round((density - 1) * 6);
-  for (let b = 0; b < extra; b++) {
-    const x = Math.floor(rng() * (ARENA_W - 1));
-    const y = Math.floor(rng() * (ARENA_H - 1));
-    set(x, y);
-    set(x + 1, y);
-    set(x, y + 1);
-    set(x + 1, y + 1);
-  }
-  return grid;
+    return grid;
+  };
+}
+
+/** danger tiles of the kit's slam wave `index`, in arena-local coordinates */
+export function waveTiles(index: number, density = 1, kit: WardenKit = GUARDIAN_KIT): boolean[] {
+  return kit.waveTiles(index, density);
 }
 
 // ------------------------------------------------------------- lunges
@@ -343,17 +394,17 @@ export const LUNGE_ZONE = 1;
  * Pre-determined landing spot of the Nth lunge (1-based) — pure f(index),
  * kept a full zone inside the arena border.
  */
-export function lungeTarget(lungeIndex: number): ArenaSpot {
-  const rng = mulberry32(0x51ed270b ^ (lungeIndex * 2654435761));
+export function lungeTarget(lungeIndex: number, kit: WardenKit = GUARDIAN_KIT): ArenaSpot {
+  const rng = mulberry32(kit.lungeSeed ^ (lungeIndex * 2654435761));
   return {
-    ax: 2 + Math.floor(rng() * (ARENA_W - 4)),
-    ay: 2 + Math.floor(rng() * (ARENA_H - 4)),
+    ax: 2 + Math.floor(rng() * (kit.arenaW - 4)),
+    ay: 2 + Math.floor(rng() * (kit.arenaH - 4)),
   };
 }
 
 /** where the Guardian stands after `lungeCount` completed lunges */
-export function guardianSpotAt(lungeCount: number, home: ArenaSpot): ArenaSpot {
-  return lungeCount === 0 ? home : lungeTarget(lungeCount);
+export function guardianSpotAt(lungeCount: number, home: ArenaSpot, kit: WardenKit = GUARDIAN_KIT): ArenaSpot {
+  return lungeCount === 0 ? home : lungeTarget(lungeCount, kit);
 }
 
 export interface GuardianPose {
@@ -376,38 +427,43 @@ export interface GuardianPose {
  * curve; only the target is overridden). Purely additive — wave ≥1 and every
  * authored number are untouched; omit `entrance` and behaviour is unchanged.
  */
-export function guardianPoseAt(elapsedMs: number, awakeMs: number, home: ArenaSpot, entrance?: ArenaSpot): GuardianPose {
-  const w = waveInfoAt(elapsedMs, awakeMs);
+export function guardianPoseAt(
+  elapsedMs: number,
+  awakeMs: number,
+  home: ArenaSpot,
+  entrance?: ArenaSpot,
+  kit: WardenKit = GUARDIAN_KIT,
+): GuardianPose {
+  const w = waveInfoAt(elapsedMs, awakeMs, kit);
+  const wind = kit.lungeWindupFrac;
   if (w.index === 0 && entrance) {
     const teleg = w.phase.telegraphMs;
     // OUT: rear up at home, then leap home → entrance, crashing the Ward shut at `teleg`
     if (w.msIntoWave < teleg) {
       const t0 = w.msIntoWave / teleg;
-      if (t0 < 0.35) return { spot: home, target: entrance, windup: true, airborne: false, leapT: 0 };
-      return { spot: home, target: entrance, windup: false, airborne: true, leapT: (t0 - 0.35) / 0.65 };
+      if (t0 < wind) return { spot: home, target: entrance, windup: true, airborne: false, leapT: 0 };
+      return { spot: home, target: entrance, windup: false, airborne: true, leapT: (t0 - wind) / (1 - wind) };
     }
     // landed on the entrance (Ward slammed). Hold a beat at the gate, then LEAP
     // BACK home — a visible bound, not a teleport — settling just as wave 0's
     // first Eye Window opens. Purely the engage-leap's return arc; wave ≥1 and
     // every authored number stay untouched.
     const sinceSlam = w.msIntoWave - teleg;
-    const holdMs = 220;
-    const returnMs = 560;
-    if (sinceSlam < holdMs) return { spot: entrance, target: null, windup: false, airborne: false, leapT: 1 };
-    if (sinceSlam < holdMs + returnMs) {
-      return { spot: entrance, target: home, windup: false, airborne: true, leapT: (sinceSlam - holdMs) / returnMs };
+    if (sinceSlam < kit.engageHoldMs) return { spot: entrance, target: null, windup: false, airborne: false, leapT: 1 };
+    if (sinceSlam < kit.engageHoldMs + kit.engageReturnMs) {
+      return { spot: entrance, target: home, windup: false, airborne: true, leapT: (sinceSlam - kit.engageHoldMs) / kit.engageReturnMs };
     }
     return { spot: home, target: null, windup: false, airborne: false, leapT: 0 };
   }
-  const from = guardianSpotAt(w.lungeCount, home);
+  const from = guardianSpotAt(w.lungeCount, home, kit);
   if (w.kind !== 'lunge') return { spot: from, target: null, windup: false, airborne: false, leapT: 0 };
-  const target = lungeTarget(w.lungeCount + 1);
+  const target = lungeTarget(w.lungeCount + 1, kit);
   if (w.msIntoWave >= w.phase.telegraphMs) {
     return { spot: target, target: null, windup: false, airborne: false, leapT: 1 }; // landed
   }
   const t = w.msIntoWave / w.phase.telegraphMs;
-  if (t < 0.35) return { spot: from, target, windup: true, airborne: false, leapT: 0 };
-  return { spot: from, target, windup: false, airborne: true, leapT: (t - 0.35) / 0.65 };
+  if (t < wind) return { spot: from, target, windup: true, airborne: false, leapT: 0 };
+  return { spot: from, target, windup: false, airborne: true, leapT: (t - wind) / (1 - wind) };
 }
 
 // ------------------------------------------------------------- Eye Windows
@@ -424,8 +480,8 @@ export function eyeWindowOf(w: WaveInfo): EyeWindow {
 }
 
 /** is the amber eye open at this instant? (client-side rendering/prediction) */
-export function eyeOpenAt(elapsedMs: number, awakeMs: number): boolean {
-  const e = eyeWindowOf(waveInfoAt(elapsedMs, awakeMs));
+export function eyeOpenAt(elapsedMs: number, awakeMs: number, kit: WardenKit = GUARDIAN_KIT): boolean {
+  const e = eyeWindowOf(waveInfoAt(elapsedMs, awakeMs, kit));
   return elapsedMs >= e.openMs && elapsedMs < e.closeMs;
 }
 
@@ -435,10 +491,10 @@ export function eyeOpenAt(elapsedMs: number, awakeMs: number): boolean {
  * SERVER elapsed time decides (ADR-0002). Slack < any wave period, so at
  * most the two boundary waves can hold an overlapping window.
  */
-export function eyeOpenWithin(elapsedMs: number, awakeMs: number, slackMs: number): boolean {
+export function eyeOpenWithin(elapsedMs: number, awakeMs: number, slackMs: number, kit: WardenKit = GUARDIAN_KIT): boolean {
   const lo = Math.max(0, elapsedMs - slackMs);
   for (const t of lo === elapsedMs ? [elapsedMs] : [lo, elapsedMs]) {
-    const e = eyeWindowOf(waveInfoAt(t, awakeMs));
+    const e = eyeWindowOf(waveInfoAt(t, awakeMs, kit));
     if (lo < e.closeMs && elapsedMs >= e.openMs) return true;
   }
   return false;
@@ -458,13 +514,14 @@ export function isDangerousAt(
   awakeMs: number,
   slackMs = 0,
   entrance?: ArenaSpot,
+  kit: WardenKit = GUARDIAN_KIT,
 ): boolean {
-  if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return false;
+  if (ax < 0 || ay < 0 || ax >= kit.arenaW || ay >= kit.arenaH) return false;
   const lo = Math.max(0, elapsedMs - slackMs);
   const hi = elapsedMs + slackMs;
   let lastIndex = -1;
   for (const t of [lo, hi]) {
-    const w = waveInfoAt(t, awakeMs);
+    const w = waveInfoAt(t, awakeMs, kit);
     if (w.index === lastIndex) continue;
     lastIndex = w.index;
     const slamStart = w.startMs + w.phase.telegraphMs;
@@ -473,13 +530,13 @@ export function isDangerousAt(
     if (w.index === 0 && entrance) {
       // wave 0 (ADR-0004): the engage-leap crashes on the arena entrance (the
       // Ward slam), NOT its authored slam tiles — the doorway is the danger
-      if (Math.abs(ax - entrance.ax) <= LUNGE_ZONE && Math.abs(ay - entrance.ay) <= LUNGE_ZONE) return true;
+      if (Math.abs(ax - entrance.ax) <= kit.lungeZone && Math.abs(ay - entrance.ay) <= kit.lungeZone) return true;
       continue;
     }
     if (w.kind === 'lunge') {
-      const target = lungeTarget(w.lungeCount + 1);
-      if (Math.abs(ax - target.ax) <= LUNGE_ZONE && Math.abs(ay - target.ay) <= LUNGE_ZONE) return true;
-    } else if (waveTiles(w.index, w.phase.density)[ay * ARENA_W + ax]) {
+      const target = lungeTarget(w.lungeCount + 1, kit);
+      if (Math.abs(ax - target.ax) <= kit.lungeZone && Math.abs(ay - target.ay) <= kit.lungeZone) return true;
+    } else if (kit.waveTiles(w.index, w.phase.density)[ay * kit.arenaW + ax]) {
       return true;
     }
   }
@@ -505,18 +562,18 @@ export const MELEE_RING_MAX = 3;
 export const MELEE_RING_HOT_FROM = 0.45;
 
 /** the ring's hot window within a wave, or null if this wave carries no ring */
-export function meleeRingWindow(w: WaveInfo): EyeWindow | null {
+export function meleeRingWindow(w: WaveInfo, kit: WardenKit = GUARDIAN_KIT): EyeWindow | null {
   if (w.index === 0 || w.kind === 'lunge') return null;
   return {
-    openMs: w.startMs + w.phase.telegraphMs * MELEE_RING_HOT_FROM,
+    openMs: w.startMs + w.phase.telegraphMs * kit.meleeRingHotFrom,
     closeMs: w.startMs + w.phase.telegraphMs,
   };
 }
 
 /** is arena tile (ax, ay) inside the melee ring around `centre`? */
-export function inMeleeRing(ax: number, ay: number, centre: ArenaSpot): boolean {
+export function inMeleeRing(ax: number, ay: number, centre: ArenaSpot, kit: WardenKit = GUARDIAN_KIT): boolean {
   const d = Math.max(Math.abs(ax - centre.ax), Math.abs(ay - centre.ay));
-  return d >= MELEE_RING_MIN && d <= MELEE_RING_MAX;
+  return d >= kit.meleeRingMin && d <= kit.meleeRingMax;
 }
 
 /**
@@ -532,19 +589,44 @@ export function inMeleeRingDangerAt(
   awakeMs: number,
   home: ArenaSpot,
   slackMs = 0,
+  kit: WardenKit = GUARDIAN_KIT,
 ): boolean {
-  if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return false;
+  if (ax < 0 || ay < 0 || ax >= kit.arenaW || ay >= kit.arenaH) return false;
   const lo = Math.max(0, elapsedMs - slackMs);
   const hi = elapsedMs + slackMs;
   let lastIndex = -1;
   for (const t of [lo, hi]) {
-    const w = waveInfoAt(t, awakeMs);
+    const w = waveInfoAt(t, awakeMs, kit);
     if (w.index === lastIndex) continue;
     lastIndex = w.index;
-    const ring = meleeRingWindow(w);
+    const ring = meleeRingWindow(w, kit);
     if (!ring) continue;
     if (hi < ring.openMs || lo > ring.closeMs) continue;
-    if (inMeleeRing(ax, ay, guardianSpotAt(w.lungeCount, home))) return true;
+    if (inMeleeRing(ax, ay, guardianSpotAt(w.lungeCount, home, kit), kit)) return true;
   }
   return false;
 }
+
+// ------------------------------------------------------------- the first kit
+
+/**
+ * The Guardian — the ladder's rung 0 and the kit every legacy export defaults
+ * to. Defined last so it can bundle the authored tables/constants above, which
+ * remain the exported single source of the Guardian's numbers.
+ */
+export const GUARDIAN_KIT: WardenKit = {
+  id: 'guardian',
+  arenaW: ARENA_W,
+  arenaH: ARENA_H,
+  phases: FURY_PHASES,
+  furyThresholds: FURY_THRESHOLDS,
+  waveTiles: makeSlamFamilyWaveTiles(ARENA_W, ARENA_H, 0x9e3779b9),
+  lungeSeed: 0x51ed270b,
+  lungeZone: LUNGE_ZONE,
+  meleeRingMin: MELEE_RING_MIN,
+  meleeRingMax: MELEE_RING_MAX,
+  meleeRingHotFrom: MELEE_RING_HOT_FROM,
+  lungeWindupFrac: 0.35,
+  engageHoldMs: 220,
+  engageReturnMs: 560,
+};
