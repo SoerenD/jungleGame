@@ -11,12 +11,16 @@ Grill session: 2026-07-12. Full decision record: `docs/adr/0017-warden-ladder-re
 
 **All decisions owner-confirmed (sign-off session 2026-07-12):** the ladder frame; Realms
 presented as separate maps (ADR-0009 doctrine superseded — ADR-0017); exactly **3 Wardens /
-3 slots** with attribute mapping Boots=+8% move, Gloves=+8% attack speed, Helm=+2/+3 flat band
-raise; the three signature mechanics **the Tide** (Mire), **Echoes** (Hushdark), **Cultivation**
-(Terraces); all names (Wardens, Realms, resources, refiners, armor, the Mirefang) with one
-sign-off amendment — rung 3's crop renamed **mirebulb → wildgrain** (raw; Husking Mill husks it
-into pearlgrain) to avoid the clash with rung 1's Mire realm; and the Depth-kit "the Warden" →
-i18n rename **"the Sentinel"**. No open blockers — T5+ are clear to build.
+3 slots** with attribute mapping Boots=+8% move, **Cuirass (chest)**=+8% attack speed,
+Helm=+2/+3 flat band raise; the three signature mechanics **the Tide** (Mire), **Echoes**
+(Hushdark), **Cultivation** (Terraces); all names (Wardens, Realms, resources, refiners, armor,
+the Mirefang) with one sign-off amendment — rung 3's crop renamed **mirebulb → wildgrain** (raw;
+Husking Mill husks it into pearlgrain) to avoid the clash with rung 1's Mire realm; and the
+Depth-kit "the Warden" → i18n rename **"the Sentinel"**. No open blockers — T5+ are clear to
+build. **POST-T3 AMENDMENT (ADR-0017 Amendment 1):** the rung-3 slot is a chest **Cuirass**
+(`verdant_cuirass`, slot `chest`), not Gloves — a plated torso reads as clearly different armor
+where tiny gloves did not; the +8% attack-speed attribute is unchanged. Slot `gloves`→`chest`
+everywhere; jw_equip whitelist `('boots','chest','helm')`.
 
 ## Resolved design facts (from the grill, verified against code)
 
@@ -60,7 +64,7 @@ i18n rename **"the Sentinel"**. No open blockers — T5+ are clear to build.
 |---|---|---|---|---|---|---|---|
 | 1 | **Mire Warden** | Mangrove Coast | **The Sunken Mire** | salt-reed bed → saltreed | **Brine Kiln** → tideglass | **Tideglass Boots** (+move) | **The Tide** — walkability/nodes are a pure function of the real clock (~35 min cycle, wade-slow flooding, spring-tide appointment events) |
 | 2 | **Echo Warden** | The Cavern Mouth (surface) | **The Hushdark** | echo-crystal seam → echo crystal | **Chime Kiln** → hushsteel | **Hushsteel Helm** (+2/+3 band) | **Echoes** — record a 20 s ghost of your own movement that loops forever; multi-pedestal vault doors solved by layering ghosts of absent friends (async co-op) |
-| 3 | **Verdant Warden** | Overgrown Temple | **The Verdant Terraces** | (planted) grain paddies → wildgrain | **Husking Mill** → pearlgrain | **Verdant-woven Gloves** (+atk speed) | **Cultivation** — plant/tend multi-stage crops; timers only *unlock* a tend, a player act advances it; nothing ever dies (dormancy, not loss) |
+| 3 | **Verdant Warden** | Overgrown Temple | **The Verdant Terraces** | (planted) grain paddies → wildgrain | **Husking Mill** → pearlgrain | **Verdant-woven Cuirass** (chest, +atk speed) | **Cultivation** — plant/tend multi-stage crops; timers only *unlock* a tend, a player act advances it; nothing ever dies (dormancy, not loss) |
 
 - **Trigger scenario per rung** (recycles previous tier's economy): pooled Offering at the
   Warden's altar with visible bars (Seal pattern) — rung 1 demands tier-2 goods (hardwood /
@@ -119,7 +123,7 @@ player in the World doesn't see Realm dots and vice versa; existing map byte-sta
 **T3 — Armor system core**
 3 armor ItemIds + `players.equipped jsonb` + `jw_equip`; equip UI (crafting panel section);
 stat application (move/cadence/band incl. `applyMobHit`); avatar overlay draws for
-boots/gloves/helm (all 20 frames, up-facing hair + side hair-trail handled); `armor` on the
+boots/chest/helm (all 20 frames, up-facing hair + side hair-trail handled); `armor` on the
 pos/presence payload + `look` recompose + local rebuild on equip. AC: two browsers see each
 other's armor incl. swing pose; stats verifiably applied; reload persists equipment.
 
@@ -144,7 +148,7 @@ Helm). Mandatory design fixes from refutation: anti-parking rule; quantize recor
 
 **T7 — Rung 3: Verdant Warden + The Verdant Terraces** (Cultivation: plot rows
 `{stage, stageEnteredAt, tendScore}`, tend RPC advances stage, dormancy never loss; Husking
-Mill; feast dish; Gloves). Stage durations tuned to session cadence.
+Mill; feast dish; the Cuirass — chest slot). Stage durations tuned to session cadence.
 
 **T8 — Depth-kit label rename** *(tiny, independent)*
 i18n-only: `t.depth.bossWarden` EN/DE "the Warden" → "the Sentinel"; internal `'warden'` kit id
@@ -155,8 +159,8 @@ Order: T0/T1/T8 parallel → T2 → T3/T4 → T5 → T6 → T7. Names + mechanic
 
 ## Scope boundaries (do NOT build)
 
-- No chest/pants armor, no armor sets beyond one piece per Realm, no defense/HP semantics, no
-  armor leaderboard.
+- No pants armor; the rung-3 chest Cuirass is the only body piece (ADR-0017 Amendment 1). No
+  armor sets beyond one piece per Realm, no defense/HP semantics, no armor leaderboard.
 - No `map_id` dimension, no second Phaser scene per Realm, no touching the live Sawmill
   table/RPCs, no Guardian behavior/tuning changes (except via the no-op T0 refactor).
 - No concurrent fights; no reactive/host-sim Warden.
@@ -191,7 +195,7 @@ Order: T0/T1/T8 parallel → T2 → T3/T4 → T5 → T6 → T7. Names + mechanic
 - **Refiner**: The family of Structures that turn a deposit into a refined Resource over real
   time, lazily from timestamps (the Sawmill is the first; each Realm adds one). _Avoid_:
   machine, factory, processor.
-- **Armor**: Worn pieces (Boots, Gloves, Helm) crafted from Realm chains, visible on the
+- **Armor**: Worn pieces (Boots, Cuirass, Helm) crafted from Realm chains, visible on the
   Avatar and synced to all Players; each grants one small attribute (move, attack speed, flat
   band raise). Armor is power, never protection — there is no HP to protect. _Avoid_: gear,
   equipment, defense.

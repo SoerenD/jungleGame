@@ -4,7 +4,8 @@
 
 **Accepted 2026-07-12.** Drafted the same day from the Warden-ladder grill session; the items
 then pending — three Wardens / three armor slots (Boots +8% move, Gloves +8% attack speed,
-Helm +2/+3 band), the district implementation of Realms, the per-Warden signature mechanics
+Helm +2/+3 band; the rung-3 Gloves were later swapped for a chest **Cuirass** — see
+Amendment 1), the district implementation of Realms, the per-Warden signature mechanics
 (the Tide / Echoes / Cultivation), all names (rung 3's crop amended mirebulb → **wildgrain**
 at sign-off), and the Depth-kit "the Sentinel" rename — were owner-confirmed in the sign-off
 session the same day. The ladder frame and the separately-presented-map read were owner-decided
@@ -52,13 +53,16 @@ wood→planks** in both TS and SQL.
    working **unchanged, with zero DB migration for maps**. The minimap and player-dot display
    filter by district rect; that is presentation, not architecture. A `map_id` dimension (the
    true-separate-map alternative) is rejected below.
-3. **Three Wardens, three armor slots: Boots, Gloves, Helm.** Chest and pants armor are cut:
+3. **Three Wardens, three armor slots: Boots, Gloves, Helm.** _(Amended — the rung-3 Gloves
+   are now a chest **Cuirass**; the "chest armor cut" sentence below is superseded for that
+   one piece. See Amendment 1.)_ Chest and pants armor are cut:
    they would paint over the shirt/pants palette picks that *are* a Player's avatar identity,
    and five full rungs (~5 realms + kits + mechanics + chains) is roughly twice the credible
    scope. Each piece grants exactly one attribute, client-applied like the Village buffs
    (ADR-0013 pattern, no migration for the stats themselves): **Boots +8% move speed, Gloves
-   +8% attack speed, Helm +2 min / +3 max flat raise on the held weapon's damage band** —
-   all numbers are a node-pure tuning table (`ARMOR_BUFFS`, village.ts precedent).
+   +8% attack speed** (now the Cuirass, same attribute)**, Helm +2 min / +3 max flat raise on
+   the held weapon's damage band** — all numbers are a node-pure tuning table (`ARMOR_BUFFS`,
+   village.ts precedent).
 4. **Armor is individual power — a deliberate reversal.** ADR-0013 rejected "individual/earned
    combat stats" as against the collective ethos. This ADR reverses that, bounded: every piece
    is craftable by every Player from open communal chains, armor **gates nothing**, there is no
@@ -90,6 +94,28 @@ wood→planks** in both TS and SQL.
    equipment"; explicitly no defense semantics). The shipped Depth boss kit currently *named*
    "the Warden" (ADR-0016) keeps its internal `'warden'` kit id but is **renamed in i18n to
    "the Sentinel"** (EN/DE label-only change) so the ladder owns the word.
+
+## Amendment 1 — the rung-3 armor piece: Gloves → chest Cuirass (2026-07-12, later same day)
+
+After T3 shipped, the owner found the rung-3 **Gloves** changed the avatar sprite too little
+to read as new armor (the overlay was a few pixels on each hand). They are replaced by a
+**chest Cuirass** (`verdant_cuirass`, slot `chest`): a plated-torso overlay is a genuinely
+different silhouette. This **reverses the "chest armor cut" of Decision §3 for this one
+piece.** The two reasons §3 gave for the cut are both handled:
+
+- *Identity* (a chest plate paints over the shirt-colour pick): the cuirass leaves a **V-neck**
+  that keeps a sliver of the shirt colour, so the palette pick still reads.
+- *Scope* (five rungs ≈ twice the work): unchanged — this is still **three pieces / three
+  rungs**; only the rung-3 slot label moved from `gloves` to `chest`.
+
+Everything else in §3/§4 stands: the attribute mapping is unchanged (the Cuirass grants the
+same **+8% attack speed**), armor still gates nothing, no defense/HP semantics, and it is drawn
+as overlay layers baked into the per-player avatar sheet — now plating the torso across all 20
+frames (front plate with the V-neck + central ridge + rivets + pauldrons, a spine-ridged back
+plate, a collared side profile). Implementation: `ARMOR_SLOTS`/`ARMOR_BUFFS` use `chest`;
+`jw_equip`'s slot whitelist is `('boots','chest','helm')` (function-only follow-up migration
+`equip_chest_slot`, the `0013_armor_equip.sql` file carrying the final whitelist). Shipped on
+master (34b22d3).
 
 ## Considered Options
 
