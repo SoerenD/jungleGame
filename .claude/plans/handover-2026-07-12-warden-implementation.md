@@ -4,20 +4,18 @@ Nachfolge-Session: zuerst `.claude/plans/feature-plan-warden-ladder-armor.md` (P
 Entscheidungen owner-bestätigt) und `docs/adr/0017-warden-ladder-realms-and-armor.md` lesen.
 Dieses Dokument trägt nur den SESSION-Zustand, der nirgendwo sonst steht.
 
-## Stand: T0–T2/T8 COMMITTED, T3+T4 UNCOMMITTED im Arbeitsbaum
+## Stand: T0–T4 + T8 + Charakterfenster ALLE COMMITTED auf `master` (nicht gepusht)
 
-Vier Commits auf `master`: 3ea4115 (Docs/ADR/Plan/Handover), 63b8d0a (T0 WardenKit),
+Commits auf `master`: 3ea4115 (Docs/ADR/Plan/Handover), 63b8d0a (T0 WardenKit),
 7712686 (Warden-Sheets), 0c78580 (Sammel-Commit: Swing-Pose + T1 Refiner-Kernel +
-T2 Distrikte + Moor-Rework + Salzried-Kette + T8 Sentinel — die Features teilen sich
-types.ts/backends/GameScene/i18n und shippen deshalb zusammen).
+T2 Distrikte + Moor-Rework + Salzried-Kette + T8 Sentinel), 97de4dc (Handover-Doc),
+**34b22d3 (T3 Rüstung + WoW-Charakterfenster + T4 Warden-Kampf — Sammel-Commit, weil
+sich die Features types/backends/GameScene/hud/i18n teilen wie 0c78580).** NICHT
+gepusht (Owner pusht selbst). Arbeitsbaum ist sonst sauber.
 
-**NEU und UNCOMMITTED (T3+T4-Session, 2026-07-12 Nacht):** 15 geänderte Dateien +
-4 neue (src/content/armor.ts, src/content/wardens.ts, supabase/migrations/0013 + 0014).
-Owner hat DIESE Commits noch nicht freigegeben — erst fragen. Empfohlene Häppchen:
-T3 Rüstung (armor.ts + avatars-Overlays + jw_equip/0013 + Equip-UI + Stats) |
-T4 Warden-Kampf (wardens.ts + fight.warden-Mutex + Altar-RPC/0014 + Tor-Schlüssel +
-Totem-Rezept). Beide teilen sich types/backends/GameScene/hud/i18n — zur Not ein
-Sammel-Commit wie 0c78580.
+Migrationen 0012/0013/0014 (+ die Funktions-Nachzieh-Migration `equip_chest_slot`)
+sind LIVE DEPLOYED auf irjxvtgrzkmvjomozyiv. Die 0013-Datei trägt bereits die finale
+chest-Whitelist.
 
 ## Was fertig und verifiziert ist (alles im Arbeitsbaum)
 
