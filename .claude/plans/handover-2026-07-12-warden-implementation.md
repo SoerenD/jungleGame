@@ -4,20 +4,14 @@ Nachfolge-Session: zuerst `.claude/plans/feature-plan-warden-ladder-armor.md` (P
 Entscheidungen owner-bestätigt) und `docs/adr/0017-warden-ladder-realms-and-armor.md` lesen.
 Dieses Dokument trägt nur den SESSION-Zustand, der nirgendwo sonst steht.
 
-## KRITISCH: der Arbeitsbaum ist UNCOMMITTED
+## Stand ist COMMITTED (Owner-freigegeben, 2026-07-12 spät)
 
-`git status` muss ~16 geänderte + 5 neue Dateien zeigen. Wenn nicht (frischer Worktree!),
-STOPP — dann läuft diese Session am falschen Checkout; der Stand lebt im Haupt-Checkout
-`C:\Users\soeren.dierkes\littleGame`. Im Baum stecken ZWEI Batches:
-
-1. **Swing-Pose-Feature** (älter, vor dieser Session): 20-Frame-Avatar-Sheet + `swings`-Zähler
-   auf dem Positionsstream (avatars.ts, types.ts, backends, GameScene-Teile) + eine
-   DPS-Tuning-Zeile (ancient_pickaxe 460 ms) + Zonen-Label-Fix in journey.ts.
-2. **Diese Session**: alles Folgende.
-
-Empfohlene Commit-Häppchen (Owner hat Commits noch NICHT freigegeben — erst fragen):
-swing-pose | T0 WardenKit (guardian.ts) | T1 Refiner-Kernel + Panel-CSS-Fix | T2 Distrikte +
-Moor-Rework + Salzried | T8 Sentinel + Warden-Sheets/Compose-Scripts.
+Vier Commits auf `master`: 3ea4115 (Docs/ADR/Plan/Handover), 63b8d0a (T0 WardenKit),
+7712686 (Warden-Sheets), 0c78580 (Sammel-Commit: Swing-Pose + T1 Refiner-Kernel +
+T2 Distrikte + Moor-Rework + Salzried-Kette + T8 Sentinel — die Features teilen sich
+types.ts/backends/GameScene/i18n und shippen deshalb zusammen). Arbeitsbaum sauber.
+**Frischer Worktree?** Der Stand ist im selben Repo erreichbar: `git merge master`
+(oder auf master wechseln) holt alles.
 
 ## Was fertig und verifiziert ist (alles im Arbeitsbaum)
 
