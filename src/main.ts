@@ -80,7 +80,7 @@ async function start(): Promise<void> {
     void backend.markIntroSeen();
   }
   await assetsReady;
-  initHud(me.name, localStorage.getItem(MUTE_KEY) === '1');
+  initHud(me.name, localStorage.getItem(MUTE_KEY) === '1', me.appearance);
   game.scene.stop('BootScene');
   game.scene.start('GameScene', { backend, me });
 }

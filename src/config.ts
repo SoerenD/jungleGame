@@ -225,6 +225,24 @@ export function sealQuotas(heads: number): Record<'wood' | 'stone' | 'fiber' | '
   };
 }
 
+// ---------------------------------------------------------------- Warden altars (ADR-0017)
+// Each Warden's altar demands the PREVIOUS tier's goods (rung 1 = tier-2
+// economy: hardwood / obsidian / cooked fish), per-head like the Seal and
+// clamped by the same generic jw_contribute_warden loop. Dev-tiny under the
+// FAST_SEAL regime so the whole arc is testable solo.
+export const WARDEN_ALTAR_PER_HEAD: Record<string, Record<string, number>> = FAST_SEAL
+  ? { mire: { hardwood: 2, obsidian: 1, cooked_fish: 1 } }
+  : { mire: { hardwood: 6, obsidian: 4, cooked_fish: 3 } };
+
+/** the live altar target of one Warden: per-head × online heads (floored at 1) */
+export function wardenAltarQuotas(wardenId: string, heads: number): Record<string, number> {
+  const per = WARDEN_ALTAR_PER_HEAD[wardenId] ?? {};
+  const n = Math.max(1, Math.floor(heads));
+  const out: Record<string, number> = {};
+  for (const [item, q] of Object.entries(per)) out[item] = q * n;
+  return out;
+}
+
 // ---------------------------------------------------------------- v2: the Guardian
 // ?fight = instant summon ready: the Seal starts broken, joining grants a
 // Summoning Totem, and the Guardian is weak/brief enough to win or lose solo.
@@ -251,6 +269,15 @@ export const DEV_VILLAGE = params.has('village');
 // defeat, so districts are enterable for testing. Without the flag the gates
 // are dormant and inert — the real gate-key gating arrives with T4/T5.
 export const DEV_REALM_TEST = params.has('realmtest');
+// ?armor = T3 dev grant: joining hands you all three Armor pieces (through the
+// generic craft path, zero cost) so equip/overlays/stats are testable before
+// the Realm chains (T5–T7) craft them for real.
+export const DEV_ARMOR = params.has('armor');
+// ?wardenfight = T4 dev arc: joining grants the Mire Warden's totem + the
+// altar goods, and the Guardian's arena altar serves as the Mire altar — so
+// the full Offering → summon → fight → gate-key loop runs solo before the
+// authored Mangrove Coast altar/arena land with T5.
+export const DEV_WARDEN_FIGHT = params.has('wardenfight');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006
@@ -267,7 +294,7 @@ export const HP_PER_HEAD = 373;
 /** ?fight: a tiny fixed Guardian pool so a summon can be won or lost solo, fast */
 export const DEV_FIGHT_HP = 30;
 /** awake window: how long the Guardian stays dangerous AFTER the first strike (engagedAt) */
-export const GUARDIAN_AWAKE_MS = DEV_FIGHT ? 90_000 : 300_000;
+export const GUARDIAN_AWAKE_MS = DEV_FIGHT || DEV_WARDEN_FIGHT ? 90_000 : 300_000;
 /**
  * Dormant grace: a summoned-but-unstruck Guardian roams harmlessly for this
  * long so the party can gather; strike within it or it re-slumbers, totem spent

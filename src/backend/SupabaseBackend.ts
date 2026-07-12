@@ -1,12 +1,16 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
 import {
   ARENA_EMPTY_SLUMBER_MS,
+  DEV_ARMOR,
   DEV_FIGHT,
   DEV_FIGHT_HP,
+  DEV_WARDEN_FIGHT,
   DORMANT_TIMEOUT_MS,
   EXHAUSTION_KNOCKDOWNS,
   GUARDIAN_AWAKE_MS,
   HP_PER_HEAD,
+  wardenAltarQuotas,
+  WARDEN_ALTAR_PER_HEAD,
   MAP_PIECE_DROP_CHANCE,
   MAP_W,
   MAP_H,
@@ -38,6 +42,8 @@ import {
   type VillageRecord,
 } from '../content/village';
 import { sanitizeAppearance } from '../avatars';
+import { armorBuff, ARMOR_BUFFS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { kitOf, wardenDef } from '../content/wardens';
 import { asset } from '../paths';
 import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
 import { t } from '../i18n';
@@ -49,7 +55,11 @@ import type {
   WishResult,
   ContributeSealResult,
   ContributeVillageResult,
+  ContributeWardenResult,
+  OpenRealmResult,
   TradeResult,
+  WardenAltarState,
+  WardenWorldState,
   CookResult,
   CraftResult,
   CrateResult,
@@ -61,6 +71,7 @@ import type {
   DismantleResult,
   DungeonMsg,
   EatResult,
+  EquipResult,
   FightState,
   GuardianHitResult,
   HitResult,
@@ -102,7 +113,7 @@ interface WorldData {
 }
 
 /** what a Player broadcasts about themselves (presence + position stream) */
-type SelfPos = { name: string; appearance: Appearance; x: number; y: number; dir: Dir; moving: boolean; held?: ItemId; swings?: number };
+type SelfPos = { name: string; appearance: Appearance; x: number; y: number; dir: Dir; moving: boolean; held?: ItemId; swings?: number; armor?: EquippedArmor };
 
 const POS_BROADCAST_MS = 150; // cap the position stream; ~7/player-s keeps an 8-player shared channel under the realtime msg/s cap (remote sprites interpolate, so it stays smooth)
 // Presence refresh: keep the tracked snapshot from going totally stale for
@@ -140,6 +151,8 @@ export class SupabaseBackend implements Backend {
    */
   private worldId: string = WORLD_ID_DEFAULT;
   private appearance: Appearance = { skin: 1, hair: 1, shirt: 1, pants: 0 };
+  /** the worn Armor (ADR-0017 §4) — injected into every position/presence payload */
+  private equipped: EquippedArmor = {};
 
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
   private nodesById = new Map<string, StaticNode>();
@@ -155,6 +168,8 @@ export class SupabaseBackend implements Backend {
   private fightState: FightState | null = null;
   /** local mirror of the communal Village (ADR-0010), kept fresh from RPCs + events */
   private village: VillageRecord = emptyVillage();
+  /** local mirror of the per-Warden altar/gate state (ADR-0017), raw jsonb shape */
+  private wardens: Record<string, { altar: { broken: boolean; contributed: Record<string, number> }; gateOpen: boolean }> = {};
   // the Seal scales per-head: how many Players are online (from presence) and
   // the last raw seal row, so a join/leave can re-emit the bar with the new target
   private onlineCount = 1;
@@ -233,6 +248,17 @@ export class SupabaseBackend implements Backend {
       case 'villageChanged':
         this.village = args[0] as VillageRecord;
         break;
+      case 'wardenAltarChanged': {
+        const [id, altar] = args as [string, WardenAltarState];
+        const w = (this.wardens[id] ??= { altar: { broken: false, contributed: {} }, gateOpen: false });
+        w.altar = { broken: altar.broken, contributed: { ...altar.contributed } };
+        break;
+      }
+      case 'realmOpened': {
+        const w = (this.wardens[args[0] as string] ??= { altar: { broken: false, contributed: {} }, gateOpen: false });
+        w.gateOpen = true;
+        break;
+      }
       case 'guardianSummoned':
       case 'guardianEngaged':
         this.fightState = args[0] as FightState;
@@ -303,6 +329,31 @@ export class SupabaseBackend implements Backend {
     this.inv = (res.inventory ?? {}) as Inventory;
     this.tablets = (res.tablets ?? []) as string[];
 
+    if (DEV_ARMOR) {
+      // ?armor (T3 dev grant): hand over the three pieces through the generic
+      // zero-cost craft path — no new RPC, works against the live 0010 schema
+      for (const id of Object.keys(ARMOR_BUFFS)) {
+        if ((this.inv[id as ItemId] ?? 0) > 0) continue;
+        const granted = await this.rpc<any>('jw_craft', { p_who: name, p_cost: {}, p_output: id, p_count: 1, p_requires_tool: null });
+        if (granted?.inventory) this.inv = granted.inventory as Inventory;
+      }
+    }
+    if (DEV_WARDEN_FIGHT) {
+      // ?wardenfight (T4 dev arc): the Mire totem + altar goods, same path
+      const grants: Record<string, number> = { mire_totem: 1 };
+      for (const [item, per] of Object.entries(WARDEN_ALTAR_PER_HEAD.mire ?? {})) grants[item] = per * 2;
+      for (const [id, n] of Object.entries(grants)) {
+        if ((this.inv[id as ItemId] ?? 0) >= n) continue;
+        const granted = await this.rpc<any>('jw_craft', {
+          p_who: name, p_cost: {}, p_output: id, p_count: n - (this.inv[id as ItemId] ?? 0), p_requires_tool: null,
+        });
+        if (granted?.inventory) this.inv = granted.inventory as Inventory;
+      }
+    }
+    // worn Armor never survives losing the piece — re-validate against the pack.
+    // (res.equipped is absent until migration 0013 is live; that degrades to bare.)
+    this.equipped = sanitizeEquipped(res.equipped, this.inv);
+
     this.village = this.villageFromJson(res.village);
     // appear point (ADR-0010 §4): Hammock > Village Hall > server-returned spot.
     // A founded Hall makes the Village home for anyone without a Hammock.
@@ -310,7 +361,7 @@ export class SupabaseBackend implements Backend {
     const hallTile = !wp && this.village.hall ? this.hallWakeTile(this.village.hall) : null;
     const x = wp ? (wp.tx + 0.5) * TILE : hallTile ? (hallTile.tx + 0.5) * TILE : (res.x as number);
     const y = wp ? (wp.ty + 0.5) * TILE : hallTile ? (hallTile.ty + 0.5) * TILE : (res.y as number);
-    this.lastLocal = { name, appearance: appr, x, y, dir: 'down', moving: false };
+    this.lastLocal = { name, appearance: appr, x, y, dir: 'down', moving: false, armor: this.equipped };
 
     await this.connectRealtime(x, y);
 
@@ -325,6 +376,7 @@ export class SupabaseBackend implements Backend {
       introSeen: !!res.introSeen,
       journey: (res.journey ?? { steps: {}, hintUses: {} }) as JourneyState,
       explored: (res.explored ?? []) as number[],
+      equipped: { ...this.equipped },
     };
   }
 
@@ -490,15 +542,17 @@ export class SupabaseBackend implements Backend {
       moving: !!p.moving,
       held: p.held,
       swings: p.swings,
+      armor: p.armor,
     };
   }
 
   // ---------------------------------------------------------------- realtime-ish position
 
   sendPosition(x: number, y: number, dir: Dir, moving: boolean, held?: ItemId, swings?: number): void {
-    // `swings` rides the SAME broadcast payload (and the rare presence
-    // snapshot lastLocal already feeds) — no new channel, packet, or cadence
-    this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held, swings };
+    // `swings` and the worn `armor` ride the SAME broadcast payload (and the
+    // rare presence snapshot lastLocal already feeds) — no new channel, packet,
+    // or cadence; the backend injects armor itself so no call site threads it
+    this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held, swings, armor: this.equipped };
     this.broadcastPos(false);
     // B2: my own step out of / into the arena may start/cancel the grace
     if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
@@ -534,7 +588,7 @@ export class SupabaseBackend implements Backend {
       this.supa.from('nodes').select('id,type,tx,ty,hp,harvested_at').eq('world_id', this.worldId),
       this.supa.from('structures').select('id,type,tx,ty,placed_by,placed_at,text').eq('world_id', this.worldId),
       this.supa.from('chat').select('from_name,text,ts').eq('world_id', this.worldId).order('ts', { ascending: false }).limit(50),
-      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight,village').eq('id', this.worldId).maybeSingle(),
+      this.supa.from('world').select('gate_open,delve_open,treasure_index,seal,fight,village,wardens').eq('id', this.worldId).maybeSingle(),
       this.me ? this.supa.from('players').select('inventory,tablets').eq('world_id', this.worldId).eq('name', this.me).single() : Promise.resolve({ data: null } as any),
     ]);
 
@@ -548,6 +602,7 @@ export class SupabaseBackend implements Backend {
     this.treasureIndex = world?.treasure_index ?? 0;
     this.fightState = this.fightPublic(world?.fight);
     this.village = this.villageFromJson(world?.village);
+    this.wardensFromJson(world?.wardens);
 
     // overlay touched nodes onto the full static list, applying lazy regrow
     const now = Date.now();
@@ -591,6 +646,7 @@ export class SupabaseBackend implements Backend {
       seal: this.sealState(world?.seal),
       fight: this.fightState,
       village: { ...this.village, hall: this.village.hall ? { ...this.village.hall } : null },
+      wardens: this.wardensState(),
     };
   }
 
@@ -642,6 +698,7 @@ export class SupabaseBackend implements Backend {
   private fightPublic(f: any): FightState | null {
     if (!f) return null;
     return {
+      warden: f.warden ?? null,
       summonedAt: f.summonedAt,
       engagedAt: f.engagedAt ?? null,
       roster: f.roster ?? [],
@@ -650,6 +707,42 @@ export class SupabaseBackend implements Backend {
       participants: f.participants ?? [],
       emptySlumberAt: f.emptySlumberAt ?? null,
     };
+  }
+
+  /** normalise the stored per-Warden jsonb into the local mirror shape */
+  private wardensFromJson(w: any): void {
+    this.wardens = {};
+    if (!w || typeof w !== 'object') return;
+    for (const [id, rec] of Object.entries(w as Record<string, any>)) {
+      this.wardens[id] = {
+        altar: {
+          broken: !!rec?.altar?.broken,
+          contributed: { ...(rec?.altar?.contributed ?? {}) },
+        },
+        gateOpen: !!rec?.gateOpen,
+      };
+    }
+  }
+
+  /** one Warden's public state — the altar bars carry the live per-head quotas */
+  private wardenState(id: string): WardenWorldState {
+    const w = this.wardens[id];
+    return {
+      altar: {
+        broken: !!w?.altar.broken,
+        contributed: { ...(w?.altar.contributed ?? {}) },
+        quotas: wardenAltarQuotas(id, this.onlineCount),
+      },
+      gateOpen: !!w?.gateOpen,
+    };
+  }
+
+  private wardensState(): Record<string, WardenWorldState> {
+    const out: Record<string, WardenWorldState> = {};
+    for (const id of new Set([...Object.keys(WARDEN_ALTAR_PER_HEAD), ...Object.keys(this.wardens)])) {
+      out[id] = this.wardenState(id);
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- gathering / crafting
@@ -1006,6 +1099,56 @@ export class SupabaseBackend implements Backend {
     return { ok: true, fight, inventory: { ...this.inv } };
   }
 
+  // ---------------------------------------------------------------- the Wardens (ADR-0017)
+
+  /** lay every carried demanded good at the Warden's altar (the Seal pattern per rung) */
+  async contributeWardenAltar(wardenId: string): Promise<ContributeWardenResult> {
+    const res = await this.rpc<any>('jw_contribute_warden', {
+      p_who: this.me,
+      p_warden: wardenId,
+      p_quotas: wardenAltarQuotas(wardenId, this.onlineCount),
+    });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOTHING_TO_GIVE' };
+    this.inv = res.inventory as Inventory;
+    const altar: WardenAltarState = {
+      broken: !!res.altar?.broken,
+      contributed: { ...(res.altar?.contributed ?? {}) },
+      quotas: wardenAltarQuotas(wardenId, this.onlineCount),
+    };
+    this.relay('wardenAltarChanged', wardenId, altar); // dispatch updates the mirror + broadcasts
+    if (res.broken) this.pushChat(t.system.sender, t.system.wardenAltarComplete(t.warden.name(wardenId)));
+    return { ok: true, taken: res.taken as Inventory, inventory: { ...this.inv }, altar };
+  }
+
+  /** consume the Warden's Totem at its altar — refused while ANY fight runs (the mutex) */
+  async summonWarden(wardenId: string): Promise<SummonResult> {
+    const def = wardenDef(wardenId);
+    if (!def) return { ok: false, reason: 'NO_TOTEM' };
+    const res = await this.rpc<any>('jw_summon_warden', {
+      p_who: this.me,
+      p_warden: wardenId,
+      p_totem: def.totem,
+      p_awake_ms: GUARDIAN_AWAKE_MS,
+      p_dormant_ms: DORMANT_TIMEOUT_MS,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NO_TOTEM' };
+    this.inv = res.inventory as Inventory;
+    const fight = this.fightPublic(res.fight)!;
+    this.pushChat(t.system.sender, t.system.wardenStirs(t.warden.name(wardenId), this.me ?? ''));
+    this.relay('guardianSummoned', fight); // the ONE fight slot rides the guardian* events
+    return { ok: true, fight, inventory: { ...this.inv } };
+  }
+
+  /** turn the gate key at the Realm arch — one-time, forever (the Delve-shaft pattern) */
+  async openRealmGate(wardenId: string): Promise<OpenRealmResult> {
+    if (this.wardens[wardenId]?.gateOpen) return { ok: false, reason: 'ALREADY_OPEN' };
+    const res = await this.rpc<any>('jw_open_realm_gate', { p_who: this.me, p_warden: wardenId });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'ALREADY_OPEN' };
+    this.relay('realmOpened', wardenId);
+    this.pushChat(t.system.sender, t.system.realmOpened(t.warden.realmName(wardenId), this.me ?? ''));
+    return { ok: true, wardenId };
+  }
+
   // ---------------------------------------------------------------- the Delve (ADR-0007)
 
   async openDelve(): Promise<OpenDelveResult> {
@@ -1095,16 +1238,18 @@ export class SupabaseBackend implements Backend {
     // ADR-0006 §3): the authoritative pool subtraction still happens in the
     // server-ordered jw_guardian_hit RPC, which just applies this p_dmg
     const owned = withTool && (this.inv[withTool] ?? 0) > 0 ? withTool : undefined;
-    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.village.tier).critChance);
+    // the worn Helm's flat band raise rides in like the Village crit buff (ADR-0017 §3)
+    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.village.tier).critChance, armorBuff(this.equipped));
     const engaging = f.engagedAt === null;
     let roster = f.roster;
     let maxHp = f.maxHp;
     let eyeOpen = true;
     if (engaging) {
       roster = this.playersInArena();
-      maxHp = DEV_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * Math.max(1, roster.length);
+      maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * Math.max(1, roster.length);
     } else {
-      eyeOpen = eyeOpenWithin(Date.now() - (f.engagedAt as number), GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS);
+      // the Eye Window of the ACTIVE fight's kit (ADR-0017)
+      eyeOpen = eyeOpenWithin(Date.now() - (f.engagedAt as number), GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, kitOf(f.warden));
     }
     const res = await this.rpc<any>('jw_guardian_hit', {
       p_who: this.me,
@@ -1139,7 +1284,7 @@ export class SupabaseBackend implements Backend {
   async reportKnockdown(tx: number, ty: number): Promise<KnockdownResult> {
     const f = this.fightState;
     if (!f || f.engagedAt === null) return { ok: false, reason: 'NO_FIGHT' };
-    const wave = waveInfoAt(Date.now() - f.engagedAt, GUARDIAN_AWAKE_MS).index;
+    const wave = waveInfoAt(Date.now() - f.engagedAt, GUARDIAN_AWAKE_MS, kitOf(f.warden)).index;
     const res = await this.rpc<any>('jw_knockdown', {
       p_who: this.me,
       p_wave: wave,
@@ -1242,13 +1387,17 @@ export class SupabaseBackend implements Backend {
     // once the arena has emptied (whole roster Exhausted — ADR-0004 wipe) the
     // fight ends sooner; fire the reconcile then instead of at the awake window
     if (f.emptySlumberAt !== null) deadline = Math.min(deadline, f.emptySlumberAt);
+    // capture the identity now — the reconcile RPC nulls the fight server-side
+    const wardenName = f.warden ? t.warden.name(f.warden) : null;
     this.slumberTimer = window.setTimeout(() => {
       this.slumberTimer = null;
       void this.rpc<any>('jw_guardian_reconcile', { p_awake_ms: GUARDIAN_AWAKE_MS, p_dormant_ms: DORMANT_TIMEOUT_MS }).then((res) => {
         if (res?.slumbered) {
           this.pushChat(
             t.system.sender,
-            res.reason === 'dormant' ? t.system.guardianNoStrike : t.system.guardianUnbeaten,
+            res.reason === 'dormant'
+              ? wardenName ? t.system.wardenNoStrike(wardenName) : t.system.guardianNoStrike
+              : wardenName ? t.system.wardenUnbeaten(wardenName) : t.system.guardianUnbeaten,
           );
           this.relay('guardianSlumber');
         }
@@ -1293,6 +1442,30 @@ export class SupabaseBackend implements Backend {
     if (!res || res.ok === false) return { ok: false, reason: 'NOTHING_TO_EAT' };
     this.inv = res.inventory as Inventory;
     return { ok: true, inventory: { ...this.inv }, buffMs: SPEED_BUFF_MS };
+  }
+
+  /**
+   * Wear/unwear Armor (ADR-0017 §4, migration 0013). jw_equip re-validates
+   * ownership server-side and returns what stuck; the new look then rides the
+   * position stream + a fresh presence snapshot so peers recompose at once.
+   * Pre-migration the RPC returns null — degrade to a local (non-persisted)
+   * equip so the session still works.
+   */
+  async equip(equipped: EquippedArmor): Promise<EquipResult> {
+    const wanted = sanitizeEquipped(equipped, this.inv);
+    const res = await this.rpc<any>('jw_equip', { p_who: this.me, p_equipped: wanted });
+    this.equipped = res?.equipped ? sanitizeEquipped(res.equipped, this.inv) : wanted;
+    if (this.lastLocal) {
+      this.lastLocal = { ...this.lastLocal, armor: this.equipped };
+      this.broadcastPos(true);
+      // refresh the tracked snapshot too so LATE joiners see the new armor —
+      // a single re-track per equip stays far under the presence rate limit
+      if ((this.channel?.state as string) === 'joined') {
+        this.lastPresence = Date.now();
+        void this.channel!.track(this.lastLocal);
+      }
+    }
+    return { equipped: { ...this.equipped } };
   }
 
   async markIntroSeen(): Promise<void> {

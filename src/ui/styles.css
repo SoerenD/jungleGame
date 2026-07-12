@@ -349,6 +349,111 @@
   text-shadow: 0 1px 2px #000, 0 0 3px #000;
   pointer-events: none;
 }
+/* ADR-0017 §4: a worn Armor piece — lit teal frame + shield badge */
+.inv-slot.equipped {
+  border-color: rgba(99, 224, 184, 0.75);
+  box-shadow: 0 0 6px rgba(99, 224, 184, 0.35);
+}
+.inv-equipped {
+  position: absolute;
+  left: 2px;
+  top: 0;
+  font-size: calc(10px * var(--ui-scale));
+  color: #63e0b8;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+/* ---- WoW-style character panel: paperdoll + equipment slots + attributes ---- */
+#char-sheet {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.char-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.equip-slot {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.equip-slot.filled {
+  cursor: pointer;
+  border-color: rgba(99, 224, 184, 0.7);
+  box-shadow: 0 0 6px rgba(99, 224, 184, 0.3);
+}
+.equip-slot.equip-weapon.filled {
+  border-color: rgba(255, 209, 102, 0.7);
+  box-shadow: 0 0 6px rgba(255, 209, 102, 0.3);
+}
+.equip-slot.filled:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.equip-slot.drop {
+  border-color: var(--good);
+  background: rgba(140, 233, 154, 0.16);
+}
+.equip-slot .inv-icon {
+  width: 32px;
+  height: 32px;
+}
+.equip-ghost {
+  font-size: calc(18px * var(--ui-scale));
+  opacity: 0.3;
+  pointer-events: none;
+}
+#char-doll {
+  background: radial-gradient(ellipse at 50% 40%, rgba(99, 224, 184, 0.1), rgba(0, 0, 0, 0.35));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+#char-doll-canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+#char-attrs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 14px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+}
+.char-attr {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: calc(11px * var(--ui-scale));
+}
+.char-attr-k {
+  color: var(--dim);
+}
+.char-attr-v {
+  font-weight: 700;
+  color: var(--text);
+}
+.char-sep {
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 6px;
+  margin-bottom: 6px;
+}
+
 #inv-detail {
   margin-top: 8px;
   min-height: 54px;

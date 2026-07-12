@@ -1356,13 +1356,15 @@ function stepBrood(
  * path in both backends. The host has already validated range + tool ownership
  * (trusted-friends loose validation, ADR-0005). Mutates hp; sets 'dead' at 0.
  * The rng is injected (host passes Math.random) to keep this node-pure.
+ * `band` is the HITTER's worn-Armor band raise (ADR-0017 §3, the Hushsteel
+ * Helm) — the host reads it off the hitter's synced armor, like bonusCrit.
  */
-export function applyMobHit(m: MobState, tool: ToolId | undefined, rng: () => number, bonusCrit = 0): { damage: number; crit: boolean; dead: boolean } {
+export function applyMobHit(m: MobState, tool: ToolId | undefined, rng: () => number, bonusCrit = 0, band?: { bandMin: number; bandMax: number }): { damage: number; crit: boolean; dead: boolean } {
   if (m.st === 'dead') return { damage: 0, crit: false, dead: true };
   // the Bulwark's guard (ADR-0016): while the rune slab is up, every hit bounces —
   // damage flows only in the counter-slam + exposed-recover window of its cycle
   if (m.guard) return { damage: 0, crit: false, dead: false };
-  const { damage, crit } = rollGuardianDamage(tool, rng, bonusCrit);
+  const { damage, crit } = rollGuardianDamage(tool, rng, bonusCrit, band);
   m.hp = Math.max(0, m.hp - damage);
   const dead = m.hp <= 0;
   if (dead) m.st = 'dead';

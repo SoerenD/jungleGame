@@ -38,9 +38,56 @@ export const PAL: Record<string, string> = {
   o: '#ff8c2a', // ember / molten glow (Husk core)
   v: '#3b2c57', // deep obsidian-violet (Deep Guardian)
   V: '#6a52a0', // obsidian-violet, lit
+  T: '#63e0b8', // tideglass teal (the Mire's signal color)
+  q: '#2f8f74', // tideglass, deep
+  i: '#5a6b85', // hushsteel (cold blued steel)
+  I: '#93a8c9', // hushsteel, lit
 };
 
 export const GRIDS: Partial<Record<ItemId, string[]>> = {
+  // ADR-0017 — the Warden ladder's Armor pieces
+  tideglass_boots: [
+    '............',
+    '............',
+    '..xx...xx...',
+    '..xTx..xTx..',
+    '..xTx..xTx..',
+    '..xfx..xTx..',
+    '..xTTx.xTTx.',
+    '..xqqx.xqqx.',
+    '..xxxx.xxxx.',
+    '............',
+    '............',
+    '............',
+  ],
+  verdant_cuirass: [
+    '............',
+    '...xxxxxx...',
+    '..xGgeegGx..',
+    '.xGggggggGx.',
+    '.xGgGGGGggx.',
+    '.xGgggggggx.',
+    '.xGgeeeeggx.',
+    '.xGgggggggx.',
+    '..xGggggGx..',
+    '...xGGGGx...',
+    '....xxxx....',
+    '............',
+  ],
+  hushsteel_helm: [
+    '............',
+    '....xxxx....',
+    '...xIIfix...',
+    '..xIiiiiix..',
+    '..xiiiiiix..',
+    '..xddddddx..',
+    '..xix..xix..',
+    '...x....x...',
+    '............',
+    '............',
+    '............',
+    '............',
+  ],
   wood: [
     '............',
     '............',
@@ -524,6 +571,36 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '...xxxxxx...',
     '....xkkx....',
     '....xxxx....',
+    '............',
+  ],
+  // ADR-0017 — the Mire Warden's totem: dark hardwood, teal-lit obsidian eyes
+  mire_totem: [
+    '............',
+    '...xxxxxx...',
+    '..xkkkkkkx..',
+    '..xkTxxTkx..',
+    '..xkkkkkkx..',
+    '..xpxkkxpx..',
+    '..xkkxxkkx..',
+    '..xTkkkkTx..',
+    '...xxxxxx...',
+    '....xkkx....',
+    '....xxxx....',
+    '............',
+  ],
+  // the Sunken Mire's gate key — fused tideglass, brine-crusted
+  mire_key: [
+    '............',
+    '...xxx......',
+    '..xTTqx.....',
+    '..xTxTx.....',
+    '..xqTTx.....',
+    '...xqx......',
+    '....xqx.....',
+    '.....xqx....',
+    '....xqTqx...',
+    '.....xqTx...',
+    '......xx....',
     '............',
   ],
   bow: [

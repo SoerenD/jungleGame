@@ -1,9 +1,13 @@
 import {
   ARENA_EMPTY_SLUMBER_MS,
+  DEV_ARMOR,
   DEV_FIGHT,
   DEV_FIGHT_HP,
   DEV_VILLAGE,
+  DEV_WARDEN_FIGHT,
   DORMANT_TIMEOUT_MS,
+  wardenAltarQuotas,
+  WARDEN_ALTAR_PER_HEAD,
   GUARDIAN_AWAKE_MS,
   HP_PER_HEAD,
   GUARDIAN_SCALE_DROP,
@@ -51,6 +55,8 @@ import {
   type VillageTier,
 } from '../content/village';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
+import { armorBuff, ARMOR_BUFFS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { kitOf, wardenDef } from '../content/wardens';
 import { asset } from '../paths';
 import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
 import { t } from '../i18n';
@@ -62,7 +68,11 @@ import type {
   ChatMsg,
   ContributeSealResult,
   ContributeVillageResult,
+  ContributeWardenResult,
+  OpenRealmResult,
   TradeResult,
+  WardenAltarState,
+  WardenWorldState,
   WishResult,
   CookResult,
   CraftResult,
@@ -73,6 +83,7 @@ import type {
   Dir,
   DismantleResult,
   EatResult,
+  EquipResult,
   FightState,
   GuardianHitResult,
   HitResult,
@@ -145,10 +156,14 @@ interface DbPlayer {
   wakePoint?: { tx: number; ty: number };
   /** fog-of-war chunk indices this Player has explored (persisted like journey) */
   explored?: number[];
+  /** worn Armor (ADR-0017 §4) — persisted like wakePoint, ownership re-checked on load */
+  equipped?: EquippedArmor;
 }
 
 /** a live fight; the private fields never leave the server */
 interface DbFight {
+  /** ADR-0017: WardenDef id, or absent for the Guardian (rung 0) */
+  warden?: string;
   summonedAt: number;
   /** null while dormant; the server timestamp of the first landed hit (ADR-0004) */
   engagedAt: number | null;
@@ -185,6 +200,8 @@ interface Db {
     fight?: DbFight | null;
     /** the communal Village (ADR-0010): tier + additive pool + Hall location, tile-independent */
     village?: VillageRecord;
+    /** per-Warden progress (ADR-0017): its altar Offering + its Realm gate flag */
+    wardens?: Record<string, { altar: { broken: boolean; contributed: Record<string, number> }; gateOpen: boolean }>;
     /**
      * the World's Depth Records (ADR-0015) — the localStorage mirror of
      * migration 0011: one entry per Descent (deepest Depth + the roster that
@@ -278,6 +295,7 @@ export class MockBackend implements Backend {
     this.db.world.seal ??= { broken: false, contributed: { wood: 0, stone: 0, fiber: 0, fruit: 0 } };
     this.db.world.fight ??= null;
     this.db.world.village ??= emptyVillage();
+    this.db.world.wardens ??= {};
     this.db.world.depthRecords ??= { descents: {}, bests: {} };
     this.db.crates ??= {};
     this.db.sawmills ??= {};
@@ -482,6 +500,27 @@ export class MockBackend implements Backend {
       p.inventory.summon_totem = 1; // ?fight — instant summon ready
       this.saveNow();
     }
+    if (DEV_ARMOR) {
+      // ?armor — hand over all three pieces so equip/overlays/stats are testable (T3)
+      for (const id of Object.keys(ARMOR_BUFFS) as ItemId[]) {
+        if ((p.inventory[id] ?? 0) === 0) p.inventory[id] = 1;
+      }
+      this.saveNow();
+    }
+    if (DEV_WARDEN_FIGHT) {
+      // ?wardenfight — the Mire Warden's totem + enough altar goods for the
+      // whole solo arc (Offering → summon → fight → gate key)
+      const grants: Partial<Record<ItemId, number>> = { mire_totem: 1 };
+      for (const [item, per] of Object.entries(WARDEN_ALTAR_PER_HEAD.mire ?? {})) {
+        grants[item as ItemId] = per * 2;
+      }
+      for (const [item, n] of Object.entries(grants)) {
+        if ((p.inventory[item as ItemId] ?? 0) < n!) p.inventory[item as ItemId] = n!;
+      }
+      this.saveNow();
+    }
+    // worn Armor never survives losing the piece — re-validate against the pack
+    p.equipped = sanitizeEquipped(p.equipped, p.inventory);
     if (DEV_VILLAGE) {
       // ?village — keep a stock of tradeables so the Trade Post has surplus to swap
       const stock: Partial<Record<ItemId, number>> = { wood: 40, stone: 40, fiber: 40, fruit: 40, fish: 8 };
@@ -513,7 +552,18 @@ export class MockBackend implements Backend {
       introSeen: !!p.introSeen,
       journey: this.journeyState(p),
       explored: [...(p.explored ?? [])],
+      equipped: { ...p.equipped },
     };
+  }
+
+  /** wear/unwear Armor (ADR-0017 §4): keep only owned, slot-matching pieces */
+  async equip(equipped: EquippedArmor): Promise<EquipResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { equipped: {} };
+    p.equipped = sanitizeEquipped(equipped, p.inventory);
+    this.saveNow();
+    return { equipped: { ...p.equipped } };
   }
 
   async markExplored(chunks: number[]): Promise<void> {
@@ -597,6 +647,7 @@ export class MockBackend implements Backend {
       seal: this.sealState(),
       fight: this.fightState(),
       village: this.villageState(),
+      wardens: this.wardensState(),
     };
   }
 
@@ -681,6 +732,7 @@ export class MockBackend implements Backend {
     const f = this.db.world!.fight;
     if (!f) return null;
     return {
+      warden: f.warden ?? null,
       summonedAt: f.summonedAt,
       engagedAt: f.engagedAt,
       roster: [...f.roster],
@@ -689,6 +741,24 @@ export class MockBackend implements Backend {
       participants: [...f.participants],
       emptySlumberAt: f.emptySlumberAt,
     };
+  }
+
+  /** one Warden's public per-World state — altar bars carry the live quotas */
+  private wardenState(id: string): WardenWorldState {
+    const w = this.db.world!.wardens?.[id];
+    const altar: WardenAltarState = {
+      broken: !!w?.altar.broken,
+      contributed: { ...(w?.altar.contributed ?? {}) },
+      quotas: wardenAltarQuotas(id, 1), // the Mock world has one real Player
+    };
+    return { altar, gateOpen: !!w?.gateOpen };
+  }
+
+  /** every known Warden's state, for the world snapshot */
+  private wardensState(): Record<string, WardenWorldState> {
+    const out: Record<string, WardenWorldState> = {};
+    for (const id of Object.keys(WARDEN_ALTAR_PER_HEAD)) out[id] = this.wardenState(id);
+    return out;
   }
 
   /**
@@ -1377,13 +1447,14 @@ export class MockBackend implements Backend {
     const f = this.db.world!.fight;
     if (!f) return;
     const now = Date.now();
+    const wardenName = f.warden ? t.warden.name(f.warden) : null;
     if (f.engagedAt === null) {
       if (now < f.summonedAt + DORMANT_TIMEOUT_MS) return;
       this.db.world!.fight = null;
       this.saveNow();
       this.pushChat({
         from: t.system.sender,
-        text: t.system.guardianNoStrike,
+        text: wardenName ? t.system.wardenNoStrike(wardenName) : t.system.guardianNoStrike,
         ts: now,
       });
       this.emit('guardianSlumber');
@@ -1397,7 +1468,7 @@ export class MockBackend implements Backend {
       this.saveNow();
       this.pushChat({
         from: t.system.sender,
-        text: t.system.guardianUnbeaten,
+        text: wardenName ? t.system.wardenUnbeaten(wardenName) : t.system.guardianUnbeaten,
         ts: now,
       });
       this.emit('guardianSlumber');
@@ -1452,6 +1523,83 @@ export class MockBackend implements Backend {
     const pub = this.fightState()!;
     this.emit('guardianSummoned', pub);
     return { ok: true, fight: pub, inventory: { ...p.inventory } };
+  }
+
+  // ---------------------------------------------------------------- the Wardens (ADR-0017)
+
+  /** lay every carried demanded good at the Warden's altar (the Seal pattern per rung) */
+  async contributeWardenAltar(wardenId: string): Promise<ContributeWardenResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { ok: false, reason: 'NOTHING_TO_GIVE' };
+    const wardens = (this.db.world!.wardens ??= {});
+    const w = (wardens[wardenId] ??= { altar: { broken: false, contributed: {} }, gateOpen: false });
+    if (w.altar.broken) return { ok: false, reason: 'ALREADY_BROKEN' };
+    const quotas = wardenAltarQuotas(wardenId, 1);
+    const taken: Inventory = {};
+    for (const [item, quota] of Object.entries(quotas)) {
+      const need = Math.max(0, quota - (w.altar.contributed[item] ?? 0));
+      const give = Math.min(p.inventory[item as ItemId] ?? 0, need);
+      if (give > 0) {
+        p.inventory[item as ItemId] = (p.inventory[item as ItemId] ?? 0) - give;
+        w.altar.contributed[item] = (w.altar.contributed[item] ?? 0) + give;
+        taken[item as ItemId] = give;
+      }
+    }
+    if (Object.keys(taken).length === 0) return { ok: false, reason: 'NOTHING_TO_GIVE' };
+    w.altar.broken = Object.entries(quotas).every(([item, quota]) => (w.altar.contributed[item] ?? 0) >= quota);
+    this.saveNow();
+    const altar = this.wardenState(wardenId).altar;
+    this.emit('wardenAltarChanged', wardenId, altar);
+    if (w.altar.broken) {
+      this.pushChat({ from: t.system.sender, text: t.system.wardenAltarComplete(t.warden.name(wardenId)), ts: Date.now() });
+    }
+    return { ok: true, taken, inventory: { ...p.inventory }, altar };
+  }
+
+  /** consume the Warden's Totem and wake it — refused while ANY fight runs (the mutex) */
+  async summonWarden(wardenId: string): Promise<SummonResult> {
+    await this.lag();
+    this.reconcileGuardian();
+    const def = wardenDef(wardenId);
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!def || !p) return { ok: false, reason: 'NO_TOTEM' };
+    if (!this.db.world!.wardens?.[wardenId]?.altar.broken) return { ok: false, reason: 'ALTAR_INTACT' };
+    if (this.db.world!.fight) return { ok: false, reason: 'FIGHT_IN_PROGRESS' };
+    if ((p.inventory[def.totem] ?? 0) < 1) return { ok: false, reason: 'NO_TOTEM' };
+    p.inventory[def.totem]! -= 1; // spent now — never refunded (the Guardian's rule)
+    const fight: DbFight = {
+      warden: wardenId,
+      summonedAt: Date.now(),
+      engagedAt: null,
+      roster: [],
+      hp: 0,
+      maxHp: 0,
+      participants: [],
+      knockdowns: {},
+      lastKnockdownWave: {},
+      emptySlumberAt: null,
+    };
+    this.db.world!.fight = fight;
+    this.saveNow();
+    this.scheduleSlumberCheck();
+    this.pushChat({ from: t.system.sender, text: t.system.wardenStirs(t.warden.name(wardenId), this.me ?? ''), ts: Date.now() });
+    const pub = this.fightState()!;
+    this.emit('guardianSummoned', pub); // the ONE fight slot rides the guardian* events
+    return { ok: true, fight: pub, inventory: { ...p.inventory } };
+  }
+
+  /** turn the gate key at the Realm arch — one-time, forever (the Delve-shaft pattern) */
+  async openRealmGate(wardenId: string): Promise<OpenRealmResult> {
+    await this.lag();
+    const wardens = (this.db.world!.wardens ??= {});
+    const w = (wardens[wardenId] ??= { altar: { broken: false, contributed: {} }, gateOpen: false });
+    if (w.gateOpen) return { ok: false, reason: 'ALREADY_OPEN' };
+    w.gateOpen = true;
+    this.saveNow();
+    this.emit('realmOpened', wardenId);
+    this.pushChat({ from: t.system.sender, text: t.system.realmOpened(t.warden.realmName(wardenId), this.me ?? ''), ts: Date.now() });
+    return { ok: true, wardenId };
   }
 
   // ---------------------------------------------------------------- the Delve (ADR-0007)
@@ -1536,7 +1684,7 @@ export class MockBackend implements Backend {
       const roster = this.playersInArena();
       if (!roster.includes(me)) roster.push(me); // the striker is always in the fight
       f.roster = roster;
-      f.maxHp = DEV_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * roster.length;
+      f.maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * roster.length;
       f.hp = f.maxHp;
       this.scheduleSlumberCheck(); // switch from the dormant grace to the awake window
       this.emit('guardianEngaged', this.fightState()!); // clients re-anchor to engagedAt + raise the Ward
@@ -1547,16 +1695,18 @@ export class MockBackend implements Backend {
         return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true, damage: 0, crit: false };
       }
       // later hits are adjudicated from engagedAt + SERVER elapsed time, exactly
-      // like knockdowns: they land only inside an Eye Window
+      // like knockdowns: they land only inside an Eye Window — of the ACTIVE
+      // fight's kit (ADR-0017: a Warden fight derives from its own schedule)
       const elapsed = now - f.engagedAt;
-      if (!eyeOpenWithin(elapsed, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS)) {
+      if (!eyeOpenWithin(elapsed, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, kitOf(f.warden))) {
         return { ok: true, hp: f.hp, victory: false, inventory: { ...p.inventory }, deflected: true, damage: 0, crit: false };
       }
     }
     // trust the claimed in-hand Tool only if owned; the SERVER rolls the weapon
-    // band + crit (ADR-0006 §2/§3), supplying Math.random as the rng
+    // band + crit (ADR-0006 §2/§3), supplying Math.random as the rng. The worn
+    // Helm's flat band raise rides in like the Village crit buff (ADR-0017 §3).
     const owned = withTool && (p.inventory[withTool] ?? 0) > 0 ? withTool : undefined;
-    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.villageState().tier).critChance);
+    const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.villageState().tier).critChance, armorBuff(p.equipped));
     f.hp = Math.max(0, f.hp - dmg);
     if (!f.participants.includes(me)) f.participants.push(me);
     this.emit('guardianHit', f.hp, me);
@@ -1566,12 +1716,15 @@ export class MockBackend implements Backend {
       // out of the client-side Spoils window (claimDelveLoot). Mirrors the Supabase
       // path (p_scale_drop: 0) so both backends grant boss loot the same way.
       const participants = [...f.participants];
+      const wardenId = f.warden;
       this.db.world!.fight = null;
       this.saveNow();
       this.scheduleSlumberCheck();
       this.pushChat({
         from: t.system.sender,
-        text: t.system.guardianBested(participants.join(', '), GUARDIAN_SCALE_DROP),
+        text: wardenId
+          ? t.system.wardenBested(t.warden.name(wardenId), participants.join(', '))
+          : t.system.guardianBested(participants.join(', '), GUARDIAN_SCALE_DROP),
         ts: Date.now(),
       });
       this.emit('guardianVictory', participants);
@@ -1595,15 +1748,17 @@ export class MockBackend implements Backend {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
     // validate against SERVER time and the pure schedule, re-anchored to
-    // engagedAt (ADR-0002 amended); wave 0's danger is the entrance (Ward slam)
+    // engagedAt (ADR-0002 amended); wave 0's danger is the entrance (Ward slam).
+    // The schedule is the ACTIVE fight's kit (ADR-0017).
+    const kit = kitOf(f.warden);
     const elapsed = Date.now() - f.engagedAt;
     const ax = tx - this.world.arena.x;
     const ay = ty - this.world.arena.y;
     // danger is a slam/lunge tile OR the authored melee danger-ring hugging the
     // Guardian's live footprint (ADR-0006 §7) — both pure functions of the
     // schedule + position, adjudicated against SERVER time with the same slack
-    const inSlam = isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot());
-    const inRing = inMeleeRingDangerAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, this.homeSpot(), ADJUDICATION_SLACK_MS);
+    const inSlam = isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot(), kit);
+    const inRing = inMeleeRingDangerAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, this.homeSpot(), ADJUDICATION_SLACK_MS, kit);
     if (!inSlam && !inRing) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
@@ -1613,7 +1768,7 @@ export class MockBackend implements Backend {
     const wake = this.wakeTileFor(p);
     // the slam window (incl. slack) never crosses a wave boundary, so the
     // wave at the report's server time is the wave that hit
-    const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS).index;
+    const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS, kit).index;
     if (f.lastKnockdownWave[me] === wave) {
       // duplicate report for the same slam — count it once
       return { ok: true, knockdowns: f.knockdowns[me] ?? 0, exhausted: false, wake, atHammock };

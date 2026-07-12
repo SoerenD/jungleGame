@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { OBJECTS, TILESET } from '../assetConfig';
 import { AVATAR_H, AVATAR_IDLE, AVATAR_SWING, AVATAR_W, ensureAvatarTexture } from '../avatars';
+import { armorBuff, armorDef, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { kitOf, wardenDef, wardenForRealm, WARDENS } from '../content/wardens';
 import type {
   Backend,
   ChatMsg,
@@ -21,6 +23,8 @@ import type {
   RefinerConfig,
   SealState,
   Structure,
+  WardenAltarState,
+  WardenWorldState,
 } from '../backend/types';
 import { hintRetired, journeyComplete, type HintId } from '../content/journey';
 import {
@@ -28,6 +32,7 @@ import {
   DEV_DEEP,
   DEV_DUNGEON,
   DEV_REALM_TEST,
+  DEV_WARDEN_FIGHT,
   DEV_REFINER_TEST,
   DEV_WILD,
   EXHAUSTION_KNOCKDOWNS,
@@ -89,6 +94,7 @@ import {
   waveTiles,
   weaponCombat,
   type ArenaSpot,
+  type WardenKit,
   type WaveInfo,
 } from '../content/guardian';
 import {
@@ -253,6 +259,8 @@ interface RemoteView {
    * (bots/old clients never do — they render exactly as before).
    */
   swings?: number;
+  /** the Armor this peer wears (part of `look` — a change recomposes the texture) */
+  armor?: EquippedArmor;
 }
 
 /**
@@ -473,6 +481,11 @@ export class GameScene extends Phaser.Scene {
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   private remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
+  /** the worn Armor (ADR-0017 §4) — baked into my sheet, applied to my stats */
+  private equipped: EquippedArmor = {};
+  /** un-sent equip intent (rapid toggles coalesce here) + the send serializer */
+  private desiredEquip: EquippedArmor | null = null;
+  private equipChain: Promise<void> = Promise.resolve();
   private lastDir: Dir = 'down';
   private chatFocused = false;
   private placing: StructureId | null = null;
@@ -518,6 +531,9 @@ export class GameScene extends Phaser.Scene {
   private nearForge = false;
   // ---- v2: the Guardian
   private fight: FightState | null = null;
+  /** per-Warden altar/gate progress (ADR-0017) — mirrors the backend's view */
+  private wardens: Record<string, WardenWorldState> = {};
+  private nearWardenAltar = false;
   private guardianSprite!: Phaser.GameObjects.Sprite;
   private guardianShadow!: Phaser.GameObjects.Image;
   private guardianGlow!: Phaser.GameObjects.Image;
@@ -666,7 +682,15 @@ export class GameScene extends Phaser.Scene {
   /** the district the Player stands in (camera clamp + minimap crop + dot filter); null = the World */
   private activeDistrict: DistrictDef | null = null;
   /** both arches of every Realm gate, for the E-interaction scan */
-  private realmGates: { d: DistrictDef; side: 'world' | 'district'; x: number; y: number }[] = [];
+  private realmGates: {
+    d: DistrictDef;
+    side: 'world' | 'district';
+    x: number;
+    y: number;
+    /** everything this arch placed (container, blocker, shadow) — destroyable for a re-dress */
+    objs: Phaser.GameObjects.GameObject[];
+    glow?: Phaser.GameObjects.Image;
+  }[] = [];
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
@@ -846,8 +870,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // player — the Avatar texture is composed from this Player's palette picks
+    // (+ the worn Armor overlays, restored from the join and re-baked on equip)
+    this.equipped = sanitizeEquipped(this.me.equipped, this.me.inventory);
     const myTexture = `avatar-${this.me.name}`;
-    ensureAvatarTexture(this, myTexture, this.me.appearance);
+    ensureAvatarTexture(this, myTexture, this.me.appearance, this.equipped);
     this.playerShadow = this.addShadow(this.me.x, this.me.y, 14);
     this.player = this.physics.add.sprite(this.me.x, this.me.y, myTexture, AVATAR_IDLE.down);
     this.player.setOrigin(0.5, 1);
@@ -983,6 +1009,10 @@ export class GameScene extends Phaser.Scene {
       if (!snap.quest.gateOpen) this.buildGate();
       this.applySeal(snap.seal);
       if (!snap.seal.broken) this.buildSealBarrier();
+      // ADR-0017: per-Warden altar/gate progress — re-dress gates already open
+      this.wardens = snap.wardens ?? {};
+      for (const [id, w] of Object.entries(this.wardens)) bus.emit('warden-altar', id, w.altar);
+      this.rebuildRealmGates();
       // joining mid-fight: dormant or engaged, the state derives from the fight
       // row (engagedAt), not from having witnessed the summon/engage events
       if (snap.fight) this.startFight(snap.fight, false);
@@ -991,6 +1021,7 @@ export class GameScene extends Phaser.Scene {
       this.refreshDepthRecords();
     });
     bus.emit('inventory', this.inventory);
+    bus.emit('equipped', this.equipped);
 
     // zone tracking + lazy regrowth visuals — both timestamp-derived, no game tick
     this.time.addEvent({ delay: 300, loop: true, callback: () => this.checkZone() });
@@ -1220,13 +1251,34 @@ export class GameScene extends Phaser.Scene {
       }
     });
     this.backend.on('guardianVictory', (participants: string[]) => {
+      // capture the fallen colossus BEFORE endFight clears the slot (ADR-0017)
+      const wardenId = this.fight?.warden ?? null;
       this.endFight('victory');
-      // every fighter who landed a hit collects their Scales from the Spoils window
+      // every fighter who landed a hit collects their drops from the Spoils window
       // (the grant is deferred to the take — see openLoot/claimLoot). Non-fighters
       // in the arena still get the death-throes spectacle, but no loot bag.
-      if (participants.includes(this.me.name)) this.openLoot({ guardian_scale: GUARDIAN_SCALE_DROP, ...this.rollFabledDrops() }, t.loot.fromGuardian);
+      if (participants.includes(this.me.name)) {
+        const def = wardenDef(wardenId);
+        if (def) this.openLoot({ ...def.drops, ...this.rollFabledDrops() }, t.loot.fromWarden(t.warden.name(def.id)));
+        else this.openLoot({ guardian_scale: GUARDIAN_SCALE_DROP, ...this.rollFabledDrops() }, t.loot.fromGuardian);
+      }
     });
     this.backend.on('guardianSlumber', () => this.endFight('slumber'));
+    // ADR-0017: a Warden altar's pooled Offering moved (or broke)
+    this.backend.on('wardenAltarChanged', (id: string, altar: WardenAltarState) => {
+      const w = (this.wardens[id] ??= { altar, gateOpen: false });
+      w.altar = altar;
+      bus.emit('warden-altar', id, altar);
+      if (altar.broken) bus.emit('toast', t.toast.wardenAwaitsTotem(ITEMS[wardenDef(id)?.totem ?? 'summon_totem'].name), 'good');
+    });
+    // ADR-0017: a Realm gate opened — one-time, forever; re-dress its arches
+    this.backend.on('realmOpened', (id: string) => {
+      const w = (this.wardens[id] ??= { altar: { broken: false, contributed: {}, quotas: {} }, gateOpen: true });
+      w.gateOpen = true;
+      bus.emit('toast', t.toast.realmGateKeyTurn(t.warden.realmName(id)), 'good');
+      this.sfx('seal_gong', 0.6);
+      this.rebuildRealmGates();
+    });
     this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
     this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
     this.backend.on('creatures', (msg: CreatureMsg) => this.onCreatureMsg(msg));
@@ -1434,6 +1486,16 @@ export class GameScene extends Phaser.Scene {
    * first strike engages it. An already-engaged fight (mid-join) goes straight
    * to the live schedule (Ward already up), derived from `engagedAt`.
    */
+  /** the ACTIVE fight's kit (ADR-0017): fight.warden picks it; the Guardian by default */
+  private fightKit(): WardenKit {
+    return kitOf(this.fight?.warden);
+  }
+
+  /** the active fight's display name, or null for the Guardian (rung 0) */
+  private fightWardenName(fight: FightState | null): string | null {
+    return fight?.warden ? t.warden.name(fight.warden) : null;
+  }
+
   private startFight(fight: FightState, fresh: boolean): void {
     this.exhaustedThisFight = false;
     this.restoreGuardianWhole(); // a summon rekindles the runes: rebuild any slain wreck
@@ -1454,7 +1516,7 @@ export class GameScene extends Phaser.Scene {
       for (const r of this.meleeRingRects) r.destroy();
       this.meleeRingRects = [];
       if (fresh) this.sfx('roar', 0.4); // a low stir, not the full engage roar
-      bus.emit('fight-start', { hp: 0, maxHp: 0, engagedAt: null, awakeMs: GUARDIAN_AWAKE_MS, roster: [] });
+      bus.emit('fight-start', { hp: 0, maxHp: 0, engagedAt: null, awakeMs: GUARDIAN_AWAKE_MS, roster: [], title: this.fightWardenName(fight) });
     } else {
       this.beginEngaged(fight, false);
     }
@@ -1473,13 +1535,14 @@ export class GameScene extends Phaser.Scene {
    */
   private beginEngaged(fight: FightState, dramatic: boolean): void {
     this.fight = fight;
+    const kit = this.fightKit();
     const engagedAt = fight.engagedAt ?? Date.now();
     this.renderedWave = -1;
     this.landedWave = -1;
     this.eyeOpenShown = false;
-    const w = waveInfoAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS);
+    const w = waveInfoAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS, kit);
     this.slammedWave = w.msIntoWave >= w.phase.telegraphMs ? w.index : w.index - 1;
-    this.furyIndex = furyPhaseAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS).index;
+    this.furyIndex = furyPhaseAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS, kit).index;
     this.guardianGlow.setTint(FURY_TINTS[this.furyIndex]);
     this.guardianSprite.anims.play('guardian-idle');
     // The Ward is SLAMMED shut by the engage-leap, not raised on contact. For a
@@ -1504,7 +1567,7 @@ export class GameScene extends Phaser.Scene {
       });
     }
     this.fightMusic?.play();
-    bus.emit('fight-start', { hp: fight.hp, maxHp: fight.maxHp, engagedAt, awakeMs: GUARDIAN_AWAKE_MS, roster: fight.roster });
+    bus.emit('fight-start', { hp: fight.hp, maxHp: fight.maxHp, engagedAt, awakeMs: GUARDIAN_AWAKE_MS, roster: fight.roster, title: this.fightWardenName(fight) });
   }
 
   /**
@@ -1558,6 +1621,7 @@ export class GameScene extends Phaser.Scene {
 
   private endFight(kind: 'victory' | 'slumber'): void {
     if (!this.fight) return;
+    const wardenName = this.fightWardenName(this.fight);
     this.fight = null;
     this.exhaustedThisFight = false;
     this.wardPending = false;
@@ -1581,8 +1645,8 @@ export class GameScene extends Phaser.Scene {
       // rebuilt (startFight → restoreGuardianWhole). See shatterGuardian.
       this.sfx('seal_gong', 0.6);
       this.cameras.main.shake(500, 0.006);
-      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, t.fight.bestedFloat, '#ffd166');
-      bus.emit('toast', t.toast.guardianBested, 'good');
+      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, wardenName ? t.fight.wardenBestedFloat(wardenName) : t.fight.bestedFloat, '#ffd166');
+      bus.emit('toast', wardenName ? t.toast.wardenBested(wardenName) : t.toast.guardianBested, 'good');
       this.shatterGuardian();
     } else {
       // unbeaten: it simply re-slumbers, whole, ready to be roused again
@@ -1590,7 +1654,7 @@ export class GameScene extends Phaser.Scene {
       this.guardianSprite.anims.stop();
       this.guardianSprite.setFrame(0);
       this.sfx('roar', 0.35);
-      bus.emit('toast', t.toast.guardianUnbeaten, 'bad');
+      bus.emit('toast', wardenName ? t.toast.wardenUnbeaten(wardenName) : t.toast.guardianUnbeaten, 'bad');
     }
   }
 
@@ -1706,6 +1770,7 @@ export class GameScene extends Phaser.Scene {
   private renderWave(w: WaveInfo): void {
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
+    const kit = this.fightKit();
     const a = this.world.arena;
     const mark = (ax: number, ay: number, color: number, alpha: number) => {
       const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 2, TILE - 2, color, alpha);
@@ -1716,20 +1781,20 @@ export class GameScene extends Phaser.Scene {
       // wave 0 (ADR-0004): the engage-leap crashes on the entrance (the Ward
       // slam), so the doorway — not the authored slam tiles — is the danger
       const e = this.entranceSpot;
-      for (let dy = -LUNGE_ZONE; dy <= LUNGE_ZONE; dy++) {
-        for (let dx = -LUNGE_ZONE; dx <= LUNGE_ZONE; dx++) mark(e.ax + dx, e.ay + dy, 0xffa02f, 0.3);
+      for (let dy = -kit.lungeZone; dy <= kit.lungeZone; dy++) {
+        for (let dx = -kit.lungeZone; dx <= kit.lungeZone; dx++) mark(e.ax + dx, e.ay + dy, 0xffa02f, 0.3);
       }
     } else if (w.kind === 'lunge') {
       // the landing marker glows on the pre-determined spot before impact
-      const t = lungeTarget(w.lungeCount + 1);
-      for (let dy = -LUNGE_ZONE; dy <= LUNGE_ZONE; dy++) {
-        for (let dx = -LUNGE_ZONE; dx <= LUNGE_ZONE; dx++) mark(t.ax + dx, t.ay + dy, 0xffa02f, 0.3);
+      const t = lungeTarget(w.lungeCount + 1, kit);
+      for (let dy = -kit.lungeZone; dy <= kit.lungeZone; dy++) {
+        for (let dx = -kit.lungeZone; dx <= kit.lungeZone; dx++) mark(t.ax + dx, t.ay + dy, 0xffa02f, 0.3);
       }
     } else {
-      const tiles = waveTiles(w.index, w.phase.density);
-      for (let ay = 0; ay < ARENA_H; ay++) {
-        for (let ax = 0; ax < ARENA_W; ax++) {
-          if (tiles[ay * ARENA_W + ax]) mark(ax, ay, 0xff3322, 0.22);
+      const tiles = waveTiles(w.index, w.phase.density, kit);
+      for (let ay = 0; ay < kit.arenaH; ay++) {
+        for (let ax = 0; ax < kit.arenaW; ax++) {
+          if (tiles[ay * kit.arenaW + ax]) mark(ax, ay, 0xff3322, 0.22);
         }
       }
     }
@@ -1749,19 +1814,20 @@ export class GameScene extends Phaser.Scene {
     this.sfx('chop', lunge ? 0.6 : 0.35);
     this.cameras.main.shake(lunge ? 350 : 180, lunge ? 0.008 : 0.004);
     if (Date.now() < this.stunnedUntil) return; // already down — no double count
+    const kit = this.fightKit();
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
     const ax = ptx - this.world.arena.x;
     const ay = pty - this.world.arena.y;
-    if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) return;
+    if (ax < 0 || ay < 0 || ax >= kit.arenaW || ay >= kit.arenaH) return;
     if (w.index === 0) {
       // wave 0's danger is the entrance (the Ward slam), not the slam tiles
       const e = this.entranceSpot;
-      if (Math.abs(ax - e.ax) > LUNGE_ZONE || Math.abs(ay - e.ay) > LUNGE_ZONE) return;
+      if (Math.abs(ax - e.ax) > kit.lungeZone || Math.abs(ay - e.ay) > kit.lungeZone) return;
     } else if (lunge) {
-      const t = lungeTarget(w.lungeCount + 1);
-      if (Math.abs(ax - t.ax) > LUNGE_ZONE || Math.abs(ay - t.ay) > LUNGE_ZONE) return;
-    } else if (!waveTiles(w.index, w.phase.density)[ay * ARENA_W + ax]) {
+      const t = lungeTarget(w.lungeCount + 1, kit);
+      if (Math.abs(ax - t.ax) > kit.lungeZone || Math.abs(ay - t.ay) > kit.lungeZone) return;
+    } else if (!waveTiles(w.index, w.phase.density, kit)[ay * kit.arenaW + ax]) {
       return;
     }
     // caught! stun locally, let the server adjudicate against ITS clock
@@ -1820,7 +1886,8 @@ export class GameScene extends Phaser.Scene {
    * Pure schedule + position; the Guardian never reacts.
    */
   private updateMeleeRing(elapsed: number, wave: WaveInfo, time: number): void {
-    const ring = meleeRingWindow(wave);
+    const kit = this.fightKit();
+    const ring = meleeRingWindow(wave, kit);
     const hot = ring !== null && elapsed >= ring.openMs && elapsed < ring.closeMs;
     if (!hot) {
       if (this.meleeRingRects.length) {
@@ -1830,14 +1897,14 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const a = this.world.arena;
-    const centre = guardianSpotAt(wave.lungeCount, this.guardianHomeSpot);
+    const centre = guardianSpotAt(wave.lungeCount, this.guardianHomeSpot, kit);
     if (!this.meleeRingRects.length) {
-      for (let dy = -MELEE_RING_MAX; dy <= MELEE_RING_MAX; dy++) {
-        for (let dx = -MELEE_RING_MAX; dx <= MELEE_RING_MAX; dx++) {
+      for (let dy = -kit.meleeRingMax; dy <= kit.meleeRingMax; dy++) {
+        for (let dx = -kit.meleeRingMax; dx <= kit.meleeRingMax; dx++) {
           const ax = centre.ax + dx;
           const ay = centre.ay + dy;
-          if (ax < 0 || ay < 0 || ax >= ARENA_W || ay >= ARENA_H) continue;
-          if (!inMeleeRing(ax, ay, centre)) continue;
+          if (ax < 0 || ay < 0 || ax >= kit.arenaW || ay >= kit.arenaH) continue;
+          if (!inMeleeRing(ax, ay, centre, kit)) continue;
           const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 3, TILE - 3, 0xff5a2f, 0.26);
           rect.setDepth(3);
           this.meleeRingRects.push(rect);
@@ -1852,7 +1919,7 @@ export class GameScene extends Phaser.Scene {
     if (Date.now() < this.stunnedUntil || Date.now() < this.meleeRingShoveUntil) return;
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
-    if (!inMeleeRing(ptx - a.x, pty - a.y, centre)) return;
+    if (!inMeleeRing(ptx - a.x, pty - a.y, centre, kit)) return;
     // knockback juice: shove the Player off the body, away from the ring centre
     const cx = (a.x + centre.ax + 0.5) * TILE;
     const cy = (a.y + centre.ay + 0.5) * TILE;
@@ -1930,9 +1997,10 @@ export class GameScene extends Phaser.Scene {
    */
   private fireGuardianHit(tool: ToolId | undefined, x: number, y: number): void {
     // dormant (engagedAt null): this strike IS the engage — always lands. Once
-    // engaged, predict the Eye Window from the same schedule the server uses.
+    // engaged, predict the Eye Window from the same schedule the server uses
+    // (the ACTIVE fight's kit — ADR-0017).
     const engagedAt = this.fight?.engagedAt ?? null;
-    const eyeOpen = engagedAt === null ? !!this.fight : eyeOpenAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS);
+    const eyeOpen = engagedAt === null ? !!this.fight : eyeOpenAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS, this.fightKit());
     if (eyeOpen) {
       this.sfx('chop', 0.5);
       this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
@@ -1958,6 +2026,9 @@ export class GameScene extends Phaser.Scene {
   private summonAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.guardianAltarPos.x, this.guardianAltarPos.y - 8);
     if (d > INTERACT_RANGE + 8) return null;
+    // ?wardenfight (T4): the Guardian's altar stands in for the Mire altar so
+    // the whole Offering → summon arc runs before T5's authored altar lands
+    if (DEV_WARDEN_FIGHT) return this.wardenAltarAction('mire');
     if (this.fight) {
       return { swing: false, run: () => bus.emit('toast', t.toast.guardianAlreadyAwake, 'info') };
     }
@@ -1977,6 +2048,61 @@ export class GameScene extends Phaser.Scene {
             bus.emit('toast', t.toast.needTotem, 'bad');
           } else if (res.reason === 'SEAL_INTACT') {
             bus.emit('toast', t.toast.sealStillHolds, 'bad');
+          }
+        });
+      },
+    };
+  }
+
+  /**
+   * E at a Warden altar (ADR-0017): while its Offering is incomplete, lay the
+   * carried demanded goods (the Seal-monument shape — one press pours in what
+   * qualifies); once broken, a carried Warden Totem summons. The one-fight
+   * mutex refusal comes back from the backend either way.
+   */
+  private wardenAltarAction(id: string): EAction {
+    const def = WARDENS[id];
+    if (this.fight) {
+      return { swing: false, run: () => bus.emit('toast', t.toast.fightAlreadyRaging, 'info') };
+    }
+    if (!this.wardens[id]?.altar.broken) {
+      return {
+        swing: false,
+        run: () => {
+          void this.backend.contributeWardenAltar(id).then((res) => {
+            if (res.ok) {
+              this.inventory = res.inventory;
+              bus.emit('inventory', this.inventory);
+              const text = Object.entries(res.taken)
+                .map(([item, n]) => `-${n} ${ITEMS[item as ItemId]?.name ?? item}`)
+                .join('  ');
+              this.floatText(this.guardianAltarPos.x, this.guardianAltarPos.y - 20, text, '#63e0b8');
+              bus.emit('toast', t.toast.wardenAltarLaid, 'good');
+              this.sfx('place', 0.6);
+            } else if (res.reason === 'NOTHING_TO_GIVE') {
+              const needs = Object.entries(this.wardens[id]?.altar.quotas ?? {})
+                .map(([item, q]) => `${q} ${ITEMS[item as ItemId]?.name ?? item}`)
+                .join(' · ');
+              bus.emit('toast', t.toast.wardenAltarNeeds(needs), 'bad');
+            }
+          });
+        },
+      };
+    }
+    if ((this.inventory[def.totem] ?? 0) <= 0) {
+      return { swing: false, run: () => bus.emit('toast', t.toast.wardenAwaitsTotem(ITEMS[def.totem].name), 'info') };
+    }
+    return {
+      swing: false,
+      run: () => {
+        void this.backend.summonWarden(id).then((res) => {
+          if (res.ok) {
+            this.inventory = res.inventory;
+            bus.emit('inventory', this.inventory);
+          } else if (res.reason === 'FIGHT_IN_PROGRESS') {
+            bus.emit('toast', t.toast.fightAlreadyRaging, 'bad');
+          } else if (res.reason === 'NO_TOTEM') {
+            bus.emit('toast', t.toast.wardenAwaitsTotem(ITEMS[def.totem].name), 'bad');
           }
         });
       },
@@ -2256,10 +2382,12 @@ export class GameScene extends Phaser.Scene {
     else cam.setBounds(0, 0, WORLD_VIEW_W * TILE, WORLD_VIEW_H * TILE);
   }
 
-  /** is this Realm's gate open? T2 stub: only via the ?realmtest dev flag —
-   *  the Warden-defeat gate-key world flag replaces this in T4/T5 */
-  private realmGateOpen(_d: DistrictDef): boolean {
-    return DEV_REALM_TEST;
+  /** is this Realm's gate open? The Warden-defeat gate-key world flag (T4) —
+   *  or the ?realmtest dev override that predates it (T2) */
+  private realmGateOpen(d: DistrictDef): boolean {
+    if (DEV_REALM_TEST) return true;
+    const w = wardenForRealm(d.id);
+    return !!w && !!this.wardens[w.id]?.gateOpen;
   }
 
   /** both arches of every Realm gate: a standing stone arch in the World and
@@ -2338,8 +2466,9 @@ export class GameScene extends Phaser.Scene {
         this.tweens.add({ targets: gl, alpha: { from: 0.65, to: 1 }, duration: 1100 + 200 * glyphs.indexOf(gl), yoyo: true, repeat: -1, ease: 'sine.inout' });
       }
     }
-    this.addBlockerBody(tx, ty);
-    this.addShadow(x, y + 8, 30);
+    const blocker = this.addBlockerBody(tx, ty);
+    const shadow = this.addShadow(x, y + 8, 30);
+    let glowImg: Phaser.GameObjects.Image | undefined;
     if (open || side === 'district') {
       const glow = this.add
         .image(x, y - 4, 'glow')
@@ -2349,8 +2478,28 @@ export class GameScene extends Phaser.Scene {
         .setAlpha(0)
         .setDepth(890_000);
       this.glows.push({ img: glow, base: 0.35, x, y: y - 4 });
+      glowImg = glow;
     }
-    this.realmGates.push({ d, side, x, y });
+    this.realmGates.push({ d, side, x, y, objs: [c, blocker, shadow], glow: glowImg });
+  }
+
+  /**
+   * Tear down and re-raise every Realm arch — a gate's open/dormant dressing
+   * (portal shimmer, glyphs, label, glow) is baked at build time, so the
+   * one-time gate opening (realmOpened) re-dresses by rebuilding, the same
+   * way refreshDelveEntrance re-dresses the shaft.
+   */
+  private rebuildRealmGates(): void {
+    for (const g of this.realmGates) {
+      for (const o of g.objs) o.destroy();
+      if (g.glow) {
+        const i = this.glows.findIndex((e) => e.img === g.glow);
+        if (i >= 0) this.glows.splice(i, 1);
+        g.glow.destroy();
+      }
+    }
+    this.realmGates = [];
+    this.buildRealmGates();
   }
 
   /** E at a Realm gate: step through (open), or explain the dormant arch.
@@ -2360,6 +2509,11 @@ export class GameScene extends Phaser.Scene {
       if (Phaser.Math.Distance.Between(px, py, g.x, g.y) > INTERACT_RANGE + 10) continue;
       if (g.side === 'district') return { swing: false, run: () => this.leaveDistrict(g.d) };
       if (this.realmGateOpen(g.d)) return { swing: false, run: () => this.enterDistrict(g.d) };
+      // dormant — but a carried gate key turns it (once, for everyone, forever)
+      const w = wardenForRealm(g.d.id);
+      if (w && (this.inventory[w.gateKey] ?? 0) > 0) {
+        return { swing: false, run: () => void this.backend.openRealmGate(w.id) };
+      }
       return { swing: false, run: () => bus.emit('toast', t.toast.realmGateDormant, 'info') };
     }
     return null;
@@ -2666,12 +2820,58 @@ export class GameScene extends Phaser.Scene {
     const cooked = Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1;
     // ADR-0013: a running Dorffest (Wishing Well) speeds everyone in the World
     const festival = festivalActive(this.village, Date.now()) ? FESTIVAL_SPEED_FACTOR : 1;
-    return cooked * festival * (1 + villageBuff(this.village.tier).moveSpeed);
+    // ADR-0017 §3: the Tideglass Boots add their +8% beside the Village bonus
+    return cooked * festival * (1 + villageBuff(this.village.tier).moveSpeed + armorBuff(this.equipped).moveSpeed);
   }
 
-  /** combat swing cadence with the Village's attack-speed buff folded in (ADR-0013) */
+  /** combat swing cadence with the Village's attack-speed buff folded in
+   *  (ADR-0013) + the worn Gloves' bonus (ADR-0017 §3) */
   private atkCadence(baseMs: number): number {
-    return baseMs / (1 + villageBuff(this.village.tier).attackSpeed);
+    return baseMs / (1 + villageBuff(this.village.tier).attackSpeed + armorBuff(this.equipped).attackSpeed);
+  }
+
+  /** the worn-Armor band raise of WHOEVER landed the hit (ADR-0017 §3): mine
+   *  from my equipped record, a peer's from their synced `armor` field */
+  private armorBandOf(by: string): { bandMin: number; bandMax: number } {
+    return armorBuff(by === this.me.name ? this.equipped : this.remotes.get(by)?.armor);
+  }
+
+  /**
+   * Wear/unwear one Armor piece (ADR-0017 §4): already worn → bare the slot,
+   * else seat it there. The backend persists + re-validates and its record is
+   * adopted; the sheet re-bakes locally at once (peers recompose off the
+   * armor-carrying position broadcast the backend just pushed).
+   *
+   * Requests are SERIALIZED and coalesced: each toggle folds into a shared
+   * desired record and the chain sends one equip at a time — without this,
+   * two quick clicks would each compute from the last ACKNOWLEDGED state and
+   * the slower round-trip would silently undo the faster one.
+   */
+  private toggleArmor(item: ItemId): void {
+    const def = armorDef(item);
+    if (!def) return;
+    const next: EquippedArmor = { ...(this.desiredEquip ?? this.equipped) };
+    if (next[def.slot] === item) delete next[def.slot];
+    else next[def.slot] = item;
+    this.desiredEquip = next;
+    this.equipChain = this.equipChain.then(async () => {
+      const want = this.desiredEquip;
+      if (!want) return; // an earlier link already sent the coalesced record
+      this.desiredEquip = null;
+      const res = await this.backend.equip(want);
+      this.equipped = res.equipped;
+      this.rebuildOwnAvatar();
+      bus.emit('equipped', this.equipped);
+      this.sfx('craft', 0.4);
+    });
+  }
+
+  /** re-bake my own sheet (equip/unequip) and point the live sprite at it */
+  private rebuildOwnAvatar(): void {
+    const myTexture = `avatar-${this.me.name}`;
+    this.player.anims.stop();
+    ensureAvatarTexture(this, myTexture, this.me.appearance, this.equipped);
+    this.player.setTexture(myTexture, AVATAR_IDLE[this.lastDir]);
   }
 
   /**
@@ -2847,6 +3047,8 @@ export class GameScene extends Phaser.Scene {
         }
       });
     });
+    // ADR-0017 §4: the inventory's Equip button toggles one Armor piece
+    bus.on('equip-toggle', (item: ItemId) => this.toggleArmor(item));
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
     // the Village contribution panel's Give button: pour the chosen amounts in
     bus.on('village-give', (amounts: Inventory) => this.contributeVillage(amounts));
@@ -4042,11 +4244,13 @@ export class GameScene extends Phaser.Scene {
 
   private upsertRemote(p: PlayerPos): void {
     if (p.name === this.me.name) return;
-    const look = JSON.stringify(p.appearance);
+    // the recompose key folds the worn Armor in (ADR-0017 §4): an equip
+    // re-dresses the remote body exactly like a rejoined-with-new-look edit
+    const look = JSON.stringify([p.appearance, p.armor ?? null]);
     const texture = `avatar-${p.name}`;
     let r = this.remotes.get(p.name);
     if (!r) {
-      ensureAvatarTexture(this, texture, p.appearance);
+      ensureAvatarTexture(this, texture, p.appearance, p.armor);
       const shadow = this.addShadow(p.x, p.y, 14);
       const sprite = this.add.sprite(p.x, p.y, texture, AVATAR_IDLE.down);
       sprite.setOrigin(0.5, 1);
@@ -4078,14 +4282,15 @@ export class GameScene extends Phaser.Scene {
         .setScale(1.6)
         .setAlpha(0)
         .setDepth(890_000);
-      r = { sprite, label, shadow, heldSprite, torchGlow, held: null, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving, look };
+      r = { sprite, label, shadow, heldSprite, torchGlow, held: null, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving, look, armor: p.armor };
       this.remotes.set(p.name, r);
       this.emitPresence();
     } else if (r.look !== look) {
-      // they re-joined with an edited Avatar — recompose their texture
+      // they re-joined with an edited Avatar, or equipped Armor — recompose
       r.look = look;
+      r.armor = p.armor;
       r.sprite.anims.stop();
-      ensureAvatarTexture(this, texture, p.appearance);
+      ensureAvatarTexture(this, texture, p.appearance, p.armor);
       r.sprite.setTexture(texture, AVATAR_IDLE[p.dir]);
     }
     r.targetX = p.x;
@@ -4371,6 +4576,15 @@ export class GameScene extends Phaser.Scene {
       this.nearMonument = nearMon;
       bus.emit('seal-near', nearMon);
       if (nearMon) this.tickJourney('visit_seal');
+    }
+    // ADR-0017: near a Warden altar the Offering-bars panel shows (?wardenfight
+    // borrows the Guardian's altar; T5 moves this onto the authored Mire altar)
+    const nearWarden =
+      DEV_WARDEN_FIGHT &&
+      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.guardianAltarPos.x, this.guardianAltarPos.y) < TILE * 6;
+    if (nearWarden !== this.nearWardenAltar) {
+      this.nearWardenAltar = nearWarden;
+      bus.emit('warden-altar-near', nearWarden ? 'mire' : null);
     }
     // the Village Hall shows the tier/pool panel on approach (ADR-0010)
     const hall = this.village.hall;
@@ -5125,7 +5339,7 @@ export class GameScene extends Phaser.Scene {
     const m = this.mobs.get(mobId);
     if (!m || m.st === 'dead') return;
     if (!this.delveHitInRange(by, m)) return; // loose trusted-friends range check (ADR-0005)
-    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance);
+    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance, this.armorBandOf(by));
     this.delveParticipants.add(by);
     if (by === this.me.name) this.delveHitLanded = true;
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
@@ -6147,7 +6361,7 @@ export class GameScene extends Phaser.Scene {
   private applyWildHit(id: string, tool: ToolId | undefined, by: string): void {
     const m = this.wildMobs.get(id);
     if (!m || m.st === 'dead') return;
-    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance);
+    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance, this.armorBandOf(by));
     const prof = profileOf(m.kind);
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
     const fy = m.y * TILE - prof.radius * TILE - 8;
@@ -6319,6 +6533,7 @@ export class GameScene extends Phaser.Scene {
     // engagedAt (the first strike). A DORMANT Guardian (engagedAt null) roams
     // harmlessly at home: no waves, no Eye, arena open — nothing to drive here.
     if (this.fight && this.fight.engagedAt !== null) {
+      const kit = this.fightKit();
       const elapsed = Date.now() - this.fight.engagedAt;
       if (elapsed >= GUARDIAN_AWAKE_MS) {
         // every client derives the timer's end locally; the backend event follows
@@ -6326,19 +6541,15 @@ export class GameScene extends Phaser.Scene {
       } else {
         // fury phases at fixed elapsed-time thresholds — every client hits
         // the same transition at the same schedule position
-        const phase = furyPhaseAt(elapsed, GUARDIAN_AWAKE_MS);
+        const phase = furyPhaseAt(elapsed, GUARDIAN_AWAKE_MS, kit);
         if (phase.index !== this.furyIndex) {
           this.furyIndex = phase.index;
           this.guardianGlow.setTint(FURY_TINTS[phase.index]);
           this.sfx('roar', 0.8);
           this.cameras.main.shake(600, 0.008);
-          bus.emit(
-            'toast',
-            phase.index === 1 ? 'The Guardian grows restless — the runes burn hotter!' : 'FURY — the runes blaze red!',
-            'bad',
-          );
+          bus.emit('toast', phase.index === 1 ? t.fight.furyRestless : t.fight.furyFury, 'bad');
         }
-        const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS);
+        const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS, kit);
         if (wave.index !== this.renderedWave) {
           this.renderedWave = wave.index;
           this.renderWave(wave);
@@ -6356,7 +6567,7 @@ export class GameScene extends Phaser.Scene {
 
         // scripted position: wave 0 leaps to the entrance (Ward slam), later
         // waves telegraph lunges to pre-determined spots
-        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, this.guardianHomeSpot, this.entranceSpot);
+        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, this.guardianHomeSpot, this.entranceSpot, kit);
         // collision follows the Guardian's ground footprint; while airborne it has
         // none, so the whole arena (incl. the tiles it just left) opens up
         if (pose.airborne) this.setGuardianBlockersEnabled(false);
@@ -6396,7 +6607,7 @@ export class GameScene extends Phaser.Scene {
             // hold the landing pose for a beat
           } else {
             // Eye Window: the amber eye opens right after each slam
-            const eyeOpen = eyeOpenAt(elapsed, GUARDIAN_AWAKE_MS);
+            const eyeOpen = eyeOpenAt(elapsed, GUARDIAN_AWAKE_MS, kit);
             if (eyeOpen !== this.eyeOpenShown) {
               this.eyeOpenShown = eyeOpen;
               if (eyeOpen) this.sfx('blip', 0.5);

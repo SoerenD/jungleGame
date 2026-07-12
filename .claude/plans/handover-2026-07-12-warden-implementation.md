@@ -1,17 +1,23 @@
-# Handover — Warden-Leiter-Implementierung (Stand 2026-07-12, Abend)
+# Handover — Warden-Leiter-Implementierung (Stand 2026-07-12, Nacht — T3+T4 fertig)
 
 Nachfolge-Session: zuerst `.claude/plans/feature-plan-warden-ladder-armor.md` (Plan, alle
 Entscheidungen owner-bestätigt) und `docs/adr/0017-warden-ladder-realms-and-armor.md` lesen.
 Dieses Dokument trägt nur den SESSION-Zustand, der nirgendwo sonst steht.
 
-## Stand ist COMMITTED (Owner-freigegeben, 2026-07-12 spät)
+## Stand: T0–T2/T8 COMMITTED, T3+T4 UNCOMMITTED im Arbeitsbaum
 
 Vier Commits auf `master`: 3ea4115 (Docs/ADR/Plan/Handover), 63b8d0a (T0 WardenKit),
 7712686 (Warden-Sheets), 0c78580 (Sammel-Commit: Swing-Pose + T1 Refiner-Kernel +
 T2 Distrikte + Moor-Rework + Salzried-Kette + T8 Sentinel — die Features teilen sich
-types.ts/backends/GameScene/i18n und shippen deshalb zusammen). Arbeitsbaum sauber.
-**Frischer Worktree?** Der Stand ist im selben Repo erreichbar: `git merge master`
-(oder auf master wechseln) holt alles.
+types.ts/backends/GameScene/i18n und shippen deshalb zusammen).
+
+**NEU und UNCOMMITTED (T3+T4-Session, 2026-07-12 Nacht):** 15 geänderte Dateien +
+4 neue (src/content/armor.ts, src/content/wardens.ts, supabase/migrations/0013 + 0014).
+Owner hat DIESE Commits noch nicht freigegeben — erst fragen. Empfohlene Häppchen:
+T3 Rüstung (armor.ts + avatars-Overlays + jw_equip/0013 + Equip-UI + Stats) |
+T4 Warden-Kampf (wardens.ts + fight.warden-Mutex + Altar-RPC/0014 + Tor-Schlüssel +
+Totem-Rezept). Beide teilen sich types/backends/GameScene/hud/i18n — zur Not ein
+Sammel-Commit wie 0c78580.
 
 ## Was fertig und verifiziert ist (alles im Arbeitsbaum)
 
@@ -44,12 +50,74 @@ types.ts/backends/GameScene/i18n und shippen deshalb zusammen). Arbeitsbaum saub
   https://claude.ai/code/artifact/f2b52226-4f0d-45bc-9f8b-027a5b4a8e3a
   (Generator: Session-Scratchpad build-warden-codex.ts — Scratchpad ist flüchtig).
 
-## Nächste Tickets (Task-Tracker #5/#6 pending)
+## T3 — Rüstungssystem: FERTIG + verifiziert (uncommitted)
 
-T3 Rüstungssystem (Boots/Gloves/Helm, ARMOR_BUFFS, players.equipped + jw_equip-Migration,
-Avatar-Overlays über alle 20 Frames, `armor` auf pos/presence + look-Key) → T4 Kampf-Backend
-(world.fight.warden-Mutex, generische Altar-RPC in jw_contribute_village-Form, Gate-Keys,
-Totem-Rezepte, eine Migration) → T5 Mire-Vertikalschnitt (Details im Plan).
+- src/content/armor.ts (node-pur): ARMOR_SLOTS/ARMOR_BUFFS (Boots +8% Tempo, **Brustpanzer
+  (chest) +8% Angriffstempo**, Helm +2/+3 Band), armorBuff(), sanitizeEquipped(). Items
+  tideglass_boots / **verdant_cuirass** / hushsteel_helm (kind 'armor', EN+DE, Icons,
+  Codex-Card-Statzeilen).
+  **AMENDMENT (Owner, 2026-07-12 Nacht):** Slot `gloves` → `chest` umbenannt, Teil
+  `verdant_gloves` → `verdant_cuirass` (Grüngewebter Brustpanzer). Grund: die winzigen
+  Handschuh-Overlays veränderten den Sprite optisch kaum; ein geplatteter Torso liest sich
+  als klar anderer Charakter. **Das REVIDIERT ADR-0017 §3 („chest armor cut") — ADR + Plan
+  sind noch NICHT nachgezogen (offener Doku-Punkt für den Owner).** Ein V-Ausschnitt lässt
+  einen Streifen der Hemdfarbe durch (Identität bleibt).
+- Avatar-Overlays in drawBlockheadSheet über ALLE 20 Frames: Boots (Füße), **Brustpanzer
+  (großes Torso-Overlay: Frontplatte mit V-Ausschnitt/Grat/Nieten/Schulterstücken,
+  Rückenplatte mit Wirbelgrat, Seitenprofil mit Kragen/Gürtel — bob/step-Offsets gefolgt)**,
+  Helm (Kappe; Rückansicht-Vollhaar + Seiten-Haarsträhne). Pixelweise verifiziert.
+- Migration **0013_armor_equip.sql LIVE DEPLOYED** (players.equipped jsonb + jw_equip +
+  jw_join liefert 'equipped'). Whitelist per Folge-Migration **"equip_chest_slot" LIVE
+  DEPLOYED** von ('boots','gloves','helm') → ('boots','chest','helm'); die 0013-Datei trägt
+  den finalen Stand (chest) für frische Deploys. Nur besessene Items werden angelegt.
+- Wire: `armor` auf PlayerPos/SelfPos (Backends injizieren selbst — sendPosition-Signatur
+  unverändert), Look-Key = JSON([appearance, armor]), Presence-Re-Track bei Equip (einmalig,
+  Rate-Limit-sicher). Peer-Pfad via upsertRemote-Simulation pixelweise verifiziert.
+- Stats: moveSpeedFactor/atkCadence additiv zu Village-Buffs; Band-Delta in
+  rollGuardianDamage + applyMobHit (Host liest das Band des TREFFENDEN aus dessen synced
+  armor — armorBandOf()). Equip-UI im Inventar-Detail (Anlegen/Ablegen, ⛨-Badge).
+- toggleArmor SERIALISIERT + koalesziert (equipChain/desiredEquip) — zwei schnelle Klicks
+  überschrieben sich sonst gegenseitig (Race gefunden + gefixt + verifiziert).
+- Dev-Flag `?armor` (alle drei Teile via Null-Kosten-jw_craft). Reload-Persistenz + Stats
+  (1.08 / 463ms) im Browser verifiziert.
+
+## T4 — Warden-Kampf-Backend + Altar: FERTIG + verifiziert (uncommitted)
+
+- src/content/wardens.ts (node-pur): WardenDef-Registry (WARDENS.mire: Totem mire_totem,
+  Gate-Key mire_key, realm 'sunken_mire' = District-ID!), MIRE_KIT (Platzhalter auf den
+  Slam-Familien, eigene Seeds/Phasen — T5 authort Steigwasser+Geysire neu), kitOf(),
+  wardenForRealm(). FightState.warden ('mire' | null = Guardian).
+- Migration **0014_wardens.sql LIVE DEPLOYED** (apply_migration "wardens", kompletter
+  Arc live smoke-getestet inkl. Mutex in BEIDE Richtungen): world.wardens jsonb +
+  jw_contribute_warden (generischer Klammer-Loop, Client liefert Quoten) + jw_summon_warden
+  (ALTAR_INTACT/FIGHT_IN_PROGRESS/NO_TOTEM, stempelt 'warden' ins fight-jsonb) +
+  jw_open_realm_gate (einmalig, für immer). jw_guardian_hit/jw_knockdown UNVERÄNDERT
+  (arbeiten generisch auf dem fight-jsonb; Drops laufen client-seitig übers Spoils-Fenster).
+- Kit-Threading: GameScene-Fight-Layer (renderWave/slamWave/MeleeRing/Pose/Eye/Fury) +
+  beide Backends adjudizieren über kitOf(fight.warden). Kampf-Panel/Toasts/Chat tragen den
+  Warden-Namen (i18n t.warden/t.wardenAltar/t.system.warden*; Fury-Toasts endlich i18n).
+- Altar-Offering = Siegel-Muster pro Rung: config.WARDEN_ALTAR_PER_HEAD (dev-klein unter
+  FAST_SEAL), Bars-Panel #warden-panel (Seal-Bars-Skelett) nahe dem Altar.
+- Tor-Schlüssel: mire_key (nicht verbraucht, Delve-Muster) dreht den Megalith-Bogen via
+  realmGateAction → jw_open_realm_gate → realmOpened-Event → rebuildRealmGates()
+  (Tore sind jetzt neu-aufbaubar; ACHTUNG: wardenForRealm matcht auf district.id,
+  NICHT district.name — der Bug war drin und ist gefixt).
+- Totem-Rezept: mire_totem (2 Hartholz + 2 Obsidian + 3 Fasern, an der Schmiede).
+- Dev-Flag `?wardenfight`: Guardian-Altar dient als Mire-Altar, Grants für den ganzen
+  Solo-Arc, DEV_FIGHT_HP + 90s-Fenster. Kompletter Arc im Browser (Mock) verifiziert:
+  Opfern → Altar bricht → Beschwören (Totem weg, Panel „Der Moorwächter") → Kampf auf dem
+  MIRE-Kit (8 Treffer / 6 Deflects außerhalb seiner Augenfenster) → Sieg → Spoils mit
+  mire_key → Schlüssel dreht Tor → Betreten des Versunkenen Moors. Guardian-Regression
+  (?fight) geprüft: warden=null, Kit 'guardian', altes Panel.
+
+## Nächstes Ticket (T5)
+
+T5 Mire-Vertikalschnitt (Details im Plan): authored Altar/Arena an der Mangrovenküste,
+echtes Mire-Kit (Steigwasser-Wellenreihen + Geysir-Spalten), Mirefang-Drop (WEAPON_COMBAT
++ Tide-Passiv), Warden-Sprite in assetConfig registrieren (mire-warden.png liegt bereit),
+Tide-Mechanik (~35-min-Periode, teilt 24h nicht), Brine Kiln (Refiner-Kernel!), Tideglass
+Boots ans Ende der Kette, Quest-Steps, Lore-Tafel, i18n. Die T4-Dev-Brücken (?wardenfight
+am Guardian-Altar, Altar-Panel-Anbindung) dann auf den echten Altar umziehen.
 
 ## Session-Learnings (nicht im Repo dokumentiert)
 

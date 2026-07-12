@@ -51,6 +51,9 @@ export const RECIPES: Recipe[] = [
 
   // v2 — cheap, repeatable summon Offering (tier-1 resources only)
   { id: 'summon_totem', output: 'summon_totem', count: 1, cost: { wood: 5, fiber: 3, fruit: 2 }, kind: 'consumable' },
+  // ADR-0017 — the Warden Totems: each rung's summon Offering is FORGED from the
+  // previous tier's goods (rung 1 = tier-2 economy), repeatable like the Guardian's
+  { id: 'mire_totem', output: 'mire_totem', count: 1, cost: { hardwood: 2, obsidian: 2, fiber: 3 }, requiresForge: true, kind: 'consumable' },
 
   // ADR-0012 — the cooked-meat campfire recipe: a NEW ingredient (Wildlife meat)
   // feeding the EXISTING move-speed buff (cooked_meat eats identically to a cooked

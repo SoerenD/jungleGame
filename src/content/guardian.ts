@@ -145,14 +145,22 @@ export function weaponCombat(tool: ToolId | undefined): WeaponCombat {
  * browser globals, no config/inventory read. Damage is in base units; a crit
  * multiplies the rolled band value. The Tool is already ownership-validated by
  * the caller. Replaces the retired flat guardianDamage().
+ *
+ * `band` is the worn Armor's flat band raise (ADR-0017 §3, the Hushsteel
+ * Helm): it widens the roll's min/max BEFORE the crit multiplier, applied to
+ * whatever is in hand (bare hands included — the helm weights the blow, not
+ * the weapon). Passed in like `bonusCrit` so this module stays inventory-blind.
  */
 export function rollGuardianDamage(
   tool: ToolId | undefined,
   rng: () => number,
   bonusCrit = 0,
+  band?: { bandMin: number; bandMax: number },
 ): { damage: number; crit: boolean } {
   const w = weaponCombat(tool);
-  const base = w.min + Math.floor(rng() * (w.max - w.min + 1));
+  const lo = w.min + (band?.bandMin ?? 0);
+  const hi = w.max + (band?.bandMax ?? 0);
+  const base = lo + Math.floor(rng() * (Math.max(lo, hi) - lo + 1));
   // ADR-0013: the Village's collective crit buff sharpens weapons that can
   // already crit; bare hands stay crit-less by design.
   const chance = w.critChance > 0 ? Math.min(1, w.critChance + bonusCrit) : 0;

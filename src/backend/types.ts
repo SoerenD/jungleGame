@@ -1,6 +1,7 @@
 import type { ItemId, StructureId, ToolId } from '../content/items';
 import type { NodeTypeId } from '../content/nodeTypes';
 import type { VillageRecord } from '../content/village';
+import type { EquippedArmor } from '../content/armor';
 
 /** legacy tint-preset id — only survives in pre-update Player rows for migration */
 export type AvatarId = 0 | 1 | 2 | 3;
@@ -39,6 +40,13 @@ export interface PlayerPos {
    * exactly as before.
    */
   swings?: number;
+  /**
+   * The Armor this Player wears (ADR-0017 §4), riding the position broadcast +
+   * presence snapshot exactly like `held`/`swings` — no extra packet, no
+   * cadence change. Peers fold it into the avatar recompose key so an equip
+   * re-dresses the remote body. Optional: bots and older clients never send it.
+   */
+  armor?: EquippedArmor;
 }
 
 export type Inventory = Partial<Record<ItemId, number>>;
@@ -107,6 +115,12 @@ export type JoinResult =
        * `journey` (a Supabase implementation stores an int[] on the player row)
        */
       explored: number[];
+      /**
+       * the Armor worn last session (ADR-0017 §4), persisted like `wake_point`
+       * (a jsonb column on the player row) and re-validated against the
+       * inventory on load — equipment never survives losing the piece
+       */
+      equipped: EquippedArmor;
     }
   | { ok: false; reason: 'WRONG_PIN' | 'BAD_NAME' | 'BAD_PIN' };
 
@@ -147,6 +161,13 @@ export interface SealState {
  * amended by ADR-0004). `fight === null` means the Guardian slumbers.
  */
 export interface FightState {
+  /**
+   * WHICH colossus this fight is (ADR-0017 §5): a WardenDef id ('mire', …), or
+   * null/absent for the Guardian (rung 0). One fight slot per World — the
+   * mutex: summoning anything while any fight runs is refused. Every schedule
+   * derivation (client render AND server adjudication) picks its kit off this.
+   */
+  warden?: string | null;
   /** server timestamp of the summon (dormant start) */
   summonedAt: number;
   /** server timestamp of the first strike; null while dormant */
@@ -175,6 +196,26 @@ export interface FightState {
  */
 export type VillageState = VillageRecord;
 
+/**
+ * One Warden's altar (ADR-0017): the Seal pattern re-instanced per rung —
+ * communal pooled quotas with visible bars, broken once, forever; then each
+ * summon costs a crafted Warden Totem.
+ */
+export interface WardenAltarState {
+  broken: boolean;
+  /** collective totals — no individual tracking, like the Seal */
+  contributed: Record<string, number>;
+  /** the live per-head-scaled target (config.wardenAltarQuotas) */
+  quotas: Record<string, number>;
+}
+
+/** one Warden's per-World progress: its altar + whether its Realm gate stands open */
+export interface WardenWorldState {
+  altar: WardenAltarState;
+  /** flipped once, forever, by any Player with the gate key in hand (Delve-shaft pattern) */
+  gateOpen: boolean;
+}
+
 export interface WorldSnapshot {
   nodes: NodeState[];
   structures: Structure[];
@@ -184,6 +225,8 @@ export interface WorldSnapshot {
   seal: SealState;
   fight: FightState | null;
   village: VillageState;
+  /** ADR-0017: per-Warden altar/gate progress, keyed by WardenDef id */
+  wardens: Record<string, WardenWorldState>;
 }
 
 export type OfferResult =
@@ -248,8 +291,18 @@ export type WishResult =
   | { ok: true; inventory: Inventory; village: VillageState; festivalStarted: boolean };
 
 export type SummonResult =
-  | { ok: false; reason: 'SEAL_INTACT' | 'FIGHT_IN_PROGRESS' | 'NO_TOTEM' }
+  | { ok: false; reason: 'SEAL_INTACT' | 'ALTAR_INTACT' | 'FIGHT_IN_PROGRESS' | 'NO_TOTEM' }
   | { ok: true; fight: FightState; inventory: Inventory };
+
+/** laying the previous tier's goods at a Warden's altar (the Seal-Offering shape) */
+export type ContributeWardenResult =
+  | { ok: false; reason: 'ALREADY_BROKEN' | 'NOTHING_TO_GIVE' }
+  | { ok: true; taken: Inventory; inventory: Inventory; altar: WardenAltarState };
+
+/** turning the gate key at a Realm's arch — a one-time, forever world flag */
+export type OpenRealmResult =
+  | { ok: false; reason: 'ALREADY_OPEN' | 'NO_KEY' }
+  | { ok: true; wardenId: string };
 
 export type GuardianHitResult =
   | { ok: false; reason: 'NO_FIGHT' }
@@ -329,6 +382,14 @@ export type RefinerResult =
 export type CookResult =
   | { ok: false; reason: 'NO_FISH' }
   | { ok: true; inventory: Inventory };
+
+/**
+ * Equipping Armor (ADR-0017 §4): the client sends the full desired slot→item
+ * mapping; the backend keeps only owned, slot-matching pieces and returns what
+ * actually stuck (the server-sanitized record). Never fails outright — an
+ * unowned piece simply drops out.
+ */
+export type EquipResult = { equipped: EquippedArmor };
 
 export type EatResult =
   | { ok: false; reason: 'NOTHING_TO_EAT' }
@@ -461,6 +522,10 @@ export interface BackendEvents {
   sealBroken: () => void;
   /** the Village record changed — founded, contributed to, advanced a tier, or the Hall moved/removed (ADR-0010) */
   villageChanged: (village: VillageState) => void;
+  /** a Warden altar's pooled Offering moved (or broke) — ADR-0017 */
+  wardenAltarChanged: (wardenId: string, altar: WardenAltarState) => void;
+  /** a Realm gate opened — one-time, forever (ADR-0017; the delveOpened shape) */
+  realmOpened: (wardenId: string) => void;
   guardianSummoned: (fight: FightState) => void;
   /** the first strike landed: the clock re-anchors to `engagedAt`, roster + HP lock, the Ward rises */
   guardianEngaged: (fight: FightState) => void;
@@ -556,6 +621,24 @@ export interface Backend {
   /** consume a Summoning Totem at the arena altar and wake the Guardian */
   summonGuardian(): Promise<SummonResult>;
   /**
+   * consume the Warden's Totem at its altar and wake it (ADR-0017 §1/§5):
+   * refused while ANY fight runs (the one-fight mutex) or while its altar's
+   * Offering is incomplete. The fight rides the same guardian* events with
+   * `fight.warden` naming the kit.
+   */
+  summonWarden(wardenId: string): Promise<SummonResult>;
+  /**
+   * lay every carried demanded good at a Warden's altar (the Seal-Offering
+   * pattern re-instanced per rung, ADR-0017): communal, clamped, breaks once
+   */
+  contributeWardenAltar(wardenId: string): Promise<ContributeWardenResult>;
+  /**
+   * turn the carried gate key at a Realm's arch — flips the one-time
+   * `gateOpen` world flag for everyone, forever (the Delve-shaft pattern).
+   * The client has already checked the key is carried.
+   */
+  openRealmGate(wardenId: string): Promise<OpenRealmResult>;
+  /**
    * clear the rubble sealing the Delve mine shaft — a one-time, server-ordered
    * world flag (like the vine gate). The client has already checked an Ancient
    * Pickaxe is in hand; the server flips `delveOpen` and emits `delveOpened`.
@@ -606,6 +689,12 @@ export interface Backend {
    * (hard Exhaustion), and the Ward bars re-entry
    */
   reportKnockdown(tx: number, ty: number): Promise<KnockdownResult>;
+  /**
+   * wear/unwear Armor (ADR-0017 §4): persists as `players.equipped` and rides
+   * the position/presence payload from then on. The backend re-validates
+   * ownership; the returned record is the truth the client adopts.
+   */
+  equip(equipped: EquippedArmor): Promise<EquipResult>;
   /** turn one carried fish into a cooked fish (client checks campfire proximity) */
   cook(): Promise<CookResult>;
   /** consume one cooked fish; the speed buff itself is client-side (ADR-0001) */

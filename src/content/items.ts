@@ -23,6 +23,10 @@ export type ResourceId =
   | 'forge_core'
   // ADR-0015 — the generated Depths' only loot: pure prestige, crafts nothing
   | 'depth_sigil'
+  // ADR-0017 — the Mire Warden's participation drop: the Sunken Mire's gate
+  // key. Never consumed — any Player opens the gate once with it in hand
+  // (the Delve-shaft pattern), then it stays a trophy.
+  | 'mire_key'
   // ADR-0012 — open-world Wildlife drops (hide/meat/trophy family). Feed EXISTING
   // loops only: the Village pool, a cooked-meat campfire recipe, decor Structures.
   | 'hide'
@@ -86,12 +90,18 @@ export type StructureId =
   | 'trophy_mount'
   | 'hide_rug';
 /** carried consumables that are neither Resources nor Tools */
-export type ConsumableId = 'summon_totem' | 'cooked_fish' | 'cooked_meat';
-export type ItemId = ResourceId | ToolId | StructureId | ConsumableId;
+export type ConsumableId = 'summon_totem' | 'cooked_fish' | 'cooked_meat'
+  // ADR-0017 — the Warden Totems: one crafted Offering per rung, consumed on summon
+  | 'mire_totem';
+// ADR-0017 §3/§4 — the Warden ladder's visible Armor: one piece per Realm,
+// worn (players.equipped), drawn on the Avatar, each granting ONE attribute
+// (tuning in content/armor.ts).
+export type ArmorId = 'tideglass_boots' | 'verdant_cuirass' | 'hushsteel_helm';
+export type ItemId = ResourceId | ToolId | StructureId | ConsumableId | ArmorId;
 
 export interface ItemDef {
   name: string;
-  kind: 'resource' | 'tool' | 'structure' | 'consumable' | 'food';
+  kind: 'resource' | 'tool' | 'structure' | 'consumable' | 'food' | 'armor';
   desc: string;
   /** structures only: does the placed structure block movement? */
   blocks?: boolean;
@@ -135,6 +145,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   cinder_shard: { name: 'Cinder Shard', kind: 'resource', desc: 'Molten shrapnel from a felled Cinder or Ember Husk in the Deep. Common — the farm of a Deep run.' },
   forge_core: { name: 'Forge Core', kind: 'resource', desc: 'The white-hot heart of the Forgeborn, granted to everyone who descended and fought it. Rare — forges the Forgebrand.' },
   depth_sigil: { name: 'Depth Sigil', kind: 'resource', desc: 'Proof of a boss felled in the generated Depths (3+), one per Stage. Pure prestige — it crafts nothing; give it to the Village pool, and let the Depth Record speak.' },
+  mire_key: { name: 'Key to the Sunken Mire', kind: 'resource', desc: 'A brine-crusted key of fused tideglass, pried from the fallen Mire Warden. Carry it to the megalith arch on the Mangrove Coast — one turn opens the Sunken Mire for everyone, forever.' },
   hide: { name: 'Hide', kind: 'resource', desc: 'Tough hide from foraged or hunted Wildlife. Give it to the Village, or lay it as a rug.' },
   meat: { name: 'Raw Meat', kind: 'resource', desc: 'Fresh meat from Wildlife. Cook it at a campfire for a hearty meal that quickens your step.' },
   trophy: { name: 'Wild Trophy', kind: 'resource', desc: 'A prize rack or fang from the wilds — rare. Mount it, or grace the Village pool with it.' },
@@ -158,8 +169,15 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   fabled_bow: { name: 'Fabled Bow', kind: 'tool', desc: 'A legendary longbow dropped by a fallen boss (~1%). Looses arrows from range like the plain Bow, but hits far harder and faster — the safe way to out-damage a crafted melee weapon.' },
 
   summon_totem: { name: 'Summoning Totem', kind: 'consumable', desc: 'An Offering for the arena altar — wakes the Guardian. Consumed on summon.' },
+  mire_totem: { name: 'Mire Warden Totem', kind: 'consumable', desc: 'A totem of hardwood and obsidian, forged for the altar on the Mangrove Coast. Once the altar’s Offering is complete, it wakes the Mire Warden. Consumed on summon.' },
   cooked_fish: { name: 'Cooked Fish', kind: 'food', desc: 'Warm and hearty. Eating it quickens your step for a while.' },
   cooked_meat: { name: 'Cooked Meat', kind: 'food', desc: 'Roasted at a campfire. Eating it quickens your step for a while — the same warmth a cooked fish gives.' },
+
+  // ADR-0017 — the Warden ladder's Armor: worn, visible to every Player, one
+  // small attribute each. Power, never protection — there is no HP to protect.
+  tideglass_boots: { name: 'Tideglass Boots', kind: 'armor', desc: 'Boots shod in sea-green tideglass, tempered from salt-reed in a Brine Kiln. Worn, they carry the tide’s pull in every stride (+8% move speed) — and everyone sees them on you.' },
+  verdant_cuirass: { name: 'Verdant-woven Cuirass', kind: 'armor', desc: 'A plated cuirass woven from living pearlgrain fibre of the Verdant Terraces — light as leaf, yet it wraps the whole torso. Worn, every strike flows like wind through grass (+8% attack speed) — and it visibly re-armours you to every friend.' },
+  hushsteel_helm: { name: 'Hushsteel Helm', kind: 'armor', desc: 'A helm of cold hushsteel rung out of echo crystal in a Chime Kiln. Worn, every blow lands with the Hushdark’s weight (a heavier damage band) — visible to every friend.' },
 
   campfire: { name: 'Campfire', kind: 'structure', desc: 'A cozy fire. Cooks fish, too.', blocks: true },
   torch: { name: 'Torch', kind: 'structure', desc: 'Lights the path.', blocks: false },
@@ -220,6 +238,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   cinder_shard: { name: 'Glutsplitter', desc: 'Glühender Splitter einer gefallenen Glut- oder Aschehülle in der Tiefe. Häufig — die Ausbeute eines Tiefen-Zugs.' },
   forge_core: { name: 'Schmiedekern', desc: 'Das weißglühende Herz des Schmiedegeborenen, verliehen an alle, die hinabstiegen und gegen ihn kämpften. Selten — schmiedet den Schmiedebrand.' },
   depth_sigil: { name: 'Tiefensiegel', desc: 'Beweis eines gefällten Bosses in den erzeugten Tiefen (3+), eines pro Stufe. Reines Prestige — es stellt nichts her; gib es dem Dorfvorrat, und lass den Tiefenrekord sprechen.' },
+  mire_key: { name: 'Schlüssel zum Versunkenen Moor', desc: 'Ein salzverkrusteter Schlüssel aus verschmolzenem Gezeitenglas, dem gefallenen Moorwächter abgerungen. Trag ihn zum Megalith-Bogen an der Mangrovenküste — eine Drehung öffnet das Versunkene Moor für alle, für immer.' },
   hide: { name: 'Fell', desc: 'Zähes Fell von erjagtem oder gesammeltem Wild. Gib es dem Dorf oder leg es als Teppich aus.' },
   meat: { name: 'Rohes Fleisch', desc: 'Frisches Fleisch von Wild. Brate es am Lagerfeuer für eine herzhafte Mahlzeit, die deinen Schritt beschleunigt.' },
   trophy: { name: 'Wildtrophäe', desc: 'Ein prächtiges Geweih oder Fangzahn aus der Wildnis — selten. Häng sie auf oder zier den Dorfvorrat damit.' },
@@ -240,8 +259,13 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   fabled_bow: { name: 'Sagenhafter Bogen', desc: 'Ein legendärer Langbogen, von einem gefallenen Boss fallen gelassen (~1%). Verschießt Pfeile aus der Ferne wie der einfache Bogen, trifft aber deutlich härter und schneller — der sichere Weg, eine geschmiedete Nahkampfwaffe zu übertreffen.' },
 
   summon_totem: { name: 'Beschwörungstotem', desc: 'Eine Opfergabe für den Arena-Altar — weckt den Wächter. Beim Beschwören verbraucht.' },
+  mire_totem: { name: 'Totem des Moorwächters', desc: 'Ein Totem aus Hartholz und Obsidian, geschmiedet für den Altar an der Mangrovenküste. Ist die Opfergabe des Altars vollbracht, weckt es den Moorwächter. Beim Beschwören verbraucht.' },
   cooked_fish: { name: 'Gebratener Fisch', desc: 'Warm und herzhaft. Ihn zu essen beschleunigt deinen Schritt für eine Weile.' },
   cooked_meat: { name: 'Gebratenes Fleisch', desc: 'Am Lagerfeuer geröstet. Es zu essen beschleunigt deinen Schritt für eine Weile — dieselbe Wärme wie gebratener Fisch.' },
+
+  tideglass_boots: { name: 'Gezeitenglas-Stiefel', desc: 'Stiefel, beschlagen mit seegrünem Gezeitenglas, im Sole-Ofen aus Salzried gehärtet. Getragen liegt der Sog der Gezeiten in jedem Schritt (+8% Tempo) — und jeder sieht sie an dir.' },
+  verdant_cuirass: { name: 'Grüngewebter Brustpanzer', desc: 'Ein geplatteter Kürass, gewebt aus lebendiger Perlkorn-Faser der Grünen Terrassen — blattleicht und doch den ganzen Oberkörper umschließend. Getragen fließt jeder Schlag wie Wind durch Gras (+8% Angriffstempo) — und er panzert dich für alle Freunde sichtbar neu.' },
+  hushsteel_helm: { name: 'Stillstahl-Helm', desc: 'Ein Helm aus kaltem Stillstahl, im Klang-Ofen aus Echokristall geläutert. Getragen trifft jeder Schlag mit dem Gewicht des Stilldunkels (ein schwereres Schadensband) — für alle Freunde sichtbar.' },
 
   campfire: { name: 'Lagerfeuer', desc: 'Ein gemütliches Feuer. Brät auch Fisch.' },
   torch: { name: 'Fackel', desc: 'Erleuchtet den Weg.' },

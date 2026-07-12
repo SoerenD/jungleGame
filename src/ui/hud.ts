@@ -18,6 +18,10 @@ import {
   type AudioChannel,
 } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine, weaponStatParts } from '../content/guardian';
+import { armorDef, ARMOR_SLOTS, type ArmorSlot, type EquippedArmor } from '../content/armor';
+import { characterSheet } from '../content/stats';
+import { drawBlockheadSheet, AVATAR_W, AVATAR_H } from '../avatars';
+import type { Appearance, WardenAltarState } from '../backend/types';
 import { itemIcon } from './icons';
 import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
 import { RECIPES } from '../content/recipes';
@@ -40,6 +44,8 @@ import { asset } from '../paths';
 import { t, getLang, setLang, LANG_NAMES, zoneName, type Lang } from '../i18n';
 
 let meName = '';
+/** this Player's Avatar palette picks — drives the character-panel paperdoll */
+let myAppearance: Appearance = { skin: 1, hair: 1, shirt: 1, pants: 0 };
 let inv: Inventory = {};
 // true once the Backend's first inventory snapshot has arrived; until then the loadout
 // must not be reconciled against the (still-empty) inv, or a reload would wipe the saved
@@ -53,6 +59,13 @@ let village: VillageRecord | null = null;
 let villageTier = 0;
 /** standing beside a Forge — the heavy forged gear is only craftable then */
 let nearForge = false;
+/** the worn Armor (ADR-0017 §4) — mirrors GameScene's record via the 'equipped' event */
+let equippedArmor: EquippedArmor = {};
+/** per-Warden altar Offering state + which altar panel is showing (ADR-0017) */
+const wardenAltars: Record<string, WardenAltarState> = {};
+let wardenPanelId: string | null = null;
+/** a Warden fight re-titles the fight panel; null = the Guardian */
+let fightTitle: string | null = null;
 let journey: JourneyState | null = null;
 let placingNow = false;
 /** the four craft tabs: Tools & Weapons, Buildings (≥2×2), Props (1×1), Consumables */
@@ -135,8 +148,9 @@ function makeDraggable(panel: HTMLElement, handle: HTMLElement): void {
 
 const SEAL_BAR_ORDER: SealResourceId[] = ['wood', 'stone', 'fiber', 'fruit'];
 
-export function initHud(name: string, muted: boolean): void {
+export function initHud(name: string, muted: boolean, appearance?: Appearance): void {
   meName = name;
+  if (appearance) myAppearance = appearance;
   document.documentElement.lang = getLang(); // keep <html lang> in sync for a11y
   loadInvOrder();
   loadLoadout();
@@ -150,6 +164,11 @@ export function initHud(name: string, muted: boolean): void {
       <h3>${t.seal.title}</h3>
       <div id="seal-bars"></div>
       <div id="seal-hint">${t.seal.hint}</div>
+    </div>
+    <div id="warden-panel" class="panel" data-testid="warden-panel">
+      <h3 id="warden-title"></h3>
+      <div id="warden-bars"></div>
+      <div id="warden-hint"></div>
     </div>
     <div id="village-panel" class="panel" data-testid="village-panel">
       <h3>${t.village.title}</h3>
@@ -306,7 +325,16 @@ export function initHud(name: string, muted: boolean): void {
       </div>
     </div>
     <div id="inventory-panel" class="panel" data-testid="inventory-panel">
-      <h3>${t.panels.inventory}</h3>
+      <h3>${t.character.title}</h3>
+      <!-- WoW-style paperdoll: the Avatar (wearing its Armor) flanked by
+           equipment slots, with the derived attributes below (ADR-0017 §4) -->
+      <div id="char-sheet">
+        <div class="char-slots" id="char-slots-left"></div>
+        <div id="char-doll"><canvas id="char-doll-canvas" data-testid="char-doll"></canvas></div>
+        <div class="char-slots" id="char-slots-right"></div>
+      </div>
+      <div id="char-attrs" data-testid="char-attrs"></div>
+      <div class="char-sep">${t.character.bag}</div>
       <div id="inv-grid"></div>
       <div id="inv-detail">
         <div id="inv-detail-name"></div>
@@ -442,6 +470,12 @@ export function initHud(name: string, muted: boolean): void {
     renderJourney(); // Delve-quest steps tick off inventory (Scales, pickaxe, drops)
     if (openCrateId) renderCrate();
   });
+  // ADR-0017 §4: the worn Armor changed (join restore or an equip round-trip)
+  bus.on('equipped', (eq: EquippedArmor) => {
+    equippedArmor = eq;
+    renderInventory(); // the ⛨ badge + the detail bar's Equip/Unequip label
+    renderCharacter(); // re-dress the paperdoll + its slots + attributes
+  });
   bus.on('chat', (msg: ChatMsg) => appendChat(msg));
   bus.on('chatlog', (msgs: ChatMsg[]) => {
     el('chat-messages').innerHTML = '';
@@ -484,12 +518,23 @@ export function initHud(name: string, muted: boolean): void {
   bus.on('seal-near', (near: boolean) => {
     el('seal-panel').classList.toggle('open', near);
   });
+  // ADR-0017: a Warden altar's Offering bars (near its altar), Seal-panel style
+  bus.on('warden-altar', (id: string, altar: WardenAltarState) => {
+    wardenAltars[id] = altar;
+    if (wardenPanelId === id) renderWardenBars();
+  });
+  bus.on('warden-altar-near', (id: string | null) => {
+    wardenPanelId = id;
+    el('warden-panel').classList.toggle('open', !!id);
+    if (id) renderWardenBars();
+  });
   bus.on('village', (v: VillageRecord) => {
     village = v;
     villageTier = v.tier;
     renderInventory(); // ADR-0013: pack capacity grows a row when the Village is founded
     renderVillagePanel();
     renderRecipes(); // tier-locked Buildings unlock as the Village grows (villageMin)
+    renderCharacter(); // the Village's collective buffs feed the attributes block
   });
   bus.on('village-near', (near: boolean) => {
     el('village-panel').classList.toggle('open', near);
@@ -518,14 +563,15 @@ export function initHud(name: string, muted: boolean): void {
   });
   bus.on(
     'fight-start',
-    (f: { hp: number; maxHp: number; engagedAt: number | null; awakeMs: number; roster: string[] }) => {
+    (f: { hp: number; maxHp: number; engagedAt: number | null; awakeMs: number; roster: string[]; title?: string | null }) => {
       el('fight-panel').classList.add('open');
       window.clearInterval(fightTimer);
+      fightTitle = f.title ?? null; // a Warden fight names the panel (ADR-0017)
       if (f.engagedAt === null) {
-        // DORMANT (ADR-0004): the Guardian roams, unstruck — no roster, no HP
+        // DORMANT (ADR-0004): the colossus roams, unstruck — no roster, no HP
         // bar, no clock yet. Prompt the party to land the first strike.
         el('fight-panel').classList.add('dormant');
-        el('fight-title').textContent = t.fight.stirs;
+        el('fight-title').textContent = fightTitle ? t.fight.wardenStirs(fightTitle) : t.fight.stirs;
         el('fight-roster').textContent = '';
         el('fight-timer').textContent = t.fight.gatherParty;
         return;
@@ -1403,6 +1449,30 @@ function renderSealBars(): void {
   el('seal-hint').textContent = seal.broken ? t.seal.broken : t.seal.hint;
 }
 
+/** a Warden altar's Offering bars (ADR-0017) — the Seal-bar rendering, per rung */
+function renderWardenBars(): void {
+  const id = wardenPanelId;
+  if (!id) return;
+  const altar = wardenAltars[id];
+  el('warden-title').textContent = t.wardenAltar.title(t.warden.name(id));
+  const box = el('warden-bars');
+  box.innerHTML = '';
+  if (!altar) return;
+  for (const [item, quota] of Object.entries(altar.quotas)) {
+    const have = Math.min(altar.contributed[item] ?? 0, quota);
+    const row = document.createElement('div');
+    row.className = 'seal-row';
+    row.setAttribute('data-testid', `warden-${item}`);
+    row.innerHTML = `
+      <span class="seal-name">${ITEMS[item as ItemId]?.name ?? item}</span>
+      <div class="seal-bar"><div class="seal-fill" style="width:${(have / quota) * 100}%"></div></div>
+      <span class="seal-count">${have}/${quota}</span>
+    `;
+    box.appendChild(row);
+  }
+  el('warden-hint').textContent = altar.broken ? t.wardenAltar.broken : t.wardenAltar.hint;
+}
+
 /**
  * The Village tier panel (ADR-0010): the prestige badge, the additive pool bar to
  * the next threshold, and the milestone the group must raise in-zone to advance.
@@ -1474,7 +1544,9 @@ function setFightHp(hp: number, max: number): void {
   // scaled up (the same factor the damage float uses, ADR-0006 §5)
   const s = GUARDIAN_DISPLAY_SCALE;
   el('fight-hpfill').style.width = `${Math.max(0, (hp / max) * 100)}%`;
-  el('fight-title').textContent = t.fight.guardianHp(Math.max(0, hp) * s, max * s);
+  el('fight-title').textContent = fightTitle
+    ? t.fight.wardenHp(fightTitle, Math.max(0, hp) * s, max * s)
+    : t.fight.guardianHp(Math.max(0, hp) * s, max * s);
 }
 
 let bannerTimer: number | undefined;
@@ -1603,9 +1675,22 @@ function selectLoadout(i: number): void {
   emitHeld();
 }
 
+/**
+ * Seat a Tool from the character panel's weapon slot into the loadout and hold
+ * it: it goes into the selected quick-slot (clearing any duplicate) and becomes
+ * the in-hand item — the paperdoll's weapon slot IS the selected loadout slot.
+ */
+function equipWeaponToLoadout(toolId: ItemId): void {
+  if (ITEMS[toolId]?.kind !== 'tool') return;
+  for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === toolId) loadout[k] = null;
+  loadout[loadoutSel] = toolId;
+  selectLoadout(loadoutSel); // saves, re-renders the bar, emits held (→ renderCharacter)
+}
+
 function renderLoadout(): void {
   reconcileLoadout();
   saveLoadout();
+  renderCharacter(); // the paperdoll's weapon slot + attributes track the held Tool
   const bar = el('loadout-bar');
   bar.innerHTML = '';
   for (let i = 0; i < LOADOUT_SLOTS; i++) {
@@ -1664,6 +1749,7 @@ type ItemRarity = 'fabled' | 'reward' | 'ancient' | 'basic';
 function itemRarity(id: ItemId): ItemRarity {
   if (id === 'fabled_sword' || id === 'fabled_axe' || id === 'fabled_bow') return 'fabled';
   if (id === 'sword' || id === 'forgebrand') return 'reward';
+  if (armorDef(id)) return 'reward'; // Warden-Realm Armor reads as a reward prize
   if (id === 'ancient_axe' || id === 'ancient_pickaxe') return 'ancient';
   return 'basic';
 }
@@ -1694,6 +1780,18 @@ function itemTooltipHtml(id: ItemId): string {
       ttRow(t.weapon.atkSpeed, p.aps) +
       ttRow(t.weapon.dpsFull, String(p.dps), 'dps') +
       '</div>';
+  }
+  // ADR-0017 §3: an Armor piece states its one attribute (+ worn state)
+  const armor = armorDef(id);
+  if (armor) {
+    const rows: string[] = [];
+    if (armor.moveSpeed > 0) rows.push(ttRow(t.armor.moveSpeed, `+${Math.round(armor.moveSpeed * 100)}%`));
+    if (armor.attackSpeed > 0) rows.push(ttRow(t.armor.attackSpeed, `+${Math.round(armor.attackSpeed * 100)}%`));
+    if (armor.bandMin > 0 || armor.bandMax > 0) {
+      rows.push(ttRow(t.armor.band, `+${armor.bandMin * GUARDIAN_DISPLAY_SCALE}/+${armor.bandMax * GUARDIAN_DISPLAY_SCALE}`));
+    }
+    if (isEquipped(id)) rows.push(ttRow(t.armor.slot[armor.slot], t.armor.worn, 'dps'));
+    stats = '<div class="tt-div"></div><div class="tt-stats">' + rows.join('') + '</div>';
   }
   return (
     `<div class="tt-card tt-rar-${rar}"><div class="tt-inner">` +
@@ -1742,6 +1840,13 @@ function invUse(id: ItemId): void {
   const kind = ITEMS[id].kind;
   if (kind === 'structure') bus.emit('request-place', id as StructureId);
   else if (kind === 'food') bus.emit('eat', id);
+  else if (kind === 'armor') bus.emit('equip-toggle', id);
+}
+
+/** is this Armor piece currently worn in its slot? */
+function isEquipped(id: ItemId): boolean {
+  const def = armorDef(id);
+  return !!def && equippedArmor[def.slot] === id;
 }
 
 function renderInventory(): void {
@@ -1757,7 +1862,7 @@ function renderInventory(): void {
     const it = invOrder[i];
     if (it && !present.has(it)) invOrder[i] = null;
   }
-  const kindOrder = { resource: 0, tool: 1, consumable: 2, food: 3, structure: 4 };
+  const kindOrder = { resource: 0, tool: 1, armor: 2, consumable: 3, food: 4, structure: 5 };
   const newcomers = [...present.keys()]
     .filter((id) => !invOrder.includes(id))
     .sort((a, b) => kindOrder[ITEMS[a].kind] - kindOrder[ITEMS[b].kind] || a.localeCompare(b));
@@ -1796,6 +1901,15 @@ function renderInventory(): void {
         badge.textContent = count > 999 ? '999+' : String(count);
         slot.appendChild(badge);
       }
+      // ADR-0017 §4: a worn Armor piece carries a badge + a lit slot frame
+      if (isEquipped(id)) {
+        slot.classList.add('equipped');
+        const worn = document.createElement('span');
+        worn.className = 'inv-equipped';
+        worn.textContent = '⛨';
+        worn.title = t.inv.wornBadge;
+        slot.appendChild(worn);
+      }
       slot.draggable = true;
       slot.addEventListener('dragstart', (e) => {
         hideItemTooltip(); // don't leave the popup floating over a drag
@@ -1804,6 +1918,7 @@ function renderInventory(): void {
         // (Tools) or the game canvas to place it (Structures)
         if (ITEMS[id].kind === 'tool') e.dataTransfer!.setData('application/x-jw-tool', id);
         else if (ITEMS[id].kind === 'structure') e.dataTransfer!.setData('application/x-jw-structure', id);
+        else if (ITEMS[id].kind === 'armor') e.dataTransfer!.setData('application/x-jw-armor', id);
         e.dataTransfer!.effectAllowed = 'move';
         slot.classList.add('dragging');
       });
@@ -1833,6 +1948,131 @@ function renderInventory(): void {
   renderInvDetail(present);
 }
 
+// ------------------------------------------------------------ character panel
+// The WoW-style paperdoll (ADR-0017 §4): the Avatar wearing its Armor, the
+// equipment slots you drag Items into, and the attributes those Items grant.
+
+/** the four paperdoll slots: three Armor slots + the in-hand weapon */
+type EquipSlotKind = ArmorSlot | 'weapon';
+
+/** redraw the whole character block (paperdoll + slots + attributes) */
+function renderCharacter(): void {
+  renderPaperdoll();
+  renderEquipSlots();
+  renderCharAttrs();
+}
+
+/** draw the Avatar (down-idle frame, wearing its Armor) into the paperdoll canvas */
+function renderPaperdoll(): void {
+  const canvas = document.getElementById('char-doll-canvas') as HTMLCanvasElement | null;
+  if (!canvas) return;
+  // the 20-frame sheet already bakes the Armor overlays (drawBlockheadSheet);
+  // the down-idle frame sits at the sheet's top-left (AVATAR_W×AVATAR_H)
+  const sheet = drawBlockheadSheet(myAppearance, equippedArmor);
+  const scale = 5;
+  canvas.width = AVATAR_W * scale;
+  canvas.height = AVATAR_H * scale;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false; // keep the pixel art crisp
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(sheet, 0, 0, AVATAR_W, AVATAR_H, 0, 0, canvas.width, canvas.height);
+}
+
+/** the item currently seated in an equipment slot (weapon = the in-hand Tool) */
+function slotItem(kind: EquipSlotKind): ItemId | null {
+  return kind === 'weapon' ? heldItem() : equippedArmor[kind] ?? null;
+}
+
+/** build one paperdoll slot: its icon (or a ghost), drop target, and click action */
+function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
+  const slot = document.createElement('div');
+  slot.className = 'equip-slot equip-' + kind;
+  slot.setAttribute('data-testid', `equip-slot-${kind}`);
+  const id = slotItem(kind);
+  const label = t.character.slot[kind];
+  if (id) {
+    slot.classList.add('filled');
+    const icon = document.createElement('img');
+    icon.className = 'inv-icon';
+    icon.src = itemIcon(id);
+    icon.alt = ITEMS[id].name;
+    icon.draggable = false;
+    slot.appendChild(icon);
+    slot.addEventListener('mouseenter', () => showItemTooltip(id, slot));
+    slot.addEventListener('mouseleave', hideItemTooltip);
+    // armor slots unequip on click; the weapon slot mirrors the loadout (read-only)
+    if (kind !== 'weapon') {
+      slot.title = `${ITEMS[id].name} — ${t.character.unequipHint}`;
+      slot.onclick = () => bus.emit('equip-toggle', id);
+    } else {
+      slot.title = ITEMS[id].name;
+    }
+  } else {
+    const ghost = document.createElement('span');
+    ghost.className = 'equip-ghost';
+    ghost.textContent = t.character.slotIcon[kind];
+    slot.appendChild(ghost);
+    slot.title = t.character.emptySlot(label);
+  }
+  // drop target: armor slots take the matching Armor; the weapon slot takes any Tool
+  const dropType = kind === 'weapon' ? 'application/x-jw-tool' : 'application/x-jw-armor';
+  slot.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(dropType)) {
+      e.preventDefault();
+      slot.classList.add('drop');
+    }
+  });
+  slot.addEventListener('dragleave', () => slot.classList.remove('drop'));
+  slot.addEventListener('drop', (e) => {
+    e.preventDefault();
+    slot.classList.remove('drop');
+    const dropped = e.dataTransfer?.getData(dropType) as ItemId | undefined;
+    if (!dropped) return;
+    if (kind === 'weapon') {
+      equipWeaponToLoadout(dropped);
+    } else {
+      const def = armorDef(dropped);
+      if (def && def.slot === kind && !isEquipped(dropped)) bus.emit('equip-toggle', dropped);
+    }
+  });
+  return slot;
+}
+
+/** (re)lay the equipment slots: helm/chest/boots on the left, the weapon on the right */
+function renderEquipSlots(): void {
+  const left = document.getElementById('char-slots-left');
+  const right = document.getElementById('char-slots-right');
+  if (!left || !right) return;
+  left.innerHTML = '';
+  right.innerHTML = '';
+  for (const s of ARMOR_SLOTS) left.appendChild(buildEquipSlot(s));
+  right.appendChild(buildEquipSlot('weapon'));
+}
+
+/** the attributes block: the character's effective combat profile (content/stats.ts) */
+function renderCharAttrs(): void {
+  const box = document.getElementById('char-attrs');
+  if (!box) return;
+  const sheet = characterSheet((heldItem() ?? undefined) as ToolId | undefined, equippedArmor, villageTier);
+  const rows: [string, string][] = [];
+  rows.push([t.character.attrMove, sheet.moveBonus > 0 ? `+${Math.round(sheet.moveBonus * 100)}%` : '—']);
+  rows.push([t.character.attrAttack, sheet.attackBonus > 0 ? `+${Math.round(sheet.attackBonus * 100)}%` : '—']);
+  if (sheet.hasWeapon) {
+    const band = sheet.bandMin === sheet.bandMax ? `${sheet.bandMin}` : `${sheet.bandMin}–${sheet.bandMax}`;
+    rows.push([t.character.attrDamage, band]);
+    rows.push([
+      t.character.attrCrit,
+      sheet.critChance > 0 ? `${Math.round(sheet.critChance * 100)}% ×${sheet.critMult.toFixed(1)}` : t.weapon.noCrit,
+    ]);
+    rows.push([t.character.attrDps, `~${sheet.dps}`]);
+  } else {
+    rows.push([t.character.attrWeapon, t.character.noWeapon]);
+  }
+  box.innerHTML = rows
+    .map(([k, v]) => `<div class="char-attr"><span class="char-attr-k">${k}</span><span class="char-attr-v">${v}</span></div>`)
+    .join('');
+}
+
 /** name, description and the Place/Eat action for the selected slot */
 function renderInvDetail(present: Map<ItemId, number>): void {
   const name = el('inv-detail-name');
@@ -1852,6 +2092,15 @@ function renderInvDetail(present: Map<ItemId, number>): void {
     btn.className = 'ui-btn';
     btn.textContent = def.kind === 'structure' ? t.inv.place : t.inv.eat;
     btn.setAttribute('data-testid', `${def.kind === 'structure' ? 'place' : 'eat'}-${invSelected}`);
+    const id = invSelected;
+    btn.onclick = () => invUse(id);
+    actions.appendChild(btn);
+  } else if (def.kind === 'armor') {
+    // ADR-0017 §4: wear/unwear the piece; GameScene round-trips the backend
+    const btn = document.createElement('button');
+    btn.className = 'ui-btn';
+    btn.textContent = isEquipped(invSelected) ? t.inv.unequip : t.inv.equip;
+    btn.setAttribute('data-testid', `equip-${invSelected}`);
     const id = invSelected;
     btn.onclick = () => invUse(id);
     actions.appendChild(btn);

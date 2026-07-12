@@ -214,6 +214,42 @@ const en = {
     guardianHp: (hp: number, max: number) => `⚔ The Guardian · ${hp}/${max}`,
     bestedFloat: 'The Guardian is bested!',
     clang: 'clang',
+    // ADR-0017 — a Warden fight re-titles the same panel (fight.warden names it)
+    wardenStirs: (name: string) => `⚔ ${name} stirs`,
+    wardenHp: (name: string, hp: number, max: number) => `⚔ ${name} · ${hp}/${max}`,
+    wardenBestedFloat: (name: string) => `${name} is bested!`,
+    furyRestless: 'The colossus grows restless — the runes burn hotter!',
+    furyFury: 'FURY — the runes blaze red!',
+  },
+
+  // ADR-0017 — the Warden ladder's display names (ids stay english-internal)
+  warden: {
+    name: (id: string) => (({ mire: 'the Mire Warden' }) as Record<string, string>)[id] ?? id,
+    realmName: (id: string) => (({ mire: 'the Sunken Mire' }) as Record<string, string>)[id] ?? id,
+  },
+
+  // ADR-0017 — a Warden altar's Offering-bars panel (the Seal panel, per rung)
+  wardenAltar: {
+    title: (name: string) => `⚑ The altar of ${name}`,
+    hint: 'Lay the demanded goods here (E at the altar) — the Offering is communal and breaks once, forever.',
+    broken: 'The Offering is complete — a Warden Totem wakes it.',
+  },
+
+  // the WoW-style character panel: paperdoll slots + derived attributes (ADR-0017 §4)
+  character: {
+    title: '🧍 Character',
+    bag: 'Bag',
+    slot: { helm: 'Helm', chest: 'Chest', boots: 'Boots', weapon: 'Weapon' },
+    slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon: '⚔' },
+    emptySlot: (name: string) => `${name} slot — drag ${name} here`,
+    unequipHint: 'click to unequip',
+    attrMove: 'Move speed',
+    attrAttack: 'Attack speed',
+    attrDamage: 'Damage',
+    attrCrit: 'Crit',
+    attrDps: 'DPS',
+    attrWeapon: 'Weapon',
+    noWeapon: 'bare hands',
   },
 
   buff: {
@@ -247,6 +283,7 @@ const en = {
     fromDeepGuardian: 'from the Deep Guardian',
     fromForgeborn: 'from the Forgeborn',
     fromDepthBoss: (boss: string) => `from ${boss}`,
+    fromWarden: (name: string) => `from ${name}`,
     hint: 'Click an item to take it into your pack',
     take: 'Take',
     takeAll: 'Take all',
@@ -295,7 +332,19 @@ const en = {
     slotEmpty: (i: number) => `Loadout slot ${i} — drag a Tool here, press ${i} to select`,
     minimapTitle: 'Minimap — white: you, yellow: others',
     // kind subtitle on the hover popup for non-weapon items
-    kind: { resource: 'Resource', tool: 'Tool', structure: 'Structure', consumable: 'Consumable', food: 'Food' },
+    kind: { resource: 'Resource', tool: 'Tool', structure: 'Structure', consumable: 'Consumable', food: 'Food', armor: 'Armor' },
+    equip: 'Equip',
+    unequip: 'Unequip',
+    wornBadge: 'worn — every friend sees it on you',
+  },
+
+  // ADR-0017 §3/§4: the Codex Card's Armor stat rows
+  armor: {
+    moveSpeed: 'Move speed',
+    attackSpeed: 'Attack speed',
+    band: 'Damage band',
+    worn: 'worn',
+    slot: { boots: 'Boots', chest: 'Chest', helm: 'Helm' },
   },
 
   recipe: {
@@ -391,6 +440,13 @@ const en = {
     altarAwaitsTotem: 'The altar awaits a Summoning Totem (5 wood · 3 fiber · 2 fruit).',
     fightAlreadyRaging: 'A fight is already raging — join it!',
     needTotem: 'You need a Summoning Totem.',
+    // ADR-0017 — the Warden altars + Realm gates
+    wardenBested: (name: string) => `🏆 ${name} sinks into the mire of slumber — bested!`,
+    wardenUnbeaten: (name: string) => `${name} returns to slumber, unbeaten. The totem is spent.`,
+    wardenAltarLaid: 'You lay your Offerings upon the Warden altar.',
+    wardenAltarNeeds: (needs: string) => `The Warden altar asks for ${needs} — you carry nothing it still needs.`,
+    wardenAwaitsTotem: (totem: string) => `The Offering is complete — the altar awaits a ${totem}.`,
+    realmGateKeyTurn: (realm: string) => `The key fits — ${realm} stands open, forever!`,
     sealStillHolds: 'The Seal still holds.',
     sealBrokenArenaOpen: 'The Seal lies broken — the arena stands open.',
     laidOfferings: 'You lay your Offerings upon the Seal.',
@@ -564,6 +620,13 @@ const en = {
     delveOpened: (who: string) => `the rubble gives way — ${who} has opened the Delve! A cold draught rises from the shaft.`,
     guardianBested: (who: string, scales: number) =>
       `🏆 THE GUARDIAN IS BESTED! ${who} carried the day — ${scales} Guardian Scales to every fighter. It sinks back into slumber.`,
+    // ADR-0017 — the Warden ladder's narration
+    wardenStirs: (name: string, who: string) => `${who} set a Warden Totem upon the altar — ${name} STIRS! Gather at the arena and strike to begin.`,
+    wardenBested: (name: string, who: string) => `🏆 ${name.toUpperCase()} IS BESTED! ${who} carried the day — the Spoils hold each fighter's due.`,
+    wardenAltarComplete: (name: string) => `⚡ the altar's Offering is complete — a Warden Totem will wake ${name}!`,
+    wardenNoStrike: (name: string) => `no one struck in time — ${name} loses interest and sinks back into slumber. The totem is spent.`,
+    wardenUnbeaten: (name: string) => `${name} returns to slumber, unbeaten. Another Totem will wake it.`,
+    realmOpened: (realm: string, who: string) => `⚡ the gate glyphs wake — ${who} has opened ${realm}, for everyone, forever!`,
     villageFounded: (who: string) => `🏛 ${who} founded the Village! Everyone without a Hammock now wakes at the Hall.`,
     villageGrew: (name: string) => `🏛 the Village has grown into a ${name}!`,
     festivalStarted: '🎉 The village wishes are answered — a Dorffest begins! Everyone is swift.',
@@ -715,6 +778,38 @@ const de: Strings = {
     guardianHp: (hp, max) => `⚔ Der Wächter · ${hp}/${max}`,
     bestedFloat: 'Der Wächter ist bezwungen!',
     clang: 'kling',
+    wardenStirs: (name) => `⚔ ${name} regt sich`,
+    wardenHp: (name, hp, max) => `⚔ ${name} · ${hp}/${max}`,
+    wardenBestedFloat: (name) => `${name} ist bezwungen!`,
+    furyRestless: 'Der Koloss wird rastlos — die Runen glühen heißer!',
+    furyFury: 'RASEREI — die Runen glühen rot!',
+  },
+
+  warden: {
+    name: (id) => (({ mire: 'Der Moorwächter' }) as Record<string, string>)[id] ?? id,
+    realmName: (id) => (({ mire: 'das Versunkene Moor' }) as Record<string, string>)[id] ?? id,
+  },
+
+  wardenAltar: {
+    title: (name) => `⚑ Der Altar: ${name}`,
+    hint: 'Lege die verlangten Güter hier nieder (E am Altar) — die Opfergabe ist gemeinschaftlich und bricht einmal, für immer.',
+    broken: 'Die Opfergabe ist vollbracht — ein Wächter-Totem weckt ihn.',
+  },
+
+  character: {
+    title: '🧍 Charakter',
+    bag: 'Rucksack',
+    slot: { helm: 'Helm', chest: 'Rüstung', boots: 'Stiefel', weapon: 'Waffe' },
+    slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon: '⚔' },
+    emptySlot: (name) => `Platz „${name}“ — ${name} hierher ziehen`,
+    unequipHint: 'zum Ablegen klicken',
+    attrMove: 'Tempo',
+    attrAttack: 'Angriffstempo',
+    attrDamage: 'Schaden',
+    attrCrit: 'Krit',
+    attrDps: 'DPS',
+    attrWeapon: 'Waffe',
+    noWeapon: 'bloße Hände',
   },
 
   buff: {
@@ -749,6 +844,7 @@ const de: Strings = {
     // the composed boss name stays nominative ("der Aschene Koloss") — no
     // preposition, so no case declension can go wrong
     fromDepthBoss: (boss: string) => boss,
+    fromWarden: (name) => name,
     hint: 'Klick ein Item an, um es in den Rucksack zu nehmen',
     take: 'Nehmen',
     takeAll: 'Alles nehmen',
@@ -794,7 +890,18 @@ const de: Strings = {
     slotEmpty: (i) => `Ausrüstungsplatz ${i} — zieh ein Werkzeug hierher, drücke ${i} zum Auswählen`,
     minimapTitle: 'Minikarte — weiß: du, gelb: andere',
     // kind subtitle on the hover popup for non-weapon items
-    kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung' },
+    kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung', armor: 'Rüstung' },
+    equip: 'Anlegen',
+    unequip: 'Ablegen',
+    wornBadge: 'angelegt — alle Freunde sehen es an dir',
+  },
+
+  armor: {
+    moveSpeed: 'Tempo',
+    attackSpeed: 'Angriffstempo',
+    band: 'Schadensband',
+    worn: 'angelegt',
+    slot: { boots: 'Stiefel', chest: 'Rüstung', helm: 'Helm' },
   },
 
   recipe: {
@@ -887,6 +994,12 @@ const de: Strings = {
     altarAwaitsTotem: 'Der Altar wartet auf ein Beschwörungstotem (5 Holz · 3 Fasern · 2 Frucht).',
     fightAlreadyRaging: 'Ein Kampf tobt bereits — schließ dich an!',
     needTotem: 'Du brauchst ein Beschwörungstotem.',
+    wardenBested: (name) => `🏆 ${name} sinkt bezwungen in den Schlummer!`,
+    wardenUnbeaten: (name) => `${name} kehrt in den Schlummer zurück, unbesiegt. Das Totem ist verbraucht.`,
+    wardenAltarLaid: 'Du legst deine Opfergaben auf den Wächter-Altar.',
+    wardenAltarNeeds: (needs) => `Der Altar verlangt ${needs} — du trägst nichts, was er noch braucht.`,
+    wardenAwaitsTotem: (totem) => `Die Opfergabe ist vollbracht — der Altar wartet auf ein ${totem}.`,
+    realmGateKeyTurn: (realm) => `Der Schlüssel passt — ${realm} steht offen, für immer!`,
     sealStillHolds: 'Das Siegel hält noch.',
     sealBrokenArenaOpen: 'Das Siegel ist gebrochen — die Arena steht offen.',
     laidOfferings: 'Du legst deine Opfergaben auf das Siegel.',
@@ -1057,6 +1170,12 @@ const de: Strings = {
     guardianUnbeaten: 'der Wächter kehrt in den Schlummer zurück, unbesiegt. Die Arena verstummt — eine weitere Opfergabe wird ihn wecken.',
     guardianStirs: (who) => `${who} legte eine Opfergabe auf den Altar — der Wächter REGT SICH! Sammelt euch an der Arena und schlagt zu, um zu beginnen.`,
     delveOpened: (who) => `das Geröll gibt nach — ${who} hat den Schacht geöffnet! Ein kalter Luftzug steigt aus der Tiefe auf.`,
+    wardenStirs: (name, who) => `${who} setzte ein Wächter-Totem auf den Altar — ${name} REGT SICH! Sammelt euch an der Arena und schlagt zu, um zu beginnen.`,
+    wardenBested: (name, who) => `🏆 ${name.toUpperCase()} IST BEZWUNGEN! ${who} trug den Sieg davon — die Beute hält jedes Kämpfers Anteil bereit.`,
+    wardenAltarComplete: (name) => `⚡ die Opfergabe des Altars ist vollbracht — ein Wächter-Totem weckt ${name}!`,
+    wardenNoStrike: (name) => `niemand schlug rechtzeitig zu — ${name} verliert das Interesse und sinkt zurück in den Schlummer. Das Totem ist verbraucht.`,
+    wardenUnbeaten: (name) => `${name} kehrt unbesiegt in den Schlummer zurück. Ein weiteres Totem wird ihn wecken.`,
+    realmOpened: (realm, who) => `⚡ die Tor-Glyphen erwachen — ${who} hat ${realm} geöffnet, für alle, für immer!`,
     guardianBested: (who, scales) =>
       `🏆 DER WÄCHTER IST BEZWUNGEN! ${who} haben den Sieg errungen — ${scales} Wächterschuppen für jeden Kämpfer. Er sinkt zurück in den Schlummer.`,
     villageFounded: (who: string) => `🏛 ${who} hat das Dorf gegründet! Jeder ohne Hängematte erwacht nun an der Halle.`,
