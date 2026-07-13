@@ -412,6 +412,18 @@
   opacity: 0.3;
   pointer-events: none;
 }
+/* the helm + boot emoji render as solid colour shapes; those two slots use a
+   line-art SVG instead so they read as outlines like the flat swords/shield */
+.equip-ghost svg {
+  width: calc(22px * var(--ui-scale));
+  height: calc(22px * var(--ui-scale));
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
 #char-doll {
   background: radial-gradient(ellipse at 50% 40%, rgba(99, 224, 184, 0.1), rgba(0, 0, 0, 0.35));
   border: 1px solid rgba(255, 255, 255, 0.1);

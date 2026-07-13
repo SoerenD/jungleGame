@@ -237,7 +237,7 @@ const en = {
 
   // the WoW-style character panel: paperdoll slots + derived attributes (ADR-0017 §4)
   character: {
-    title: '🧍 Character',
+    title: 'Character',
     bag: 'Bag',
     slot: { helm: 'Helm', chest: 'Chest', boots: 'Boots', weapon: 'Weapon' },
     slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon: '⚔' },
@@ -799,7 +799,7 @@ const de: Strings = {
   },
 
   character: {
-    title: '🧍 Charakter',
+    title: 'Charakter',
     bag: 'Rucksack',
     slot: { helm: 'Helm', chest: 'Rüstung', boots: 'Stiefel', weapon: 'Waffe' },
     slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon: '⚔' },

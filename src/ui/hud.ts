@@ -18,7 +18,7 @@ import {
   type AudioChannel,
 } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine, weaponStatParts } from '../content/guardian';
-import { armorDef, ARMOR_SLOTS, type ArmorSlot, type EquippedArmor } from '../content/armor';
+import { armorDef, type ArmorSlot, type EquippedArmor } from '../content/armor';
 import { characterSheet } from '../content/stats';
 import { drawBlockheadSheet, AVATAR_W, AVATAR_H } from '../avatars';
 import type { Appearance, WardenAltarState } from '../backend/types';
@@ -1983,6 +1983,14 @@ function slotItem(kind: EquipSlotKind): ItemId | null {
   return kind === 'weapon' ? heldItem() : equippedArmor[kind] ?? null;
 }
 
+/** line-art empty-slot icons for the slots whose emoji render as solid shapes
+ *  (helm, boots); drawn as outlines to match the flat swords/shield glyphs.
+ *  Stroke + sizing come from `.equip-ghost svg` in styles.css. */
+const GHOST_SVG: Partial<Record<EquipSlotKind, string>> = {
+  helm: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 13a6 6 0 0 1 12 0v4a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M6 14.7h12"/></svg>',
+  boots: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h3.5v9l4.5 2.6v2.9H7.5V12H9z"/></svg>',
+};
+
 /** build one paperdoll slot: its icon (or a ghost), drop target, and click action */
 function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
   const slot = document.createElement('div');
@@ -2010,7 +2018,11 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
   } else {
     const ghost = document.createElement('span');
     ghost.className = 'equip-ghost';
-    ghost.textContent = t.character.slotIcon[kind];
+    // helm/boots use a line-art SVG so their empty-slot icon reads as an outline
+    // like the flat swords/shield emoji; chest/weapon keep their emoji glyph
+    const svg = GHOST_SVG[kind];
+    if (svg) ghost.innerHTML = svg;
+    else ghost.textContent = t.character.slotIcon[kind];
     slot.appendChild(ghost);
     slot.title = t.character.emptySlot(label);
   }
@@ -2038,14 +2050,16 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
   return slot;
 }
 
-/** (re)lay the equipment slots: helm/chest/boots on the left, the weapon on the right */
+/** (re)lay the equipment slots: helm→chest→boots (head-to-toe) on the left,
+ *  the weapon on the right */
 function renderEquipSlots(): void {
   const left = document.getElementById('char-slots-left');
   const right = document.getElementById('char-slots-right');
   if (!left || !right) return;
   left.innerHTML = '';
   right.innerHTML = '';
-  for (const s of ARMOR_SLOTS) left.appendChild(buildEquipSlot(s));
+  const order: ArmorSlot[] = ['helm', 'chest', 'boots'];
+  for (const s of order) left.appendChild(buildEquipSlot(s));
   right.appendChild(buildEquipSlot('weapon'));
 }
 
