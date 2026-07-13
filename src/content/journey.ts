@@ -5,7 +5,7 @@
  * done; contextual key hints retire after a few uses.
  */
 import { pick } from '../i18n';
-import type { Inventory, JourneyState, JourneyStepId, QuestState, SealState } from '../backend/types';
+import type { Inventory, JourneyState, JourneyStepId, QuestState, SealState, WardenWorldState } from '../backend/types';
 
 export const JOURNEY_STEPS: { id: JourneyStepId; label: string }[] = [
   { id: 'gather_wood', label: pick('Gather wood', 'Holz sammeln') },
@@ -49,6 +49,31 @@ export const DELVE_QUEST_STEPS: { id: string; label: string; done: (p: DelveProg
 
 export function delveQuestComplete(p: DelveProgress): boolean {
   return DELVE_QUEST_STEPS.every((s) => s.done(p));
+}
+
+/**
+ * The Mire quest ("The Sunken Mire", ADR-0017 rung 1): the arc from the Mangrove
+ * Coast altar to the first piece of Warden Armor. Like the Delve quest every step
+ * auto-ticks from state the HUD already has (the Warden altar/gate flags + the
+ * inventory) — no new persistence: the Mire Key proves the Warden was bested, a
+ * tideglass in the pack proves the Brine Kiln ran, the Boots prove the chain closed.
+ */
+export interface MireProgress {
+  inventory: Inventory;
+  /** the per-Warden altar/gate progress (backend `wardens` snapshot) */
+  wardens: Record<string, WardenWorldState> | null;
+}
+
+export const MIRE_QUEST_STEPS: { id: string; label: string; done: (p: MireProgress) => boolean }[] = [
+  { id: 'mire_offering', label: pick('Complete the Offering at the Mangrove Coast altar', 'Die Opfergabe am Altar der Mangrovenküste vollenden'), done: (p) => !!p.wardens?.mire?.altar.broken },
+  { id: 'best_mire', label: pick('Defeat the Mire Warden — earn the Mirefang & Mire Key', 'Den Moorwächter bezwingen — Moorzahn & Moor-Schlüssel verdienen'), done: (p) => (p.inventory.mire_key ?? 0) > 0 },
+  { id: 'open_mire_gate', label: pick('Open the gate to the Sunken Mire', 'Das Tor zum Versunkenen Moor öffnen'), done: (p) => !!p.wardens?.mire?.gateOpen },
+  { id: 'refine_tideglass', label: pick('Temper salt-reed into tideglass at a Brine Kiln', 'Salzried im Sole-Ofen zu Gezeitenglas härten'), done: (p) => (p.inventory.tideglass ?? 0) > 0 },
+  { id: 'craft_boots', label: pick('Craft the Tideglass Boots', 'Die Gezeitenglas-Stiefel herstellen'), done: (p) => (p.inventory.tideglass_boots ?? 0) > 0 },
+];
+
+export function mireQuestComplete(p: MireProgress): boolean {
+  return MIRE_QUEST_STEPS.every((s) => s.done(p));
 }
 
 export function hintRetired(j: JourneyState, hint: HintId): boolean {

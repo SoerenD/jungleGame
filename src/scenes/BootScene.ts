@@ -185,6 +185,22 @@ export class BootScene extends Phaser.Scene {
       frameRate: 4,
       repeat: -1,
     });
+    // ADR-0017 rung 1: the Mire Warden shares the Guardian's 8-frame boss-sheet
+    // contract (0 slumber, 1..2 idle, 3..4 eye), so its idle/eye anims mirror it
+    if (this.textures.exists('mire_warden')) {
+      this.anims.create({
+        key: 'mire-idle',
+        frames: this.anims.generateFrameNumbers('mire_warden', { start: 1, end: 2 }),
+        frameRate: 2,
+        repeat: -1,
+      });
+      this.anims.create({
+        key: 'mire-eye',
+        frames: this.anims.generateFrameNumbers('mire_warden', { start: 3, end: 4 }),
+        frameRate: 4,
+        repeat: -1,
+      });
+    }
     this.game.events.emit('assets-ready');
   }
 }

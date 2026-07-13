@@ -13,7 +13,7 @@ import {
   ARENA_W,
   GUARDIAN_KIT,
   LUNGE_ZONE,
-  makeSlamFamilyWaveTiles,
+  makeMireWaveTiles,
   MELEE_RING_HOT_FROM,
   MELEE_RING_MAX,
   MELEE_RING_MIN,
@@ -37,11 +37,12 @@ export interface WardenDef {
 }
 
 /**
- * The Mire Warden's fight kit — T4 ships it as a PLACEHOLDER on the shared
- * slam-family patterns (own seeds, tighter phases, denser fury) so the second
- * authored fight is provably kit-driven; T5 re-authors it into the rising-water
- * wave rows + geyser columns of the plan. Same arena dimensions as the
- * Guardian's court, where the ?wardenfight dev fight runs.
+ * The Mire Warden's fight kit (ADR-0017 rung 1) — its OWN authored schedule on
+ * the drowned court's rising-water bands + geyser columns (makeMireWaveTiles),
+ * a hair faster and denser than the Guardian so it reads as a distinct dance.
+ * Same arena dimensions as the Guardian's court (ARENA_W×ARENA_H); its visual
+ * identity (teal tints + the mire-warden sheet) lives scene-side in KIT_ART.
+ * PURE DATA + PURE FUNCTIONS — node-importable, no browser globals, no ../config.
  */
 const MIRE_PHASES: FuryPhase[] = [
   { index: 0, name: 'calm', wavePeriodMs: 4_600, telegraphMs: 1_600, slamMs: 800, eyeMs: 2_200, density: 1.1, lungeEvery: 4 },
@@ -55,7 +56,7 @@ export const MIRE_KIT: WardenKit = {
   arenaH: ARENA_H,
   phases: MIRE_PHASES,
   furyThresholds: [0.4, 0.75],
-  waveTiles: makeSlamFamilyWaveTiles(ARENA_W, ARENA_H, 0x1d872c3f),
+  waveTiles: makeMireWaveTiles(ARENA_W, ARENA_H, 0x1d872c3f),
   lungeSeed: 0x77aa11bb,
   lungeZone: LUNGE_ZONE,
   meleeRingMin: MELEE_RING_MIN,
@@ -74,8 +75,9 @@ export const WARDENS: Record<string, WardenDef> = {
     totem: 'mire_totem',
     gateKey: 'mire_key',
     realm: 'sunken_mire',
-    // T5 adds the Mirefang (the participation weapon drop) to this set
-    drops: { mire_key: 1 },
+    // participation rule (≥1 hit → full set): the gate key AND the Mirefang, the
+    // Mire Warden's pure-combat weapon with the tide-wade-slow-ignore passive
+    drops: { mire_key: 1, mirefang: 1 },
   },
 };
 

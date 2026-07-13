@@ -54,6 +54,10 @@ export const RECIPES: Recipe[] = [
   // ADR-0017 — the Warden Totems: each rung's summon Offering is FORGED from the
   // previous tier's goods (rung 1 = tier-2 economy), repeatable like the Guardian's
   { id: 'mire_totem', output: 'mire_totem', count: 1, cost: { hardwood: 2, obsidian: 2, fiber: 3 }, requiresForge: true, kind: 'consumable' },
+  // ADR-0017 rung 1 — the Tideglass Boots: the Sunken Mire's Armor, assembled from
+  // Brine-Kiln tideglass. kind:'tool' so it lands in the Tools & Weapons tab (no
+  // armor tab yet); it auto-equips once in inventory (the HUD keys off armorDef).
+  { id: 'tideglass_boots', output: 'tideglass_boots', count: 1, cost: { tideglass: 6, plank: 2, fiber: 2 }, kind: 'tool' },
 
   // ADR-0012 — the cooked-meat campfire recipe: a NEW ingredient (Wildlife meat)
   // feeding the EXISTING move-speed buff (cooked_meat eats identically to a cooked
@@ -73,6 +77,9 @@ export const RECIPES: Recipe[] = [
   // ...and the Forge is the tier-2 workshop: build it (planks + stone, hammer) to
   // unlock forging the heavy metal gear beside it.
   { id: 'forge', output: 'forge', count: 1, cost: { plank: 4, stone: 8 }, requiresTool: 'hammer', kind: 'structure' },
+  // ADR-0017 rung 1 — the Brine Kiln: the Sunken Mire's Refiner (salt-reed →
+  // tideglass on the generic kernel). A 2×2 Building, raised beside the reeds.
+  { id: 'brine_kiln', output: 'brine_kiln', count: 1, cost: { plank: 4, stone: 6, obsidian: 2 }, requiresTool: 'hammer', kind: 'structure' },
   // ...and the new functional Structures + decor consume its planks
   { id: 'hammock', output: 'hammock', count: 1, cost: { plank: 2, fiber: 3 }, kind: 'structure' },
   { id: 'signpost', output: 'signpost', count: 1, cost: { plank: 1, fiber: 1 }, kind: 'structure' },

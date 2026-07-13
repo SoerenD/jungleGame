@@ -345,7 +345,7 @@ export interface StructureArt {
    */
   kind:
     | 'hall' | 'well' | 'market' | 'keep' | 'monument' | 'fountain' | 'archJungle'
-    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge';
+    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge' | 'kiln';
   /**
    * tiles the sprite rises ABOVE its footprint (defaults from shape: monument 2,
    * else 1). The bell-towered hall rises 3 so it out-scales the houses.
@@ -375,4 +375,13 @@ export const VILLAGE_ART: Partial<Record<StructureId, StructureArt>> = {
  */
 export const FORGE_ART: Partial<Record<StructureId, StructureArt>> = {
   forge: { kind: 'forge', body: '#635e4f', roof: '#3a2c22', trim: '#e0763c', w: 2, h: 2, shape: 'building', glow: true },
+};
+
+/**
+ * Code-drawn art for the Sunken Mire's Brine Kiln (ADR-0017 rung 1) — same
+ * StructureArt pipeline as FORGE_ART, but a squat brick kiln glowing the Mire's
+ * signal teal (#63e0b8 / #2f8f74) at its brine mouth instead of the Forge's ember.
+ */
+export const KILN_ART: Partial<Record<StructureId, StructureArt>> = {
+  brine_kiln: { kind: 'kiln', body: '#5a6b6a', roof: '#33403f', trim: '#63e0b8', w: 2, h: 2, shape: 'building', glow: true },
 };

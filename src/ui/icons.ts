@@ -7,7 +7,7 @@
 import { OBJECTS } from '../assetConfig';
 import { asset } from '../paths';
 import type { ItemId } from '../content/items';
-import { FORGE_ART, VILLAGE_ART, type StructureArt } from '../content/village';
+import { FORGE_ART, KILN_ART, VILLAGE_ART, type StructureArt } from '../content/village';
 import { WILDLIFE_ART } from '../content/wildlife';
 
 /** shared palette: char → CSS color ('.' and unknown chars are transparent) */
@@ -86,6 +86,36 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '............',
     '............',
     '............',
+    '............',
+  ],
+  // ADR-0017 rung 1 — the Mire chain: a tideglass shard + the Mirefang blade,
+  // both in the Mire's signal teal (T bright, q deep, f near-white glint)
+  tideglass: [
+    '............',
+    '.....xx.....',
+    '....xTfx....',
+    '...xTTqx....',
+    '...xTqqx....',
+    '..xTqqTx....',
+    '..xqqqTx....',
+    '..xqqTx.....',
+    '...xqx......',
+    '....x.......',
+    '............',
+    '............',
+  ],
+  mirefang: [
+    '............',
+    '.........xx.',
+    '........xfx.',
+    '.......xTqx.',
+    '......xTqx..',
+    '.....xTqx...',
+    '....xTqx....',
+    '...xqqqx....',
+    '...xhhx.....',
+    '..xhhx......',
+    '..xTx.......',
     '............',
   ],
   wood: [
@@ -1167,6 +1197,31 @@ function drawForge(R: Put, C: Clear): void {
   R(24, 36, 1, 7, '#3c2c1d'); R(26, 36, 1, 7, '#3c2c1d'); R(28, 36, 1, 7, '#3c2c1d');
 }
 
+// The Brine Kiln (ADR-0017 rung 1): a squat stone kiln whose arched brine mouth
+// glows the Mire's signal teal, with a curl of steam and a salt-crust rim — the
+// Forge's furnace anatomy, re-hued from ember to tideglass.
+function drawKiln(R: Put, C: Clear): void {
+  const S = B_PAL.stone;
+  const brineD = '#1f6a56', brine = '#2f8f74', brine2 = '#63e0b8', core = '#c8fbe8';
+  // ground slab
+  R(2, 43, 28, 5, B_OUT); bStones(R, 3, 44, 26, 3, true);
+  // curl of salt steam rising
+  R(9, 1, 2, 2, '#8fb8ad'); R(11, 0, 2, 2, '#b8ddd4'); R(8, 3, 2, 2, '#7aa89d');
+  // squat wide kiln body (dome-topped)
+  R(5, 8, 20, 3, B_OUT); C(5, 8, 1, 1); C(24, 8, 1, 1);
+  R(4, 11, 22, 32, B_OUT); bStones(R, 5, 12, 20, 30, true); R(5, 12, 20, 1, S.hi);
+  // salt-crust rim along the shoulder
+  R(5, 12, 20, 1, brine2); R(6, 13, 18, 1, '#a9c9c1');
+  // arched brine mouth, banked from deep teal to a bright core
+  R(10, 24, 10, 16, B_OUT); C(10, 24, 1, 1); C(19, 24, 1, 1);
+  R(11, 26, 8, 13, brineD); R(12, 28, 6, 10, brine); R(13, 30, 4, 7, brine2); R(14, 32, 2, 4, core);
+  R(11, 38, 8, 1, brine2); R(12, 39, 6, 1, brine);
+  R(9, 22, 1, 1, core); R(20, 27, 1, 1, brine2); R(21, 31, 1, 1, core); // brine sparks
+  // brick banding + a couple of tie-bars for the kiln read
+  R(4, 22, 22, 1, B_OUT); R(4, 34, 22, 1, B_OUT);
+  R(6, 18, 1, 1, brine2); R(23, 18, 1, 1, brine2);
+}
+
 // Overgrown-Jungle vine arch (mossy stone + hanging vines)
 const JP = {
   out: '#1c2018', stoneD: '#454b40', stoneM: '#5d6455', stone: '#78806e', stoneL: '#99a189',
@@ -1309,6 +1364,13 @@ function drawStructureIcon(R: Put, C: Clear, kind: StructureArt['kind']): void {
       R(8, 8, 4, 1, B_OUT); R(9, 9, 2, 1, B_OUT); R(8, 10, 4, 1, B_OUT); // anvil
       R(9, 9, 2, 1, S.hi);
       break;
+    case 'kiln':
+      // squat wide stone kiln with a teal-glowing brine mouth + a curl of steam
+      R(6, 0, 2, 1, '#b8ddd4'); R(4, 1, 2, 1, '#8fb8ad'); // steam
+      R(1, 2, 10, 10, B_OUT); bStones(R, 2, 3, 8, 8, false);
+      R(2, 3, 8, 1, '#63e0b8'); // salt-crust rim
+      R(4, 5, 4, 6, B_OUT); R(4, 6, 4, 5, '#2f8f74'); R(5, 7, 2, 4, '#63e0b8'); R(5, 8, 1, 2, '#c8fbe8');
+      break;
   }
 }
 
@@ -1326,6 +1388,7 @@ const STRUCTURE_DRAWERS: Record<StructureArt['kind'], (R: Put, C: Clear) => void
   trophy: (R, C) => drawTrophy(R, C),
   rug: (R) => drawRug(R),
   forge: (R, C) => drawForge(R, C),
+  kiln: (R, C) => drawKiln(R, C),
 };
 
 /**
@@ -1357,7 +1420,8 @@ export function itemIcon(id: ItemId): string {
   const villageArt: StructureArt | undefined =
     VILLAGE_ART[id as keyof typeof VILLAGE_ART] ??
     WILDLIFE_ART[id as keyof typeof WILDLIFE_ART] ??
-    FORGE_ART[id as keyof typeof FORGE_ART];
+    FORGE_ART[id as keyof typeof FORGE_ART] ??
+    KILN_ART[id as keyof typeof KILN_ART];
   let url = '';
   if (grid) {
     const canvas = document.createElement('canvas');

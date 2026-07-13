@@ -110,6 +110,8 @@ interface WorldData {
   blocked: number[];
   tablets: { id: string; tx: number; ty: number }[];
   treasureSpots: { tx: number; ty: number }[];
+  /** ADR-0017 §1: per-Warden arenas — only the rect is needed here (roster checks) */
+  wardenArenas?: Record<string, { arena: { x: number; y: number; w: number; h: number } }>;
 }
 
 /** what a Player broadcasts about themselves (presence + position stream) */
@@ -1245,7 +1247,7 @@ export class SupabaseBackend implements Backend {
     let maxHp = f.maxHp;
     let eyeOpen = true;
     if (engaging) {
-      roster = this.playersInArena();
+      roster = this.playersInArena(f.warden);
       maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * Math.max(1, roster.length);
     } else {
       // the Eye Window of the ACTIVE fight's kit (ADR-0017)
@@ -1315,8 +1317,14 @@ export class SupabaseBackend implements Backend {
     return { ok: true, knockdowns: res.knockdowns, exhausted: res.exhausted, wake: res.wake, atHammock: res.atHammock };
   }
 
-  private playersInArena(): string[] {
-    const a = this.wd.arena;
+  /** the arena rect the active fight belongs to (ADR-0017 §1): a Warden fights in
+   *  its own court; the Guardian keeps the top-level arena */
+  private arenaRectOf(warden: string | null | undefined): { x: number; y: number; w: number; h: number } {
+    return (warden && this.wd.wardenArenas?.[warden]?.arena) || this.wd.arena;
+  }
+
+  private playersInArena(warden: string | null | undefined): string[] {
+    const a = this.arenaRectOf(warden);
     const inRect = (x: number, y: number) => {
       const tx = Math.floor(x / TILE);
       const ty = Math.floor(y / TILE);
@@ -1335,7 +1343,7 @@ export class SupabaseBackend implements Backend {
    * pruned from `positions`, so they aren't counted either.
    */
   private liveRosterInArena(f: FightState): number {
-    const a = this.wd.arena;
+    const a = this.arenaRectOf(f.warden);
     const inRect = (x: number, y: number) => {
       const tx = Math.floor(x / TILE);
       const ty = Math.floor(y / TILE);

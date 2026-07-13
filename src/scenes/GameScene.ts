@@ -27,12 +27,12 @@ import type {
   WardenWorldState,
 } from '../backend/types';
 import { hintRetired, journeyComplete, type HintId } from '../content/journey';
+import { tideExposedWithin, tideFloods, tideHeight } from '../content/tide';
 import {
   DAY_CYCLE_MS,
   DEV_DEEP,
   DEV_DUNGEON,
   DEV_REALM_TEST,
-  DEV_WARDEN_FIGHT,
   DEV_REFINER_TEST,
   DEV_WILD,
   EXHAUSTION_KNOCKDOWNS,
@@ -60,6 +60,10 @@ import {
   SPEED_BUFF_FACTOR,
   SWING_CADENCE_MS,
   TEST_REFINER,
+  BRINE_KILN,
+  TIDE_PERIOD_MS,
+  WADE_SLOW_FACTOR,
+  TIDE_EXPOSURE_SLACK_MS,
   TILE,
   ZOOM,
   CREATURE_DENSITY,
@@ -128,6 +132,7 @@ import {
   FOUNTAIN_WISH_ITEM,
   FOUNTAIN_WISH_THRESHOLD,
   FORGE_ART,
+  KILN_ART,
   inventoryCapacity,
   inVillageZone,
   villageBuff,
@@ -178,6 +183,21 @@ interface WorldData {
   elevation?: { regions: ElevationRegion[] };
   /** Realm districts (ADR-0017 §2) — omitted on pre-Realm maps */
   districts?: DistrictDef[];
+  /**
+   * Per-Warden arenas in the World (ADR-0017 §1), keyed by WardenDef id. Rung 0's
+   * Guardian keeps the top-level arena/guardianHome/guardianAltar/sealMonument
+   * fields; every further Warden's court lives here with the same anatomy.
+   */
+  wardenArenas?: Record<string, WardenArena>;
+}
+
+/** one Warden's authored court in the World: the Guardian-arena anatomy, per rung */
+interface WardenArena {
+  arena: { x: number; y: number; w: number; h: number };
+  home: { tx: number; ty: number };
+  altar: { tx: number; ty: number };
+  monument: { tx: number; ty: number };
+  sealGate: { tx: number; ty: number }[];
 }
 
 /**
@@ -339,8 +359,35 @@ function positionHeld(img: Phaser.GameObjects.Image, px: number, py: number, dir
   img.setDepth(py + (h.behind ? -1 : 1));
 }
 
-/** rune glow tint per fury phase: calm violet → restless amber → fury red */
-const FURY_TINTS = [0xb478ff, 0xff9a3d, 0xff4433];
+/**
+ * Per-Warden fight VISUALS (ADR-0017): the WardenKit carries no art (it must stay
+ * node-importable), so the scene keeps each kit's palette + sprite/anim keys here,
+ * keyed by the fight's warden id ('guardian' = rung 0). The Guardian entry holds
+ * the exact former literals (a no-op); the Mire wears the drowned court's teal.
+ */
+interface KitArt {
+  spriteKey: string;
+  idle: string;
+  eye: string;
+  /** rune glow base tint (also the calm-phase fury tint) */
+  glowBase: number;
+  /** rune glow tint per fury phase: calm → restless → fury */
+  fury: readonly [number, number, number];
+  /** slam-tile telegraph fill / hot-slam fill / lunge landing fill / melee-ring fill */
+  danger: number;
+  slam: number;
+  lunge: number;
+  ring: number;
+  /** the amber-eye blaze tint during an Eye Window */
+  eyeTint: number;
+  /** the raised Ward's cast (the per-fight barrier over the entrance) */
+  ward: number;
+}
+const KIT_ART: Record<string, KitArt> = {
+  guardian: { spriteKey: 'guardian', idle: 'guardian-idle', eye: 'guardian-eye', glowBase: 0xb478ff, fury: [0xb478ff, 0xff9a3d, 0xff4433], danger: 0xff3322, slam: 0xff2211, lunge: 0xffa02f, ring: 0xff5a2f, eyeTint: 0xffb437, ward: 0xffb9a0 },
+  // the Mire Warden's rising-water court: teal telegraphs, a tideglass eye + Ward
+  mire: { spriteKey: 'mire_warden', idle: 'mire-idle', eye: 'mire-eye', glowBase: 0x2f8f74, fury: [0x2f8f74, 0x39c39a, 0x63e0b8], danger: 0x1f9e7a, slam: 0x14c79a, lunge: 0x63e0b8, ring: 0x2fd6a6, eyeTint: 0x9ffbe4, ward: 0xa0ffe8 },
+};
 
 /** deterministic per-id variance so the forest looks grown, not stamped */
 function idHash(id: string): number {
@@ -533,7 +580,6 @@ export class GameScene extends Phaser.Scene {
   private fight: FightState | null = null;
   /** per-Warden altar/gate progress (ADR-0017) — mirrors the backend's view */
   private wardens: Record<string, WardenWorldState> = {};
-  private nearWardenAltar = false;
   private guardianSprite!: Phaser.GameObjects.Sprite;
   private guardianShadow!: Phaser.GameObjects.Image;
   private guardianGlow!: Phaser.GameObjects.Image;
@@ -565,6 +611,25 @@ export class GameScene extends Phaser.Scene {
   private entranceSpot: ArenaSpot = { ax: 0, ay: 0 };
   /** set once this Player is knocked out (3 knockdowns) — the Ward then bars re-entry */
   private exhaustedThisFight = false;
+  // ---- ADR-0017 rung 1: the Mire Warden's parallel arena at the Mangrove Coast.
+  // Each further Warden owns its OWN dormant+fight sprite (so both stay visibly
+  // asleep in their courts, MP-correct); activeBoss() picks the set the running
+  // fight drives, keyed by activeWarden (captured on summon, held through endFight).
+  private mireSprite?: Phaser.GameObjects.Sprite;
+  private mireShadow?: Phaser.GameObjects.Image;
+  private mireGlow?: Phaser.GameObjects.Image;
+  private mireEyeGlow?: Phaser.GameObjects.Image;
+  private mireBlockers: Phaser.GameObjects.Rectangle[] = [];
+  private mireHomeSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private mireEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private mireArenaRect: { x: number; y: number; w: number; h: number } | null = null;
+  private mireSealGate: { tx: number; ty: number }[] = [];
+  private mireAltarPos = { x: 0, y: 0 };
+  private mireMonumentPos = { x: 0, y: 0 };
+  private mireBroken = false;
+  private nearMireAltar = false;
+  /** which Warden the active fight's VISUALS belong to (null = the Guardian, rung 0) */
+  private activeWarden: string | null = null;
   // ---- Dungeons v1: the Delve (ADR-0007) — an ephemeral, host-simmed instance
   /** world-tile + pixel position of the sealed mine-shaft entrance */
   private delveEntrance = { x: 0, y: 0, tx: 0, ty: 0 };
@@ -651,6 +716,8 @@ export class GameScene extends Phaser.Scene {
   private hallImg?: Phaser.GameObjects.Image;
   /** throttle for the "pack full" harvest toast (ADR-0013) */
   private packFullToastAt = 0;
+  /** throttle for the tide-submerged reed refusal toast (ADR-0017 rung 1) */
+  private tideToastAt = 0;
   private welcomeStonePos = { x: 0, y: 0 };
   private glows: { img: Phaser.GameObjects.Image; base: number; x: number; y: number }[] = [];
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
@@ -664,6 +731,8 @@ export class GameScene extends Phaser.Scene {
   private mireVeil!: Phaser.GameObjects.Rectangle;
   private mirePuffs: Phaser.GameObjects.Image[] = [];
   private mireAmbience = 0;
+  /** ADR-0017 rung 1: the Tide's rising-water sheen — alpha tracks tideHeight */
+  private tideVeil!: Phaser.GameObjects.Rectangle;
   private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leavesActive = false;
@@ -869,6 +938,75 @@ export class GameScene extends Phaser.Scene {
         .setDepth(890_002);
     }
 
+    // ---- ADR-0017 rung 1: the Mire Warden's court on the Mangrove Coast — a
+    // SECOND authored arena standing from day one (its own dormant sprite, altar
+    // and offering monument), so both Wardens are visibly asleep in their courts.
+    // Its fight runs here through activeBoss() (selected by fight.warden).
+    const wa = this.world.wardenArenas?.mire;
+    if (wa) {
+      this.mireArenaRect = wa.arena;
+      this.mireSealGate = wa.sealGate;
+      // the summoning altar INSIDE the court, near the gate (E with a Mire Totem)
+      {
+        const a = wa.altar;
+        const x = (a.tx + 1) * TILE;
+        const y = (a.ty + 1) * TILE;
+        this.objImage(x, y, 'guardian_altar');
+        this.addBlockerBody(a.tx, a.ty);
+        this.addBlockerBody(a.tx + 1, a.ty);
+        this.addShadow(x, y - 1, 24);
+        this.mireAltarPos = { x, y };
+      }
+      // the offering monument OUTSIDE the gate, on the approach (Seal-bars panel)
+      {
+        const m = wa.monument;
+        const x = (m.tx + 1) * TILE;
+        const y = (m.ty + 1) * TILE;
+        this.objImage(x, y, 'seal_monument');
+        this.addBlockerBody(m.tx, m.ty);
+        this.addBlockerBody(m.tx + 1, m.ty);
+        this.addShadow(x, y - 1, 22);
+        this.mireMonumentPos = { x, y };
+      }
+      // the Mire Warden, colossal and slumbering on its 3x3 resting place
+      {
+        const g = wa.home;
+        const arena = wa.arena;
+        const art = KIT_ART.mire;
+        const x = (g.tx + 1.5) * TILE;
+        const y = (g.ty + 3) * TILE;
+        this.mireHomeSpot = { ax: g.tx + 1 - arena.x, ay: g.ty + 1 - arena.y };
+        const gate = wa.sealGate;
+        const mid = gate[Math.floor(gate.length / 2)] ?? { tx: arena.x + Math.floor(arena.w / 2), ty: arena.y + arena.h - 1 };
+        this.mireEntranceSpot = {
+          ax: Math.max(0, Math.min(arena.w - 1, mid.tx - arena.x)),
+          ay: Math.max(0, Math.min(arena.h - 1, mid.ty - arena.y)),
+        };
+        this.mireSprite = this.add.sprite(x, y, art.spriteKey, 0);
+        this.mireSprite.setOrigin(0.5, 1);
+        this.mireSprite.setDepth(y);
+        this.mireShadow = this.addShadow(x, y - 2, 60);
+        for (let dy = 0; dy < 3; dy++) {
+          for (let dx = 0; dx < 3; dx++) this.mireBlockers.push(this.addBlockerBody(g.tx + dx, g.ty + dy));
+        }
+        this.mireGlow = this.add
+          .image(x, y - 45, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(art.glowBase)
+          .setScale(2.6)
+          .setAlpha(0)
+          .setDepth(890_001);
+        this.glows.push({ img: this.mireGlow, base: 0.5, x, y });
+        this.mireEyeGlow = this.add
+          .image(x, y - 61, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(art.eyeTint)
+          .setScale(1.5)
+          .setAlpha(0)
+          .setDepth(890_002);
+      }
+    }
+
     // player — the Avatar texture is composed from this Player's palette picks
     // (+ the worn Armor overlays, restored from the join and re-baked on equip)
     this.equipped = sanitizeEquipped(this.me.equipped, this.me.inventory);
@@ -1051,6 +1189,9 @@ export class GameScene extends Phaser.Scene {
     // mist banks, faded in while the Player stands inside that district.
     // Both sit UNDER the fog overlay so the unexplored dark stays black.
     this.mireVeil = this.add.rectangle(0, 0, 10, 10, 0x0e2622).setAlpha(0).setDepth(899_985);
+    // the Tide's rising-water sheen: a teal wash over the district that swells and
+    // ebbs with the clock (ADR-0017 rung 1). Sits just over the stagnant veil.
+    this.tideVeil = this.add.rectangle(0, 0, 10, 10, 0x2f8f74).setAlpha(0).setDepth(899_986);
     for (let i = 0; i < 7; i++) {
       this.mirePuffs.push(
         this.add
@@ -1246,8 +1387,9 @@ export class GameScene extends Phaser.Scene {
       if (this.fight) {
         this.fight = { ...this.fight, hp };
         bus.emit('fight-hp', hp);
-        this.guardianSprite.setTintFill(0xffffff);
-        this.time.delayedCall(60, () => this.guardianSprite.clearTint());
+        const hitSpr = this.activeBoss().sprite;
+        hitSpr.setTintFill(0xffffff);
+        this.time.delayedCall(60, () => hitSpr.clearTint());
       }
     });
     this.backend.on('guardianVictory', (participants: string[]) => {
@@ -1300,7 +1442,7 @@ export class GameScene extends Phaser.Scene {
 
   /** bake a sprite for every Village Building + Wildlife decor from its art spec — no PNGs */
   private bakeVillageTextures(): void {
-    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART })) {
+    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART, ...KILN_ART })) {
       if (!art) continue;
       const key = `st_${id}`;
       if (this.textures.exists(key)) continue;
@@ -1496,8 +1638,51 @@ export class GameScene extends Phaser.Scene {
     return fight?.warden ? t.warden.name(fight.warden) : null;
   }
 
+  /**
+   * The render bundle (sprite + glow + arena anatomy + palette) of the Warden the
+   * active fight belongs to — selected by `activeWarden` (set on summon, held
+   * through endFight so the wreck/reset lands on the right boss). Defaults to the
+   * Guardian. Every fight-render/adjudication site reads through this so a second
+   * Warden fights in its OWN court with its OWN look, no per-site branching.
+   */
+  private activeBoss() {
+    if (this.activeWarden === 'mire' && this.mireSprite && this.mireArenaRect) {
+      return {
+        sprite: this.mireSprite,
+        shadow: this.mireShadow!,
+        glow: this.mireGlow!,
+        eyeGlow: this.mireEyeGlow!,
+        blockers: this.mireBlockers,
+        arena: this.mireArenaRect,
+        homeSpot: this.mireHomeSpot,
+        entranceSpot: this.mireEntranceSpot,
+        sealGate: this.mireSealGate,
+        art: KIT_ART.mire,
+      };
+    }
+    return {
+      sprite: this.guardianSprite,
+      shadow: this.guardianShadow,
+      glow: this.guardianGlow,
+      eyeGlow: this.guardianEyeGlow,
+      blockers: this.guardianBlockers,
+      arena: this.world.arena,
+      homeSpot: this.guardianHomeSpot,
+      entranceSpot: this.entranceSpot,
+      sealGate: this.world.sealGate,
+      art: KIT_ART.guardian,
+    };
+  }
+
+  /** mark the active fight's boss slain/whole (its own wreck flag) */
+  private setBossBroken(v: boolean): void {
+    if (this.activeWarden === 'mire') this.mireBroken = v;
+    else this.guardianBroken = v;
+  }
+
   private startFight(fight: FightState, fresh: boolean): void {
     this.exhaustedThisFight = false;
+    this.activeWarden = fight.warden ?? null; // pick the boss BEFORE restore/place
     this.restoreGuardianWhole(); // a summon rekindles the runes: rebuild any slain wreck
     if (fight.engagedAt === null) {
       this.fight = fight;
@@ -1506,10 +1691,11 @@ export class GameScene extends Phaser.Scene {
       this.slammedWave = -1;
       this.eyeOpenShown = false;
       this.furyIndex = -1;
-      this.guardianGlow.setTint(0xb478ff);
-      this.guardianSprite.anims.play('guardian-idle');
-      this.placeGuardian(this.guardianHomeSpot, 0);
-      this.positionGuardianBlockers(this.guardianHomeSpot);
+      const b = this.activeBoss();
+      b.glow.setTint(b.art.glowBase);
+      b.sprite.anims.play(b.art.idle);
+      this.placeGuardian(b.homeSpot, 0);
+      this.positionGuardianBlockers(b.homeSpot);
       this.setGuardianBlockersEnabled(true);
       for (const r of this.dangerRects) r.destroy();
       this.dangerRects = [];
@@ -1535,7 +1721,9 @@ export class GameScene extends Phaser.Scene {
    */
   private beginEngaged(fight: FightState, dramatic: boolean): void {
     this.fight = fight;
+    this.activeWarden = fight.warden ?? null;
     const kit = this.fightKit();
+    const b = this.activeBoss();
     const engagedAt = fight.engagedAt ?? Date.now();
     this.renderedWave = -1;
     this.landedWave = -1;
@@ -1543,8 +1731,8 @@ export class GameScene extends Phaser.Scene {
     const w = waveInfoAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS, kit);
     this.slammedWave = w.msIntoWave >= w.phase.telegraphMs ? w.index : w.index - 1;
     this.furyIndex = furyPhaseAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS, kit).index;
-    this.guardianGlow.setTint(FURY_TINTS[this.furyIndex]);
-    this.guardianSprite.anims.play('guardian-idle');
+    b.glow.setTint(b.art.fury[this.furyIndex]);
+    b.sprite.anims.play(b.art.idle);
     // The Ward is SLAMMED shut by the engage-leap, not raised on contact. For a
     // live first-strike (dramatic) that is still winding up wave 0, defer it to
     // the moment the leap crashes on the entrance (see slamWave); a quiet
@@ -1578,11 +1766,12 @@ export class GameScene extends Phaser.Scene {
    */
   private raiseWard(dramatic: boolean): void {
     this.dropWard();
-    for (const g of this.world.sealGate) {
+    const b = this.activeBoss();
+    for (const g of b.sealGate) {
       const x = (g.tx + 0.5) * TILE;
       const y = (g.ty + 1) * TILE;
       const sprite = this.add.image(x, y, 'seal-barrier').setOrigin(0.5, 1).setDepth(y).setAlpha(0.9);
-      sprite.setTint(0xffb9a0); // amber cast — the Guardian's Ward, not the violet Seal
+      sprite.setTint(b.art.ward); // the boss's Ward cast (Guardian amber / Mire teal), not the violet Seal
       if (dramatic) {
         sprite.setScale(1, 0);
         this.tweens.add({ targets: sprite, scaleY: 1, duration: 220, ease: 'back.out' });
@@ -1632,11 +1821,13 @@ export class GameScene extends Phaser.Scene {
     this.meleeRingRects = [];
     this.renderedWave = -1;
     this.furyIndex = -1;
-    // collision settles back onto its resting place either way
-    this.placeGuardian(this.guardianHomeSpot, 0);
-    this.positionGuardianBlockers(this.guardianHomeSpot);
+    // collision settles back onto its resting place either way (the boss the
+    // fight belonged to — activeWarden is still set until the very end here)
+    const b = this.activeBoss();
+    this.placeGuardian(b.homeSpot, 0);
+    this.positionGuardianBlockers(b.homeSpot);
     this.setGuardianBlockersEnabled(true);
-    this.guardianEyeGlow.setAlpha(0);
+    b.eyeGlow.setAlpha(0);
     this.fightMusic?.stop();
     bus.emit('fight-end');
     if (kind === 'victory') {
@@ -1645,17 +1836,18 @@ export class GameScene extends Phaser.Scene {
       // rebuilt (startFight → restoreGuardianWhole). See shatterGuardian.
       this.sfx('seal_gong', 0.6);
       this.cameras.main.shake(500, 0.006);
-      this.floatText(this.guardianSprite.x, this.guardianSprite.y - 100, wardenName ? t.fight.wardenBestedFloat(wardenName) : t.fight.bestedFloat, '#ffd166');
+      this.floatText(b.sprite.x, b.sprite.y - 100, wardenName ? t.fight.wardenBestedFloat(wardenName) : t.fight.bestedFloat, '#ffd166');
       bus.emit('toast', wardenName ? t.toast.wardenBested(wardenName) : t.toast.guardianBested, 'good');
       this.shatterGuardian();
     } else {
       // unbeaten: it simply re-slumbers, whole, ready to be roused again
       this.restoreGuardianWhole();
-      this.guardianSprite.anims.stop();
-      this.guardianSprite.setFrame(0);
+      b.sprite.anims.stop();
+      b.sprite.setFrame(0);
       this.sfx('roar', 0.35);
       bus.emit('toast', wardenName ? t.toast.wardenUnbeaten(wardenName) : t.toast.guardianUnbeaten, 'bad');
     }
+    this.activeWarden = null; // the fight's visuals are resolved — back to dormant selection
   }
 
   /**
@@ -1665,8 +1857,9 @@ export class GameScene extends Phaser.Scene {
    * (restoreGuardianWhole). Purely client-side spectacle; the fight is resolved.
    */
   private shatterGuardian(): void {
-    this.guardianBroken = true;
-    const spr = this.guardianSprite;
+    this.setBossBroken(true);
+    const b = this.activeBoss();
+    const spr = b.sprite;
     const cx = spr.x;
     const feetY = spr.y; // origin is bottom-centre — this is its base
     spr.anims.stop();
@@ -1676,16 +1869,16 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: spr, angle: -24, duration: 640, ease: 'Bounce.out' }); // heavy topple on its base
     // the runes gutter out: implode + snuff the glow. Its night-smoulder is
     // driven every frame by the glows pool from `base`, so zero that too.
-    const ge = this.glows.find((g) => g.img === this.guardianGlow);
+    const ge = this.glows.find((g) => g.img === b.glow);
     if (ge) ge.base = 0;
     this.tweens.add({
-      targets: this.guardianGlow,
+      targets: b.glow,
       scale: 0.3,
       duration: 320,
       ease: 'Quad.in',
-      onComplete: () => this.guardianGlow.setVisible(false),
+      onComplete: () => b.glow.setVisible(false),
     });
-    this.guardianEyeGlow.setAlpha(0);
+    b.eyeGlow.setAlpha(0);
     // stone shards flung outward
     const bodyY = feetY - 34;
     for (let i = 0; i < 16; i++) {
@@ -1725,36 +1918,39 @@ export class GameScene extends Phaser.Scene {
 
   /** rebuild the slain wreck into the whole, slumbering Guardian (summon / re-slumber) */
   private restoreGuardianWhole(): void {
-    this.guardianBroken = false;
-    this.guardianSprite.setAngle(0);
-    this.guardianSprite.clearTint();
-    this.guardianGlow.setVisible(true).setTint(0xb478ff).setScale(2.6);
-    const ge = this.glows.find((g) => g.img === this.guardianGlow);
+    this.setBossBroken(false);
+    const b = this.activeBoss();
+    b.sprite.setAngle(0);
+    b.sprite.clearTint();
+    b.glow.setVisible(true).setTint(b.art.glowBase).setScale(2.6);
+    const ge = this.glows.find((g) => g.img === b.glow);
     if (ge) ge.base = 0.5;
   }
 
-  /** world position of an arena spot (the Guardian's feet on its bottom row) */
+  /** world position of an arena spot (the active boss's feet on its bottom row) */
   private placeGuardian(spot: ArenaSpot, lift: number): void {
-    const a = this.world.arena;
+    const bv = this.activeBoss();
+    const a = bv.arena;
     const x = (a.x + spot.ax + 0.5) * TILE;
     const groundY = (a.y + spot.ay + 2) * TILE;
-    this.guardianSprite.setPosition(x, groundY - lift);
-    this.guardianSprite.setDepth(groundY);
-    this.guardianShadow.setPosition(x, groundY - 2);
-    this.guardianShadow.setAlpha(lift > 0 ? 0.5 : 1);
-    this.guardianGlow.setPosition(x, groundY - lift - 45);
-    this.guardianEyeGlow.setPosition(x, groundY - lift - 61);
+    bv.sprite.setPosition(x, groundY - lift);
+    bv.sprite.setDepth(groundY);
+    bv.shadow.setPosition(x, groundY - 2);
+    bv.shadow.setAlpha(lift > 0 ? 0.5 : 1);
+    bv.glow.setPosition(x, groundY - lift - 45);
+    bv.eyeGlow.setPosition(x, groundY - lift - 61);
   }
 
-  /** center the Guardian's 3x3 collision on an arena spot (bodies stored row-major) */
+  /** center the active boss's 3x3 collision on an arena spot (bodies row-major) */
   private positionGuardianBlockers(spot: ArenaSpot): void {
-    const a = this.world.arena;
+    const bv = this.activeBoss();
+    const a = bv.arena;
     const cx = (a.x + spot.ax + 0.5) * TILE;
     const cy = (a.y + spot.ay + 0.5) * TILE;
     let i = 0;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        const b = this.guardianBlockers[i++];
+        const b = bv.blockers[i++];
         if (!b) continue;
         b.setPosition(cx + dx * TILE, cy + dy * TILE);
         (b.body as Phaser.Physics.Arcade.StaticBody).updateFromGameObject();
@@ -1763,7 +1959,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private setGuardianBlockersEnabled(on: boolean): void {
-    for (const b of this.guardianBlockers) (b.body as Phaser.Physics.Arcade.StaticBody).enable = on;
+    for (const b of this.activeBoss().blockers) (b.body as Phaser.Physics.Arcade.StaticBody).enable = on;
   }
 
   /** render the telegraphs of one wave: slam tiles, or a lunge landing marker */
@@ -1771,7 +1967,8 @@ export class GameScene extends Phaser.Scene {
     for (const r of this.dangerRects) r.destroy();
     this.dangerRects = [];
     const kit = this.fightKit();
-    const a = this.world.arena;
+    const bv = this.activeBoss();
+    const a = bv.arena;
     const mark = (ax: number, ay: number, color: number, alpha: number) => {
       const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 2, TILE - 2, color, alpha);
       rect.setDepth(3);
@@ -1780,21 +1977,21 @@ export class GameScene extends Phaser.Scene {
     if (w.index === 0) {
       // wave 0 (ADR-0004): the engage-leap crashes on the entrance (the Ward
       // slam), so the doorway — not the authored slam tiles — is the danger
-      const e = this.entranceSpot;
+      const e = bv.entranceSpot;
       for (let dy = -kit.lungeZone; dy <= kit.lungeZone; dy++) {
-        for (let dx = -kit.lungeZone; dx <= kit.lungeZone; dx++) mark(e.ax + dx, e.ay + dy, 0xffa02f, 0.3);
+        for (let dx = -kit.lungeZone; dx <= kit.lungeZone; dx++) mark(e.ax + dx, e.ay + dy, bv.art.lunge, 0.3);
       }
     } else if (w.kind === 'lunge') {
       // the landing marker glows on the pre-determined spot before impact
       const t = lungeTarget(w.lungeCount + 1, kit);
       for (let dy = -kit.lungeZone; dy <= kit.lungeZone; dy++) {
-        for (let dx = -kit.lungeZone; dx <= kit.lungeZone; dx++) mark(t.ax + dx, t.ay + dy, 0xffa02f, 0.3);
+        for (let dx = -kit.lungeZone; dx <= kit.lungeZone; dx++) mark(t.ax + dx, t.ay + dy, bv.art.lunge, 0.3);
       }
     } else {
       const tiles = waveTiles(w.index, w.phase.density, kit);
       for (let ay = 0; ay < kit.arenaH; ay++) {
         for (let ax = 0; ax < kit.arenaW; ax++) {
-          if (tiles[ay * kit.arenaW + ax]) mark(ax, ay, 0xff3322, 0.22);
+          if (tiles[ay * kit.arenaW + ax]) mark(ax, ay, bv.art.danger, 0.22);
         }
       }
     }
@@ -1810,19 +2007,20 @@ export class GameScene extends Phaser.Scene {
       this.raiseWard(true);
     }
     const lunge = w.kind === 'lunge';
-    for (const r of this.dangerRects) r.setFillStyle(lunge ? 0xffa02f : 0xff2211, 0.55);
+    const bv = this.activeBoss();
+    for (const r of this.dangerRects) r.setFillStyle(lunge ? bv.art.lunge : bv.art.slam, 0.55);
     this.sfx('chop', lunge ? 0.6 : 0.35);
     this.cameras.main.shake(lunge ? 350 : 180, lunge ? 0.008 : 0.004);
     if (Date.now() < this.stunnedUntil) return; // already down — no double count
     const kit = this.fightKit();
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
-    const ax = ptx - this.world.arena.x;
-    const ay = pty - this.world.arena.y;
+    const ax = ptx - bv.arena.x;
+    const ay = pty - bv.arena.y;
     if (ax < 0 || ay < 0 || ax >= kit.arenaW || ay >= kit.arenaH) return;
     if (w.index === 0) {
       // wave 0's danger is the entrance (the Ward slam), not the slam tiles
-      const e = this.entranceSpot;
+      const e = bv.entranceSpot;
       if (Math.abs(ax - e.ax) > kit.lungeZone || Math.abs(ay - e.ay) > kit.lungeZone) return;
     } else if (lunge) {
       const t = lungeTarget(w.lungeCount + 1, kit);
@@ -1896,8 +2094,9 @@ export class GameScene extends Phaser.Scene {
       }
       return;
     }
-    const a = this.world.arena;
-    const centre = guardianSpotAt(wave.lungeCount, this.guardianHomeSpot, kit);
+    const bv = this.activeBoss();
+    const a = bv.arena;
+    const centre = guardianSpotAt(wave.lungeCount, bv.homeSpot, kit);
     if (!this.meleeRingRects.length) {
       for (let dy = -kit.meleeRingMax; dy <= kit.meleeRingMax; dy++) {
         for (let dx = -kit.meleeRingMax; dx <= kit.meleeRingMax; dx++) {
@@ -1905,14 +2104,14 @@ export class GameScene extends Phaser.Scene {
           const ay = centre.ay + dy;
           if (ax < 0 || ay < 0 || ax >= kit.arenaW || ay >= kit.arenaH) continue;
           if (!inMeleeRing(ax, ay, centre, kit)) continue;
-          const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 3, TILE - 3, 0xff5a2f, 0.26);
+          const rect = this.add.rectangle((a.x + ax + 0.5) * TILE, (a.y + ay + 0.5) * TILE, TILE - 3, TILE - 3, bv.art.ring, 0.26);
           rect.setDepth(3);
           this.meleeRingRects.push(rect);
         }
       }
     }
     const pulse = 0.2 + 0.12 * Math.sin(time / 55);
-    for (const r of this.meleeRingRects) r.setFillStyle(0xff5a2f, pulse);
+    for (const r of this.meleeRingRects) r.setFillStyle(bv.art.ring, pulse);
     // the Player standing in the hot ring gets shoved off the body — no stun,
     // no knockdown report. Gate on a short cooldown so the tween can't restack
     // while it plays; still frozen out if a slam tile has them stunned.
@@ -1937,12 +2136,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private guardianAction(): EAction | null {
-    // the colossus is 96px tall on a 3x3 footprint — aim at its lower body
+    // the colossus is 96px tall on a 3x3 footprint — aim at its lower body (the
+    // ACTIVE fight's boss, so a Warden fight strikes its own sprite/arena)
+    const spr = this.activeBoss().sprite;
     const d = Phaser.Math.Distance.Between(
       this.player.x,
       this.player.y - 4,
-      this.guardianSprite.x,
-      this.guardianSprite.y - TILE * 1.5,
+      spr.x,
+      spr.y - TILE * 1.5,
     );
     // the Bow reaches ~8 tiles; melee needs to close to arm's length
     const bow = this.isBow();
@@ -1964,14 +2165,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   private swingAtGuardian(): void {
-    this.fireGuardianHit(this.heldTool(), this.guardianSprite.x, this.guardianSprite.y - 60);
+    const spr = this.activeBoss().sprite;
+    this.fireGuardianHit(this.heldTool(), spr.x, spr.y - 60);
   }
 
-  /** loose an arrow at the Guardian; the hit registers when the arrow lands */
+  /** loose an arrow at the boss; the hit registers when the arrow lands */
   private looseArrow(): void {
     if (!this.fight) return;
-    const gx = this.guardianSprite.x;
-    const gy = this.guardianSprite.y - TILE * 3; // aim at the eye / upper body
+    const spr = this.activeBoss().sprite;
+    const gx = spr.x;
+    const gy = spr.y - TILE * 3; // aim at the eye / upper body
     const arrow = this.add.image(this.player.x, this.player.y - AVATAR_H / 2, 'arrow');
     arrow.setDepth(999_990);
     arrow.setRotation(Phaser.Math.Angle.Between(arrow.x, arrow.y, gx, gy));
@@ -2003,7 +2206,7 @@ export class GameScene extends Phaser.Scene {
     const eyeOpen = engagedAt === null ? !!this.fight : eyeOpenAt(Date.now() - engagedAt, GUARDIAN_AWAKE_MS, this.fightKit());
     if (eyeOpen) {
       this.sfx('chop', 0.5);
-      this.tweens.add({ targets: this.guardianSprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
+      this.tweens.add({ targets: this.activeBoss().sprite, scaleX: 1.04, scaleY: 0.97, duration: 70, yoyo: true });
     } else {
       this.sfx('blip', 0.35);
       this.floatText(x + Phaser.Math.Between(-10, 10), y, t.fight.clang, '#9aa0a8');
@@ -2016,19 +2219,30 @@ export class GameScene extends Phaser.Scene {
       // float the DAMAGE DEALT (cosmetically scaled), NOT remaining HP — the HP
       // bar owns the pool. A crit pops bigger and gold (ADR-0006 §1).
       const shown = res.damage * GUARDIAN_DISPLAY_SCALE;
-      const fx = this.guardianSprite.x + Phaser.Math.Between(-8, 8);
-      const fy = this.guardianSprite.y - 100;
+      const hitSpr = this.activeBoss().sprite;
+      const fx = hitSpr.x + Phaser.Math.Between(-8, 8);
+      const fy = hitSpr.y - 100;
       if (res.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 15);
       else this.floatText(fx, fy, `${shown}`, '#ff8866', 10);
     });
   }
 
+  /**
+   * E at the Mire Warden's altar (ADR-0017 rung 1): the real authored altar on
+   * the Mangrove Coast. Near it, the whole Offering → summon arc runs through the
+   * generic wardenAltarAction('mire') — no dev flag. (?wardenfight now only grants
+   * the goods + shortens the fight; the altar itself is permanent world content.)
+   */
+  private mireAltarAction(): EAction | null {
+    if (!this.world.wardenArenas?.mire) return null;
+    const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.mireAltarPos.x, this.mireAltarPos.y - 8);
+    if (d > INTERACT_RANGE + 8) return null;
+    return this.wardenAltarAction('mire');
+  }
+
   private summonAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.guardianAltarPos.x, this.guardianAltarPos.y - 8);
     if (d > INTERACT_RANGE + 8) return null;
-    // ?wardenfight (T4): the Guardian's altar stands in for the Mire altar so
-    // the whole Offering → summon arc runs before T5's authored altar lands
-    if (DEV_WARDEN_FIGHT) return this.wardenAltarAction('mire');
     if (this.fight) {
       return { swing: false, run: () => bus.emit('toast', t.toast.guardianAlreadyAwake, 'info') };
     }
@@ -2062,6 +2276,9 @@ export class GameScene extends Phaser.Scene {
    */
   private wardenAltarAction(id: string): EAction {
     const def = WARDENS[id];
+    // float text pops at THIS Warden's altar (the Mire's real altar, not the
+    // Guardian's) — ?wardenfight is gone, every Warden has its own altar position
+    const altarPos = id === 'mire' ? this.mireAltarPos : this.guardianAltarPos;
     if (this.fight) {
       return { swing: false, run: () => bus.emit('toast', t.toast.fightAlreadyRaging, 'info') };
     }
@@ -2076,7 +2293,7 @@ export class GameScene extends Phaser.Scene {
               const text = Object.entries(res.taken)
                 .map(([item, n]) => `-${n} ${ITEMS[item as ItemId]?.name ?? item}`)
                 .join('  ');
-              this.floatText(this.guardianAltarPos.x, this.guardianAltarPos.y - 20, text, '#63e0b8');
+              this.floatText(altarPos.x, altarPos.y - 20, text, '#63e0b8');
               bus.emit('toast', t.toast.wardenAltarLaid, 'good');
               this.sfx('place', 0.6);
             } else if (res.reason === 'NOTHING_TO_GIVE') {
@@ -2820,8 +3037,17 @@ export class GameScene extends Phaser.Scene {
     const cooked = Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1;
     // ADR-0013: a running Dorffest (Wishing Well) speeds everyone in the World
     const festival = festivalActive(this.village, Date.now()) ? FESTIVAL_SPEED_FACTOR : 1;
+    // ADR-0017 rung 1: the Tide's flood slows wading inside the Sunken Mire — a
+    // pure f(clock), whole-district; the Mirefang's bearer ignores it (realm
+    // synergy). Keyed on CARRYING the Mirefang (its item text promises the effect
+    // "carried", not in-hand), so it holds while a machete cuts the reeds. Client-
+    // side positional slow, stacked like the other move factors.
+    const wade =
+      this.activeDistrict?.id === 'sunken_mire' && tideFloods(Date.now(), TIDE_PERIOD_MS) && (this.inventory['mirefang'] ?? 0) <= 0
+        ? WADE_SLOW_FACTOR
+        : 1;
     // ADR-0017 §3: the Tideglass Boots add their +8% beside the Village bonus
-    return cooked * festival * (1 + villageBuff(this.village.tier).moveSpeed + armorBuff(this.equipped).moveSpeed);
+    return cooked * festival * wade * (1 + villageBuff(this.village.tier).moveSpeed + armorBuff(this.equipped).moveSpeed);
   }
 
   /** combat swing cadence with the Village's attack-speed buff folded in
@@ -3564,7 +3790,7 @@ export class GameScene extends Phaser.Scene {
         };
       }
     }
-    const special = this.contributeSealAction() ?? this.summonAction() ?? this.guardianAction();
+    const special = this.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.guardianAction();
     if (special) return special;
     if (Phaser.Math.Distance.Between(px, py, this.altarPos.x, this.altarPos.y - 8) < INTERACT_RANGE + 8) {
       return {
@@ -3647,6 +3873,11 @@ export class GameScene extends Phaser.Scene {
     const forge = this.nearbyStructure(['forge']);
     if (forge) return { swing: false, run: () => bus.emit('open-forge') };
 
+    // ADR-0017 rung 1: the Brine Kiln — E opens the generic Refiner panel with
+    // the salt-reed → tideglass config (the kernel is untouched; data + art only)
+    const kiln = this.nearbyStructure(['brine_kiln']);
+    if (kiln) return { swing: false, run: () => this.openRefiner(kiln.id, BRINE_KILN, ITEMS.brine_kiln.name) };
+
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
     if (st) {
@@ -3690,6 +3921,13 @@ export class GameScene extends Phaser.Scene {
     if (view.state.type === 'fishing_spot' && this.heldItem === 'fishing_rod') {
       return { swing: false, run: () => this.startFishing(view) };
     }
+    // ADR-0017 rung 1: the Tide gates the salt-reed banks — a reed is harvestable
+    // only while the ebb exposes it (validated within ±slack of the clock, the
+    // eyeOpenWithin idiom). A submerged reed refuses the swing (swing:false, like
+    // the pack cap) so it never mimes a chop to friends.
+    if (this.reedSubmerged(view)) {
+      return { swing: false, run: () => this.tideSubmergedToast() };
+    }
     // ADR-0013 pack cap, resolved BEFORE the verb: a client-refused swing must
     // not read as one — swing:false skips the cadence stamp, the pose/arc AND
     // the peers' swing echo, so a full pack never mimes chopping to friends.
@@ -3697,6 +3935,21 @@ export class GameScene extends Phaser.Scene {
       return { swing: false, run: () => this.packFullToast() };
     }
     return { swing: true, run: () => this.swingAtNode(view) };
+  }
+
+  /** true when a tide-gated Mire reed is currently submerged (un-harvestable) */
+  private reedSubmerged(view: NodeView): boolean {
+    if (view.state.type !== 'salt_reed_bed') return false;
+    return !tideExposedWithin(Date.now(), TIDE_PERIOD_MS, TIDE_EXPOSURE_SLACK_MS);
+  }
+
+  /** the tide-submerged refusal toast, throttled so repeats don't spam it */
+  private tideSubmergedToast(): void {
+    const now = Date.now();
+    if (now - this.tideToastAt > 1500) {
+      bus.emit('toast', t.toast.reedSubmerged, 'info');
+      this.tideToastAt = now;
+    }
   }
 
   /**
@@ -3726,6 +3979,12 @@ export class GameScene extends Phaser.Scene {
     // through here would reach hitNode and overfill the pack, so keep the net.
     if (this.packWouldOverflow(view)) {
       this.packFullToast();
+      return;
+    }
+    // tide backstop (ADR-0017 rung 1): the exposure gate is client-side (ADR-0001),
+    // so keep the net here too — a submerged reed never reaches hitNode
+    if (this.reedSubmerged(view)) {
+      this.tideSubmergedToast();
       return;
     }
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
@@ -4577,13 +4836,13 @@ export class GameScene extends Phaser.Scene {
       bus.emit('seal-near', nearMon);
       if (nearMon) this.tickJourney('visit_seal');
     }
-    // ADR-0017: near a Warden altar the Offering-bars panel shows (?wardenfight
-    // borrows the Guardian's altar; T5 moves this onto the authored Mire altar)
+    // ADR-0017 rung 1: near the Mire Warden's altar its Offering-bars panel shows
+    // (the real authored altar on the Mangrove Coast — no dev flag)
     const nearWarden =
-      DEV_WARDEN_FIGHT &&
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.guardianAltarPos.x, this.guardianAltarPos.y) < TILE * 6;
-    if (nearWarden !== this.nearWardenAltar) {
-      this.nearWardenAltar = nearWarden;
+      !!this.world.wardenArenas?.mire &&
+      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.mireAltarPos.x, this.mireAltarPos.y) < TILE * 6;
+    if (nearWarden !== this.nearMireAltar) {
+      this.nearMireAltar = nearWarden;
       bus.emit('warden-altar-near', nearWarden ? 'mire' : null);
     }
     // the Village Hall shows the tier/pool panel on approach (ADR-0010)
@@ -5450,6 +5709,7 @@ export class GameScene extends Phaser.Scene {
     this.nightOverlay.setAlpha(0);
     this.duskOverlay.setAlpha(0);
     this.mireVeil.setAlpha(0);
+    this.tideVeil.setAlpha(0);
     for (const p of this.mirePuffs) p.setAlpha(0);
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
@@ -6459,8 +6719,17 @@ export class GameScene extends Phaser.Scene {
         p.setPosition(v.x - 130 + drift, v.y + ((i * 131 + Math.sin(time / 2400 + i * 1.7) * 26) % Math.max(1, v.height)));
         p.setAlpha(this.mireAmbience * (0.055 + 0.03 * Math.sin(time / 900 + i * 2.3)));
       }
+      // the Tide's rising-water sheen swells with the clock (ADR-0017 rung 1):
+      // faint at low ebb, a stronger teal wash at flood, fading in/out on gate
+      // crossing exactly like the veil (mireAmbience) so teleport never hard-cuts
+      const h = tideHeight(Date.now(), TIDE_PERIOD_MS);
+      this.tideVeil
+        .setPosition(cam.midPoint.x, cam.midPoint.y)
+        .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
+        .setAlpha(this.mireAmbience * (0.05 + 0.20 * h) * (1 - Math.pow(night, 1.6) * 0.6));
     } else {
       this.mireVeil.setAlpha(0);
+      this.tideVeil.setAlpha(0);
       for (const p of this.mirePuffs) p.setAlpha(0);
     }
     // v4: light follows only a held Hand Torch (warm orange, dim like a flame)
@@ -6534,6 +6803,7 @@ export class GameScene extends Phaser.Scene {
     // harmlessly at home: no waves, no Eye, arena open — nothing to drive here.
     if (this.fight && this.fight.engagedAt !== null) {
       const kit = this.fightKit();
+      const bv = this.activeBoss();
       const elapsed = Date.now() - this.fight.engagedAt;
       if (elapsed >= GUARDIAN_AWAKE_MS) {
         // every client derives the timer's end locally; the backend event follows
@@ -6544,7 +6814,7 @@ export class GameScene extends Phaser.Scene {
         const phase = furyPhaseAt(elapsed, GUARDIAN_AWAKE_MS, kit);
         if (phase.index !== this.furyIndex) {
           this.furyIndex = phase.index;
-          this.guardianGlow.setTint(FURY_TINTS[phase.index]);
+          bv.glow.setTint(bv.art.fury[phase.index]);
           this.sfx('roar', 0.8);
           this.cameras.main.shake(600, 0.008);
           bus.emit('toast', phase.index === 1 ? t.fight.furyRestless : t.fight.furyFury, 'bad');
@@ -6557,7 +6827,7 @@ export class GameScene extends Phaser.Scene {
         if (wave.msIntoWave < wave.phase.telegraphMs) {
           // telegraph pulse rises toward the slam / crash
           const pulse = 0.14 + (wave.msIntoWave / wave.phase.telegraphMs) * 0.22 + 0.06 * Math.sin(time / 60);
-          const color = wave.kind === 'lunge' ? 0xffa02f : 0xff3322;
+          const color = wave.kind === 'lunge' ? bv.art.lunge : bv.art.danger;
           for (const r of this.dangerRects) r.setFillStyle(color, pulse);
         } else if (this.slammedWave !== wave.index) {
           this.slamWave(wave);
@@ -6567,42 +6837,42 @@ export class GameScene extends Phaser.Scene {
 
         // scripted position: wave 0 leaps to the entrance (Ward slam), later
         // waves telegraph lunges to pre-determined spots
-        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, this.guardianHomeSpot, this.entranceSpot, kit);
-        // collision follows the Guardian's ground footprint; while airborne it has
+        const pose = guardianPoseAt(elapsed, GUARDIAN_AWAKE_MS, bv.homeSpot, bv.entranceSpot, kit);
+        // collision follows the boss's ground footprint; while airborne it has
         // none, so the whole arena (incl. the tiles it just left) opens up
         if (pose.airborne) this.setGuardianBlockersEnabled(false);
         else {
           this.positionGuardianBlockers(pose.spot);
           this.setGuardianBlockersEnabled(true);
         }
-        this.guardianEyeGlow.setAlpha(0);
+        bv.eyeGlow.setAlpha(0);
         if (pose.airborne && pose.target) {
-          const a = this.world.arena;
+          const a = bv.arena;
           const fx = (a.x + pose.spot.ax + 0.5) * TILE;
           const fy = (a.y + pose.spot.ay + 2) * TILE;
           const tx2 = (a.x + pose.target.ax + 0.5) * TILE;
           const ty2 = (a.y + pose.target.ay + 2) * TILE;
           const t = pose.leapT;
           const arc = Math.sin(t * Math.PI) * 56;
-          this.guardianSprite.anims.stop();
-          this.guardianSprite.setFrame(6);
+          bv.sprite.anims.stop();
+          bv.sprite.setFrame(6);
           const gx = fx + (tx2 - fx) * t;
           const gy = fy + (ty2 - fy) * t;
-          this.guardianSprite.setPosition(gx, gy - arc);
-          this.guardianSprite.setDepth(gy);
-          this.guardianShadow.setPosition(gx, gy - 2).setAlpha(0.45);
-          this.guardianGlow.setPosition(gx, gy - arc - 45);
-          this.guardianEyeGlow.setPosition(gx, gy - arc - 61);
+          bv.sprite.setPosition(gx, gy - arc);
+          bv.sprite.setDepth(gy);
+          bv.shadow.setPosition(gx, gy - 2).setAlpha(0.45);
+          bv.glow.setPosition(gx, gy - arc - 45);
+          bv.eyeGlow.setPosition(gx, gy - arc - 61);
         } else {
           this.placeGuardian(pose.spot, 0);
           if (pose.windup) {
-            this.guardianSprite.anims.stop();
-            this.guardianSprite.setFrame(5);
+            bv.sprite.anims.stop();
+            bv.sprite.setFrame(5);
           } else if (wave.kind === 'lunge' && wave.msIntoWave >= wave.phase.telegraphMs && this.landedWave !== wave.index) {
             // the crash-down moment
             this.landedWave = wave.index;
-            this.guardianSprite.anims.stop();
-            this.guardianSprite.setFrame(7);
+            bv.sprite.anims.stop();
+            bv.sprite.setFrame(7);
           } else if (this.landedWave === wave.index && wave.msIntoWave < wave.phase.telegraphMs + 500) {
             // hold the landing pose for a beat
           } else {
@@ -6612,11 +6882,11 @@ export class GameScene extends Phaser.Scene {
               this.eyeOpenShown = eyeOpen;
               if (eyeOpen) this.sfx('blip', 0.5);
             }
-            const want = eyeOpen ? 'guardian-eye' : 'guardian-idle';
-            if (this.guardianSprite.anims.currentAnim?.key !== want || !this.guardianSprite.anims.isPlaying) {
-              this.guardianSprite.anims.play(want, true);
+            const want = eyeOpen ? bv.art.eye : bv.art.idle;
+            if (bv.sprite.anims.currentAnim?.key !== want || !bv.sprite.anims.isPlaying) {
+              bv.sprite.anims.play(want, true);
             }
-            this.guardianEyeGlow.setAlpha(eyeOpen ? 0.5 + 0.18 * Math.sin(time / 70) : 0);
+            bv.eyeGlow.setAlpha(eyeOpen ? 0.5 + 0.18 * Math.sin(time / 70) : 0);
           }
         }
       }

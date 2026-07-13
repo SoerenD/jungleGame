@@ -43,6 +43,11 @@ const TABLETS_EN: Record<string, Tablet> = {
     title: 'Tablet of the Frontier',
     text: 'Those who feared the crowded heart walked east until the paths ran out, and south until the sea. They found black rock and ancient wood among these overgrown stones, and a coast where the fish run thick. Climb the high crags and the whole frontier lays itself bare. The jungle is wider than any one camp — go and see it.',
   },
+  t7: {
+    id: 't7',
+    title: 'Tablet of the Tide',
+    text: 'When the coast drowned, the sea did not take the reeds — it only hid them, and gives them back twice a turning. The Mire Warden guards the low water; wake it at the megalith on the Mangrove Coast, and its fall unlocks this drowned realm forever. Learn the tide: wade when the water ebbs and cut the salt-reed exposed, temper it in the Brine Kiln, and the tideglass will carry the sea in your stride. The tide keeps no clock but its own — come back for it.',
+  },
 };
 
 const TABLETS_DE: Record<string, Tablet> = {
@@ -80,6 +85,11 @@ const TABLETS_DE: Record<string, Tablet> = {
     id: 't6',
     title: 'Steintafel der Grenzlande',
     text: 'Jene, die das überfüllte Herz mieden, gingen ostwärts, bis die Pfade endeten, und südwärts bis zum Meer. Sie fanden schwarzes Gestein und uraltes Holz zwischen diesen überwucherten Steinen und eine Küste, an der die Fische dicht ziehen. Erklimme die hohen Klippen, und die ganzen Grenzlande liegen offen vor dir. Der Dschungel ist weiter als jedes einzelne Lager — geh und sieh ihn dir an.',
+  },
+  t7: {
+    id: 't7',
+    title: 'Steintafel der Gezeiten',
+    text: 'Als die Küste ertrank, nahm das Meer die Riede nicht — es verbarg sie nur und gibt sie bei jeder Wende zweimal zurück. Der Moorwächter hütet das niedrige Wasser; weck ihn am Megalithen an der Mangrovenküste, und sein Fall öffnet dieses ertrunkene Reich für immer. Lerne die Gezeit: wate, wenn das Wasser ebbt, und schneide das freiliegende Salzried, härte es im Sole-Ofen, und das Gezeitenglas trägt das Meer in deinem Schritt. Die Gezeit kennt keine Uhr als ihre eigene — komm für sie wieder.',
   },
 };
 

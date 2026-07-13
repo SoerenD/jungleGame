@@ -138,6 +138,18 @@ interface WorldData {
   /** arena entrance tiles blocked until the Seal breaks */
   sealGate: { tx: number; ty: number }[];
   welcomeStone: { tx: number; ty: number };
+  /** ADR-0017 §1: per-Warden arenas (keyed by WardenDef id) — the Guardian keeps
+   *  the top-level arena/guardianHome/sealGate; each further rung's court lives here */
+  wardenArenas?: Record<
+    string,
+    {
+      arena: { x: number; y: number; w: number; h: number };
+      home: { tx: number; ty: number };
+      altar: { tx: number; ty: number };
+      monument: { tx: number; ty: number };
+      sealGate: { tx: number; ty: number }[];
+    }
+  >;
 }
 
 interface DbPlayer {
@@ -766,9 +778,24 @@ export class MockBackend implements Backend {
    * The gate sits just below the arena's bottom row, so the ay is clamped into
    * the arena — the Guardian's wave-0 leap lands in front of the doorway.
    */
-  private entranceSpot(): { ax: number; ay: number } {
-    const a = this.world.arena;
-    const g = this.world.sealGate;
+  /**
+   * The arena anatomy the active fight belongs to (ADR-0017 §1): a Warden fight
+   * adjudicates in its OWN court (world.wardenArenas[warden]); the Guardian keeps
+   * the top-level arena/guardianHome/sealGate. Every arena-relative computation
+   * below routes through here so a second Warden fights in the right place.
+   */
+  private arenaAnatomy(warden: string | null | undefined): {
+    arena: { x: number; y: number; w: number; h: number };
+    home: { tx: number; ty: number };
+    sealGate: { tx: number; ty: number }[];
+  } {
+    const wa = warden ? this.world.wardenArenas?.[warden] : undefined;
+    if (wa) return { arena: wa.arena, home: wa.home, sealGate: wa.sealGate };
+    return { arena: this.world.arena, home: this.world.guardianHome, sealGate: this.world.sealGate };
+  }
+
+  private entranceSpot(warden: string | null | undefined): { ax: number; ay: number } {
+    const { arena: a, sealGate: g } = this.arenaAnatomy(warden);
     const mid = g[Math.floor(g.length / 2)] ?? { tx: a.x + Math.floor(a.w / 2), ty: a.y + a.h - 1 };
     return {
       ax: Math.max(0, Math.min(a.w - 1, mid.tx - a.x)),
@@ -777,23 +804,22 @@ export class MockBackend implements Backend {
   }
 
   /**
-   * Arena-local centre of the Guardian's 3×3 home footprint (guardianHome is the
-   * top-left tile; +1 gives the centre) — the melee-ring adjudicates around the
-   * same spot every client renders with (guardianSpotAt).
+   * Arena-local centre of the boss's 3×3 home footprint (home is the top-left
+   * tile; +1 gives the centre) — the melee-ring adjudicates around the same spot
+   * every client renders with (guardianSpotAt).
    */
-  private homeSpot(): ArenaSpot {
-    const a = this.world.arena;
-    const g = this.world.guardianHome;
+  private homeSpot(warden: string | null | undefined): ArenaSpot {
+    const { arena: a, home: g } = this.arenaAnatomy(warden);
     return { ax: g.tx + 1 - a.x, ay: g.ty + 1 - a.y };
   }
 
   /**
    * Names of the Players (the local Player + bots) whose tile falls inside the
-   * arena rect right now — the roster snapshot taken at the first strike. In a
-   * SupabaseBackend this reads live presence; the Mock has one real Player.
+   * active fight's arena rect right now — the roster snapshot at the first strike.
+   * In a SupabaseBackend this reads live presence; the Mock has one real Player.
    */
-  private playersInArena(): string[] {
-    const a = this.world.arena;
+  private playersInArena(warden: string | null | undefined): string[] {
+    const a = this.arenaAnatomy(warden).arena;
     const inRect = (x: number, y: number) => {
       const tx = Math.floor(x / TILE);
       const ty = Math.floor(y / TILE);
@@ -813,7 +839,7 @@ export class MockBackend implements Backend {
    * already excludes them; offline peers simply aren't present.
    */
   private liveRosterInArena(f: DbFight): number {
-    const a = this.world.arena;
+    const a = this.arenaAnatomy(f.warden).arena;
     const inRect = (x: number, y: number) => {
       const tx = Math.floor(x / TILE);
       const ty = Math.floor(y / TILE);
@@ -1681,7 +1707,7 @@ export class MockBackend implements Backend {
       // stays a trivial fixed pool), then apply THIS hit WITHOUT an Eye gate —
       // no schedule exists yet to gate against (ADR-0004).
       f.engagedAt = now;
-      const roster = this.playersInArena();
+      const roster = this.playersInArena(f.warden);
       if (!roster.includes(me)) roster.push(me); // the striker is always in the fight
       f.roster = roster;
       f.maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * roster.length;
@@ -1751,14 +1777,15 @@ export class MockBackend implements Backend {
     // engagedAt (ADR-0002 amended); wave 0's danger is the entrance (Ward slam).
     // The schedule is the ACTIVE fight's kit (ADR-0017).
     const kit = kitOf(f.warden);
+    const an = this.arenaAnatomy(f.warden);
     const elapsed = Date.now() - f.engagedAt;
-    const ax = tx - this.world.arena.x;
-    const ay = ty - this.world.arena.y;
+    const ax = tx - an.arena.x;
+    const ay = ty - an.arena.y;
     // danger is a slam/lunge tile OR the authored melee danger-ring hugging the
-    // Guardian's live footprint (ADR-0006 §7) — both pure functions of the
-    // schedule + position, adjudicated against SERVER time with the same slack
-    const inSlam = isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot(), kit);
-    const inRing = inMeleeRingDangerAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, this.homeSpot(), ADJUDICATION_SLACK_MS, kit);
+    // boss's live footprint (ADR-0006 §7) — both pure functions of the schedule +
+    // position, adjudicated against SERVER time with the same slack, in ITS arena
+    const inSlam = isDangerousAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, this.entranceSpot(f.warden), kit);
+    const inRing = inMeleeRingDangerAt(elapsed, ax, ay, GUARDIAN_AWAKE_MS, this.homeSpot(f.warden), ADJUDICATION_SLACK_MS, kit);
     if (!inSlam && !inRing) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }

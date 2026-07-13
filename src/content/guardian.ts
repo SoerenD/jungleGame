@@ -117,6 +117,11 @@ export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   // cadence, and unlike every other weapon it strikes Husks, the Deep Guardian,
   // AND the Guardian. Crafted from Delve loot; plugs straight into this table.
   sword: { min: 3, max: 5, critChance: 0.14, critMult: 1.9, attackMs: 480 },
+  // The Mirefang (ADR-0017 rung 1): the Mire Warden's participation weapon drop —
+  // a pure-combat blade on the Sword family, tuned to the same ~9.4 net DPS crafted
+  // tier (a keen mid-band with a touch more crit than the Sword). Its realm-synergy
+  // passive (ignoring the tide's wade-slow) lives in the scene, not this table.
+  mirefang: { min: 3, max: 5, critChance: 0.15, critMult: 1.9, attackMs: 480 },
   // The Forgebrand (ADR-0011): the Deep's PURE-COMBAT reward — a molten
   // two-hander and a true SIDEGRADE to the Sword, not an upgrade. It trades the
   // Sword's tempo for weight: a SLOWER cadence (640 vs 480 ms) and a heavier,
@@ -371,6 +376,60 @@ export function makeSlamFamilyWaveTiles(w: number, h: number, seed: number): War
     }
     // fury densification: extra 2x2 pounds on top of the base family
     const extra = Math.round((density - 1) * 6);
+    for (let b = 0; b < extra; b++) {
+      const x = Math.floor(rng() * (w - 1));
+      const y = Math.floor(rng() * (h - 1));
+      set(x, y);
+      set(x + 1, y);
+      set(x, y + 1);
+      set(x + 1, y + 1);
+    }
+    return grid;
+  };
+}
+
+/**
+ * The Mire Warden's slam families (ADR-0017 rung 1): the drowned court's own
+ * geometry — rising-water bands, geyser columns and a tidal comb — deliberately
+ * distinct from the Guardian's ring/cross/stripe/scatter vocabulary while reusing
+ * the same telegraph → slam → Eye-Window rhythm. Each leaves dodgeable dry ground.
+ */
+export function makeMireWaveTiles(w: number, h: number, seed: number): WardenKit['waveTiles'] {
+  return (index: number, density: number): boolean[] => {
+    const grid = new Array<boolean>(w * h).fill(false);
+    const rng = mulberry32(seed ^ (index * 2654435761));
+    const set = (x: number, y: number) => {
+      if (x >= 0 && y >= 0 && x < w && y < h) grid[y * w + x] = true;
+    };
+    const family = index % 3;
+    if (family === 0) {
+      // rising water: a full-width flooded band 3 rows tall sweeps the court,
+      // leaving dry rows above and below to stand on
+      const band = 2 + Math.floor(rng() * (h - 6));
+      for (let y = band; y < band + 3; y++) {
+        for (let x = 0; x < w; x++) set(x, y);
+      }
+    } else if (family === 1) {
+      // geyser columns: 3–4 full-height 2-wide eruptions with dry lanes between
+      const cols = 3 + Math.floor(rng() * 2);
+      for (let c = 0; c < cols; c++) {
+        const cx = 1 + Math.floor(rng() * (w - 3));
+        for (let y = 0; y < h; y++) {
+          set(cx, y);
+          set(cx + 1, y);
+        }
+      }
+    } else {
+      // tidal comb: alternating 2-wide flooded rows you weave between
+      const parity = Math.floor(rng() * 2);
+      for (let y = 0; y < h; y++) {
+        if (Math.floor(y / 2) % 2 === parity) {
+          for (let x = 0; x < w; x++) set(x, y);
+        }
+      }
+    }
+    // fury densification: extra 2x2 geyser bursts on top of the base family
+    const extra = Math.round((density - 1) * 5);
     for (let b = 0; b < extra; b++) {
       const x = Math.floor(rng() * (w - 1));
       const y = Math.floor(rng() * (h - 1));

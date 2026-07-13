@@ -67,6 +67,15 @@ export const TEST_REFINER: RefinerConfig = {
   msPerUnit: FAST_REGROW ? 5_000 : 120_000,
   cap: 10,
 };
+// The Brine Kiln (ADR-0017 rung 1): the Sunken Mire's Refiner — salt-reed →
+// tideglass over real time, on the SAME generic kernel (no new RPC). Dev-shortened
+// like the Sawmill/test refiner so the whole chain is testable solo.
+export const BRINE_KILN: RefinerConfig = {
+  inputItem: 'saltreed',
+  outputItem: 'tideglass',
+  msPerUnit: FAST_REGROW ? 5_000 : 120_000,
+  cap: 10,
+};
 
 // ---------------------------------------------------------------- fog of war
 /** exploration is tracked in chunks of this many tiles per side */
@@ -200,6 +209,23 @@ export function saveWorldLabelScale(v: number): void {
 export const DAY_CYCLE_MS = import.meta.env.DEV ? 180_000 : 1_200_000;
 export const FORCE_NIGHT = params.has('night');
 export const MAP_PIECE_DROP_CHANCE = 0.12;
+
+// ---------------------------------------------------------------- the Tide (ADR-0017 rung 1)
+// The Sunken Mire's signature mechanic: a pure function of the real clock (no
+// server, no tick — ADR-0001), scoped to the sunken_mire district. Water rises
+// and ebbs on a ~35-min period that deliberately does NOT evenly divide 24h
+// (86_400_000 % 2_100_000 = 1_500_000 ≠ 0) so spring-tide appointments drift
+// across the day. Flood slows wading (WADE_SLOW_FACTOR) and submerges the reeds;
+// ebb exposes them for harvest (validated within ±TIDE_EXPOSURE_SLACK_MS of the
+// clock — the eyeOpenWithin latency pattern). ?tide shortens the period hard so
+// both phases show in seconds when testing the loop solo.
+export const DEV_TIDE = params.has('tide');
+export const TIDE_PERIOD_MS = DEV_TIDE ? 24_000 : import.meta.env.DEV ? 120_000 : 2_100_000;
+/** flood-phase movement multiplier inside the Mire (Mirefang bearers ignore it) */
+export const WADE_SLOW_FACTOR = 0.6;
+/** slack window for reed-harvest exposure validation (the ±slack clock pattern);
+ *  dev-scaled so it never swallows a whole shortened test cycle */
+export const TIDE_EXPOSURE_SLACK_MS = DEV_TIDE ? 2_000 : import.meta.env.DEV ? 8_000 : 60_000;
 
 // ---------------------------------------------------------------- v2: the Seal
 // In dev the Seal asks for tiny per-head quotas so the whole arc is testable

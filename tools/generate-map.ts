@@ -370,6 +370,24 @@ interface NodeOut {
 
 const inArenaOuter = (x: number, y: number) =>
   x >= ARENA.x - 1 && x <= ARENA.x + ARENA.w && y >= ARENA.y - 1 && y <= ARENA.y + ARENA.h;
+
+// ---- ADR-0017 rung 1: the Mire Warden's arena on the Mangrove Coast. It
+// replicates the Guardian's arena anatomy (cliff-walled court, colossus home tile
+// top-center, offering monument OUTSIDE the south gate, summoning altar INSIDE)
+// but is sited in the ALREADY-GENERATED frontier, so — unlike the Guardian's —
+// its terrain is carved LATE (after every node/decor draw): the writes consume no
+// RNG (variant picks change value, never count) and each footprint node is evicted
+// by id via keptNodes, so no pinned node id or tile-variant stream ever shifts.
+const MIRE_ARENA = { x: 110, y: 236, w: ARENA_W, h: ARENA_H };
+const MIRE_HOME = { tx: MIRE_ARENA.x + Math.floor(ARENA_W / 2) - 1, ty: MIRE_ARENA.y + 1 }; // 3x3, top-center
+const MIRE_SEAL_GATE = [MIRE_ARENA.x + 7, MIRE_ARENA.x + 8, MIRE_ARENA.x + 9].map((tx) => ({ tx, ty: MIRE_ARENA.y + MIRE_ARENA.h })); // south Ward gap
+const MIRE_ALTAR = { tx: MIRE_ARENA.x + 7, ty: MIRE_ARENA.y + 10 }; // 2 tiles, inside near the gate
+const MIRE_MONUMENT = { tx: MIRE_ARENA.x + 7, ty: MIRE_ARENA.y + MIRE_ARENA.h + 2 }; // 2 tiles, outside the gate on the approach
+const inMireArenaOuter = (x: number, y: number) =>
+  x >= MIRE_ARENA.x - 1 && x <= MIRE_ARENA.x + MIRE_ARENA.w && y >= MIRE_ARENA.y - 1 && y <= MIRE_ARENA.y + MIRE_ARENA.h;
+const isMireMonument = (x: number, y: number) =>
+  (x === MIRE_MONUMENT.tx || x === MIRE_MONUMENT.tx + 1) && y === MIRE_MONUMENT.ty;
+
 const nodes: NodeOut[] = [];
 const foliage: { kind: string; tx: number; ty: number }[] = [];
 const occupied = new Set<string>();
@@ -1005,6 +1023,25 @@ for (let y = 0; y < H; y++) {
   }
 }
 
+// ---- ADR-0017 rung 1: carve the Mire Warden's arena into the Mangrove Coast.
+// LATE + RNG-FREE (after every node + decor draw) so nothing shifts: a cliff wall
+// ring, a drowned-flagstone floor, the south Ward gap. Ground writes only — the
+// footprint's decor is discarded from decorGid below the tile-variant picks (the
+// picks are still made, count preserved), and footprint nodes are evicted by id.
+for (let y = MIRE_ARENA.y - 1; y <= MIRE_ARENA.y + MIRE_ARENA.h; y++) {
+  for (let x = MIRE_ARENA.x - 1; x <= MIRE_ARENA.x + MIRE_ARENA.w; x++) {
+    if (!inBounds(x, y)) continue;
+    const isWall = x === MIRE_ARENA.x - 1 || x === MIRE_ARENA.x + MIRE_ARENA.w || y === MIRE_ARENA.y - 1 || y === MIRE_ARENA.y + MIRE_ARENA.h;
+    ground[y][x] = isWall ? 'cliff' : 'mire_flagstone';
+  }
+}
+for (const g of MIRE_SEAL_GATE) ground[g.ty][g.tx] = 'mire_flagstone'; // the entrance gap the Ward blocks
+// the offering monument stands on dry ground just outside the south gate
+for (const m of [MIRE_MONUMENT, { tx: MIRE_MONUMENT.tx + 1, ty: MIRE_MONUMENT.ty }]) {
+  const g = ground[m.ty][m.tx];
+  if (g === 'water' || g === 'mire_water' || g === 'cliff') ground[m.ty][m.tx] = 'sand';
+}
+
 // ---------------------------------------------------------------- secrets
 // Placed AFTER node generation on purpose: nodes standing on these tiles are
 // evicted (already-assigned node ids stay stable for existing saves).
@@ -1016,6 +1053,7 @@ const tablets = [
   { id: 't4', tx: 152, ty: 162 }, // swamp edge
   { id: 't5', tx: 166, ty: 32 }, // v2: Tablet of the Seal, on the arena approach
   { id: 't6', tx: 246, ty: 147 }, // frontier: Overgrown Temple court (ADR-0009)
+  { id: 't7', tx: 155, ty: 304 }, // ADR-0017 rung 1: Tablet of the Tide, on the Sunken Mire's gate landing
 ];
 const altar = { tx: 35, ty: 75 }; // watches the hidden grove entrance
 const gate = [73, 74, 75, 76, 77].map((y) => ({ tx: 32, ty: y }));
@@ -1054,7 +1092,13 @@ for (const key of reservedTiles) {
   if (g === 'water' || g === 'cliff') ground[y][x] = 'grass';
   decor[y][x] = null;
 }
-const keptNodes = nodes.filter((n) => !reservedTiles.has(`${n.tx},${n.ty}`) && !inArenaOuter(n.tx, n.ty));
+const keptNodes = nodes.filter(
+  (n) =>
+    !reservedTiles.has(`${n.tx},${n.ty}`) &&
+    !inArenaOuter(n.tx, n.ty) &&
+    !inMireArenaOuter(n.tx, n.ty) &&
+    !isMireMonument(n.tx, n.ty),
+);
 
 // ---------------------------------------------------------------- outputs
 const blocked = new Array<number>(W * H).fill(0);
@@ -1068,6 +1112,12 @@ for (let y = 0; y < H; y++) {
 for (let dy = 0; dy < 3; dy++) {
   for (let dx = 0; dx < 3; dx++) {
     blocked[(GUARDIAN_HOME.ty + dy) * W + (GUARDIAN_HOME.tx + dx)] = 2;
+  }
+}
+// the Mire Warden's 3x3 resting place, likewise solid (ADR-0017 rung 1)
+for (let dy = 0; dy < 3; dy++) {
+  for (let dx = 0; dx < 3; dx++) {
+    blocked[(MIRE_HOME.ty + dy) * W + (MIRE_HOME.tx + dx)] = 2;
   }
 }
 
@@ -1091,6 +1141,16 @@ for (let y = 0; y < H; y++) {
     pickTile(x, y, pick2);
   }
 }
+// ADR-0017 rung 1: discard any decor the pick loop drew onto the Mire arena
+// footprint (the picks were still MADE — stream count preserved — only their gid
+// is dropped, so no pinned tile-variant ever shifts) so no flowers sprout on the
+// drowned-flagstone court or its cliff walls.
+for (let y = MIRE_ARENA.y - 1; y <= MIRE_ARENA.y + MIRE_ARENA.h; y++) {
+  for (let x = MIRE_ARENA.x - 1; x <= MIRE_ARENA.x + MIRE_ARENA.w; x++) {
+    if (inBounds(x, y)) decorGid[y][x] = 0;
+  }
+}
+
 const groundData: number[] = [];
 const decorData: number[] = [];
 for (let y = 0; y < H; y++) {
@@ -1157,6 +1217,19 @@ const worldData = {
   elevation: { regions: elevationRegions },
   // Realm districts (ADR-0017 §2): far-edge rects + their paired teleport gates
   districts,
+  // ADR-0017 §1: per-Warden arenas in the World (rung 0's Guardian keeps the
+  // top-level arena/guardianHome/guardianAltar/sealMonument fields). Each entry
+  // mirrors that anatomy — court rect, colossus home, summoning altar, offering
+  // monument, Ward gap — keyed by WardenDef id so both backends pick by fight.warden.
+  wardenArenas: {
+    mire: {
+      arena: MIRE_ARENA,
+      home: MIRE_HOME,
+      altar: MIRE_ALTAR,
+      monument: MIRE_MONUMENT,
+      sealGate: MIRE_SEAL_GATE,
+    },
+  },
 };
 
 const outDir = path.resolve(import.meta.dirname, '../public/map');

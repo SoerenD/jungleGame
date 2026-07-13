@@ -1,130 +1,140 @@
-# Handover — Warden-Leiter-Implementierung (Stand 2026-07-12, Nacht — T3+T4 fertig)
+# Handover — Warden-Leiter-Implementierung (Stand 2026-07-12 — T5 gebaut, unverifiziert im Browser)
 
 Nachfolge-Session: zuerst `.claude/plans/feature-plan-warden-ladder-armor.md` (Plan, alle
 Entscheidungen owner-bestätigt) und `docs/adr/0017-warden-ladder-realms-and-armor.md` lesen.
-Dieses Dokument trägt nur den SESSION-Zustand, der nirgendwo sonst steht.
+Dieses Dokument trägt nur den SESSION-Zustand.
 
-## Stand: T0–T4 + T8 + Charakterfenster ALLE COMMITTED auf `master` (nicht gepusht)
+## SAFETY-CHECK (unverändert)
+`git status` muss den T5-Arbeitsbaum zeigen (unten), `git log --oneline` muss `34b22d3`
+("feat(warden-ladder): visible Armor + WoW character panel + Warden fight backend (T3/T4)")
+auf `master` zeigen (HEAD = `3b5da57` Docs-Commit). Ist das nicht so → falscher Checkout;
+Stand lebt im Haupt-Checkout `C:\Users\soeren.dierkes\littleGame` auf `master`.
 
-Commits auf `master`: 3ea4115 (Docs/ADR/Plan/Handover), 63b8d0a (T0 WardenKit),
-7712686 (Warden-Sheets), 0c78580 (Sammel-Commit: Swing-Pose + T1 Refiner-Kernel +
-T2 Distrikte + Moor-Rework + Salzried-Kette + T8 Sentinel), 97de4dc (Handover-Doc),
-**34b22d3 (T3 Rüstung + WoW-Charakterfenster + T4 Warden-Kampf — Sammel-Commit, weil
-sich die Features types/backends/GameScene/hud/i18n teilen wie 0c78580).** NICHT
-gepusht (Owner pusht selbst). Arbeitsbaum ist sonst sauber.
+## Stand: T0–T4 + T8 COMMITTED (34b22d3). T5 GEBAUT, aber UNCOMMITTED + NICHT browser-verifiziert.
 
-Migrationen 0012/0013/0014 (+ die Funktions-Nachzieh-Migration `equip_chest_slot`)
-sind LIVE DEPLOYED auf irjxvtgrzkmvjomozyiv. Die 0013-Datei trägt bereits die finale
-chest-Whitelist.
+T5 (Moorwächter-Vertikalschnitt) ist vollständig implementiert, `npm run build` ist GRÜN,
+genmap byte-stabil bewiesen, node-pure Logik (Tide + Mire-Kit) verifiziert. NICHT committed
+(Owner pusht/committed selbst) und NOCH NICHT im Browser durchgespielt (Dev-Server ist
+owner-gated — nicht ohne Ansage starten).
 
-## Was fertig und verifiziert ist (alles im Arbeitsbaum)
+**T5 braucht KEINE neue Migration/RPC** — reines Daten + Art + Scene, reitet auf 0012 (Refiner),
+0013 (Armor), 0014 (Wardens). Die Tide ist pure Client-f(clock) (ADR-0001).
 
-- **T0**: `WardenKit`-Interface + `GUARDIAN_KIT` in src/content/guardian.ts; byte-identisch
-  bewiesen (Sampler-SHA identisch) + unabhängiges Review ohne Findings.
-- **T1**: generischer Refiner-Kernel. Migration **0012_refiners.sql ist LIVE DEPLOYED**
-  (irjxvtgrzkmvjomozyiv, apply_migration "refiners") und live smoke-getestet. Mock-Spiegel +
-  generisches HUD-Panel (#refiner-panel; CSS-Sichtbarkeits-Bug in styles.css behoben —
-  war der "Geister-Menüleiste"-Bug). Dev-Flag `?refinertest`. Sawmill unberührt.
-- **T2**: Karte 384×384 (Kern 300×300 pinned, mehrfach byte-stabil bewiesen), Distrikt
-  `sunken_mire` (100,300 108×72), Tor Mangrovenküste (152,290) ⇄ (153,303), Kamera-Clamp,
-  Minimap-Crop, Dot-Filter, Fog-Restride akzeptiert (ADR-0009-Disziplin). Dev-Flag `?realmtest`;
-  `realmGateOpen()` ist der T4/T5-Stub.
-- **Moor-Rework** (Owner-Feedback "boring"): eigener Tile-Streifen mire-tiles.png (Ids 11–19,
-  tools/compose-mire-tiles.ts; BootScene komponiert ihn bei x=176 in die Canvas-Tileset),
-  Torf/Schwarzwasser/Schlamm/Dammplatten + Ried-Dekor, See + Kanäle + Damm (Begehbarkeits-
-  regel: nie zwei Lücken, BFS Tor→Insel MUSS begehbar bleiben!), Ruineninsel (T5-Altar-Ort),
-  tote Bäume (foliage 'dead_tree'), Ambiente (mireVeil + mirePuffs in GameScene, nacht-
-  kompensiert), animiertes Schwarzwasser (Slot 14 im Water-Anim-Callback), Minimap-Farben,
-  Megalith-Torbogen (buildRealmGate).
-- **Salzried-Kette** (Owner: "keine neuen Ressourcen sichtbar"): NodeType `salt_reed_bed`
-  (3 HP, 2× `saltreed`, Machete-Bonus, bare-hand ok) + Item + Icon + DE-Namen + Chip-Tints +
-  14 authored Betten. Sichtbarkeits-Fix: Dekor-Riede gedimmt, Node-Büschel größer mit
-  Teal-Kristallen (#63e0b8 = Realm-Signalfarbe). Ernte end-to-end in Mock verifiziert.
-  SQL braucht KEINE Migration (jw_hit_node ist generisch, Client liefert Tuning).
-- **T8**: i18n "the Warden"→"the Sentinel" / "die Schildwache" (Kit-Id 'warden' unverändert).
-- **Warden-Sprites**: mire-/echo-/verdant-warden.png in public/assets/objects/ (je 768×96,
-  8 Frames im Guardian-Vertrag; compose-Scripts in tools/). NOCH NICHT in assetConfig
-  registriert — kommt mit T5–T7. Kodex-Artefakt:
-  https://claude.ai/code/artifact/f2b52226-4f0d-45bc-9f8b-027a5b4a8e3a
-  (Generator: Session-Scratchpad build-warden-codex.ts — Scratchpad ist flüchtig).
+## T5 — was gebaut wurde (Arbeitsbaum, uncommitted)
 
-## T3 — Rüstungssystem: FERTIG + verifiziert (uncommitted)
+**Content (node-pur):**
+- `src/content/tide.ts` (NEU): Tide-Uhr, pure f(now, period). Periode `TIDE_PERIOD_MS`
+  2_100_000ms (~35min, teilt 24h NICHT; dev-kurz, `?tide`=24s). `tideHeight/tideFloods/
+  tideExposed/tideExposedWithin/isSpringTide/springSwell`.
+- `guardian.ts`: `makeMireWaveTiles` (Steigwasser-Bänder + Geysir-Säulen + Tidal-Comb, klar
+  vom Guardian verschieden) + `mirefang` WEAPON_COMBAT-Zeile (Schwert-Familie, ~9.4 DPS).
+- `wardens.ts`: MIRE_KIT nutzt jetzt makeMireWaveTiles; drops = `{mire_key, mirefang}`.
+- `items.ts`: `tideglass` (Resource), `mirefang` (Tool), `brine_kiln` (Structure) — Unions +
+  EN + DE.
+- `config.ts`: `BRINE_KILN` RefinerConfig (saltreed→tideglass), `TIDE_PERIOD_MS`,
+  `WADE_SLOW_FACTOR` (0.6), `TIDE_EXPOSURE_SLACK_MS` (dev-skaliert), `DEV_TIDE` (`?tide`).
+- `recipes.ts`: `brine_kiln` (Structure, Hammer) + `tideglass_boots` (kind:'tool', auto-equip).
+- `village.ts`: `KILN_ART` (StructureArt kind 'kiln', Teal). `icons.ts`: `drawKiln` + kiln-Glyph
+  + `tideglass`/`mirefang` GRIDs + itemIcon-Lookup.
+- `journey.ts`: `MIRE_QUEST_STEPS` + `MireProgress` + `mireQuestComplete` (reine Prädikate,
+  wie DELVE_QUEST_STEPS). **NOCH NICHT an einen HUD-Tracker gehängt** (siehe offene Punkte).
+- `lore.ts`: t7 „Tablet of the Tide" EN+DE. `i18n.ts`: `toast.reedSubmerged` EN+DE.
 
-- src/content/armor.ts (node-pur): ARMOR_SLOTS/ARMOR_BUFFS (Boots +8% Tempo, **Brustpanzer
-  (chest) +8% Angriffstempo**, Helm +2/+3 Band), armorBuff(), sanitizeEquipped(). Items
-  tideglass_boots / **verdant_cuirass** / hushsteel_helm (kind 'armor', EN+DE, Icons,
-  Codex-Card-Statzeilen).
-  **AMENDMENT (Owner, 2026-07-12 Nacht):** Slot `gloves` → `chest` umbenannt, Teil
-  `verdant_gloves` → `verdant_cuirass` (Grüngewebter Brustpanzer). Grund: die winzigen
-  Handschuh-Overlays veränderten den Sprite optisch kaum; ein geplatteter Torso liest sich
-  als klar anderer Charakter. **Das REVIDIERT ADR-0017 §3 („chest armor cut") — ADR + Plan
-  sind noch NICHT nachgezogen (offener Doku-Punkt für den Owner).** Ein V-Ausschnitt lässt
-  einen Streifen der Hemdfarbe durch (Identität bleibt).
-- Avatar-Overlays in drawBlockheadSheet über ALLE 20 Frames: Boots (Füße), **Brustpanzer
-  (großes Torso-Overlay: Frontplatte mit V-Ausschnitt/Grat/Nieten/Schulterstücken,
-  Rückenplatte mit Wirbelgrat, Seitenprofil mit Kragen/Gürtel — bob/step-Offsets gefolgt)**,
-  Helm (Kappe; Rückansicht-Vollhaar + Seiten-Haarsträhne). Pixelweise verifiziert.
-- Migration **0013_armor_equip.sql LIVE DEPLOYED** (players.equipped jsonb + jw_equip +
-  jw_join liefert 'equipped'). Whitelist per Folge-Migration **"equip_chest_slot" LIVE
-  DEPLOYED** von ('boots','gloves','helm') → ('boots','chest','helm'); die 0013-Datei trägt
-  den finalen Stand (chest) für frische Deploys. Nur besessene Items werden angelegt.
-- Wire: `armor` auf PlayerPos/SelfPos (Backends injizieren selbst — sendPosition-Signatur
-  unverändert), Look-Key = JSON([appearance, armor]), Presence-Re-Track bei Equip (einmalig,
-  Rate-Limit-sicher). Peer-Pfad via upsertRemote-Simulation pixelweise verifiziert.
-- Stats: moveSpeedFactor/atkCadence additiv zu Village-Buffs; Band-Delta in
-  rollGuardianDamage + applyMobHit (Host liest das Band des TREFFENDEN aus dessen synced
-  armor — armorBandOf()). Equip-UI im Inventar-Detail (Anlegen/Ablegen, ⛨-Badge).
-- toggleArmor SERIALISIERT + koalesziert (equipChain/desiredEquip) — zwei schnelle Klicks
-  überschrieben sich sonst gegenseitig (Race gefunden + gefixt + verifiziert).
-- Dev-Flag `?armor` (alle drei Teile via Null-Kosten-jw_craft). Reload-Persistenz + Stats
-  (1.08 / 463ms) im Browser verifiziert.
+**Karte (genmap):**
+- `tools/generate-map.ts`: Mire-Arena an der Mangrovenküste bei **(110,236) 17×13** (Guardian-
+  Arena-Anatomie repliziert: Cliff-Wandring, Mire-Flagstone-Boden, Süd-Gate-Lücke,
+  MIRE_HOME 3×3 top-center, MIRE_ALTAR innen, MIRE_MONUMENT außen). Carve LÄUFT NACH aller
+  Node-Generierung + Decor-Loops (kein RNG-Draw-Shift); Footprint-Nodes via `keptNodes`
+  evakuiert (IDs bleiben stabil); Decor via `decorGid` NACH den pick-Loops geleert
+  (nicht `decor=null` davor). `wardenArenas.mire {arena,home,altar,monument,sealGate}` emittiert.
+  Mire-Home 3×3 als blocked=2 gestempelt. t7-Tafel bei (155,304) im Distrikt.
+- `assetConfig.ts`: `mire_warden` (mire-warden.png, 96×96×8) registriert.
+- **Byte-Stabilitäts-Beweis** (Skript, bestanden): überlebende Node-IDs 0 geändert; 10 Nodes
+  im Footprint evakuiert; groundData/decorData/blocked Diffs 285/14/74 — ALLE 0 außerhalb des
+  Footprints; BFS spawn→monument→altar + gate→islet begehbar; t7 begehbar.
 
-## T4 — Warden-Kampf-Backend + Altar: FERTIG + verifiziert (uncommitted)
+**GameScene + Backends (Slice 3, der große Umbau):**
+- `WardenArena`-Typ + `wardenArenas` in WorldData. Neuer `KIT_ART`-Table (ersetzt FURY_TINTS):
+  pro-Kit Sprite/Anim-Keys + Palette (Guardian = exakte alte Literale = No-op; Mire = Teal).
+- **`activeBoss()` / `activeWarden`**: pro-Boss-BossVisual (guardianSprite… vs mireSprite…),
+  gewählt per fight.warden. activeWarden wird bei startFight/beginEngaged gesetzt und ERST am
+  Ende von endFight genullt (damit Wrack/Reset auf den richtigen Boss fällt). Alle Fight-
+  Render/Adjudikations-Stellen (place/blockers/renderWave/slamWave/meleeRing/render-loop/
+  shatter/restore/guardianAction/looseArrow/fireGuardianHit/hit-flash) routen durch activeBoss.
+  **Beide Wächter sind ab Tag 1 sichtbar schlafend** (eigene dormant Sprites, MP-korrekt).
+- Dormanter Mire-Boss + Altar + Monument im Init-Block (nur wenn wardenArenas.mire da).
+  BootScene: `mire-idle`/`mire-eye` Anims.
+- Echter Mire-Altar: `mireAltarAction()` (in der Interaktionskette, ohne Dev-Flag) →
+  generisches `wardenAltarAction('mire')`. `warden-altar-near`-Emit auf mireAltarPos.
+  `?wardenfight` gewährt jetzt nur noch Waren + 90s-Fenster (Grant lebt in beiden Backends).
+- Brine Kiln: KILN_ART im bakeVillageTextures-Spread + nearbyStructure-Branch → openRefiner.
+- Tide-Hooks: `moveSpeedFactor` Wade-Slow (nur sunken_mire + Flut; Mirefang ignoriert),
+  `reedSubmerged` Ernte-Gate (+ Backstop in swingAtNode), `tideVeil` Steigwasser-Overlay
+  (im mire-ambience-Block + Teardown).
+- Backends: `arenaAnatomy(warden)` (Mock) / `arenaRectOf(warden)` (Supabase) — Roster-Snapshot,
+  liveRoster, Knockdown-Adjudikation wählen die Arena per fight.warden. Victory-Drops sind
+  bereits generisch (`wardenDef(warden).drops` → Spoils) — mire_key + mirefang landen korrekt.
 
-- src/content/wardens.ts (node-pur): WardenDef-Registry (WARDENS.mire: Totem mire_totem,
-  Gate-Key mire_key, realm 'sunken_mire' = District-ID!), MIRE_KIT (Platzhalter auf den
-  Slam-Familien, eigene Seeds/Phasen — T5 authort Steigwasser+Geysire neu), kitOf(),
-  wardenForRealm(). FightState.warden ('mire' | null = Guardian).
-- Migration **0014_wardens.sql LIVE DEPLOYED** (apply_migration "wardens", kompletter
-  Arc live smoke-getestet inkl. Mutex in BEIDE Richtungen): world.wardens jsonb +
-  jw_contribute_warden (generischer Klammer-Loop, Client liefert Quoten) + jw_summon_warden
-  (ALTAR_INTACT/FIGHT_IN_PROGRESS/NO_TOTEM, stempelt 'warden' ins fight-jsonb) +
-  jw_open_realm_gate (einmalig, für immer). jw_guardian_hit/jw_knockdown UNVERÄNDERT
-  (arbeiten generisch auf dem fight-jsonb; Drops laufen client-seitig übers Spoils-Fenster).
-- Kit-Threading: GameScene-Fight-Layer (renderWave/slamWave/MeleeRing/Pose/Eye/Fury) +
-  beide Backends adjudizieren über kitOf(fight.warden). Kampf-Panel/Toasts/Chat tragen den
-  Warden-Namen (i18n t.warden/t.wardenAltar/t.system.warden*; Fury-Toasts endlich i18n).
-- Altar-Offering = Siegel-Muster pro Rung: config.WARDEN_ALTAR_PER_HEAD (dev-klein unter
-  FAST_SEAL), Bars-Panel #warden-panel (Seal-Bars-Skelett) nahe dem Altar.
-- Tor-Schlüssel: mire_key (nicht verbraucht, Delve-Muster) dreht den Megalith-Bogen via
-  realmGateAction → jw_open_realm_gate → realmOpened-Event → rebuildRealmGates()
-  (Tore sind jetzt neu-aufbaubar; ACHTUNG: wardenForRealm matcht auf district.id,
-  NICHT district.name — der Bug war drin und ist gefixt).
-- Totem-Rezept: mire_totem (2 Hartholz + 2 Obsidian + 3 Fasern, an der Schmiede).
-- Dev-Flag `?wardenfight`: Guardian-Altar dient als Mire-Altar, Grants für den ganzen
-  Solo-Arc, DEV_FIGHT_HP + 90s-Fenster. Kompletter Arc im Browser (Mock) verifiziert:
-  Opfern → Altar bricht → Beschwören (Totem weg, Panel „Der Moorwächter") → Kampf auf dem
-  MIRE-Kit (8 Treffer / 6 Deflects außerhalb seiner Augenfenster) → Sieg → Spoils mit
-  mire_key → Schlüssel dreht Tor → Betreten des Versunkenen Moors. Guardian-Regression
-  (?fight) geprüft: warden=null, Kit 'guardian', altes Panel.
+## Verifikation
+- `npm run build` GRÜN (tsc && vite build).
+- genmap Byte-Stabilität bewiesen (Skript: 0 gepinnte Diffs außerhalb Footprint, IDs stabil).
+- Node-Logik-Check bestanden (Tide-Bereiche/Perioden, Mire-Kit deterministisch + dodgebar +
+  Eye-Windows, Mirefang-Drop/Band).
+- **Adversariale Review** (4-Agenten-Workflow, high-effort): 1 bestätigter Befund, 0 unsicher,
+  0 false positives. Befund (behoben): Mirefang-Tide-Immunität hing an `heldTool()` (in-hand),
+  der Item-Text verspricht sie aber „getragen" → auf `(inventory['mirefang'] ?? 0) <= 0` (Besitz)
+  umgestellt. Alle anderen Pfade (Altar-Kette, Roster/HP, Knockdown-Arena-Routing, Victory-Drops,
+  mire_key→Tor, Guardian-No-op, genmap) als korrekt bestätigt.
+- **BROWSER-DURCHLAUF (Solo, Mock, `?pump&canvas&wardenfight&tide`) — VOLLER LOOP VERIFIZIERT:**
+  Mire-Altar-Beschwörung (Arena an der Mangrovenküste, mire_warden-Sprite, „Der Moorwächter
+  regt sich") → Kampf im Mire-Arena (Roster korrekt aus der Mire-Arena, HP 30, Steigwasser-
+  Danger/Knockdowns/Exhaustion/Eye-Windows funktionieren) → Sieg → Drops `{mire_key, mirefang}`
+  in Spoils, entnommen → **authentisches** Tor-Öffnen (dormant→mire_key→openRealmGate→offen,
+  Client+Backend) → Betreten des Versunkenen Moors → **Tide-Gate beidseitig** (Ernte bei Flut
+  VERWEIGERT / bei Ebbe erlaubt → saltreed) → **Sole-Ofen** (saltreed→tideglass) → Stiefel
+  gecraftet → angelegt → **+8% Tempo im Charakterfenster + Gezeitenglas-Stiefel am Avatar-
+  Paperdoll sichtbar**. Screenshots gemacht.
+- **LIVE-SMOKE (SupabaseBackend, Wegwerf-World `t5smoke`, danach aufgeräumt + Env restauriert):**
+  Client bootet gegen live (`[jw] backend: Supabase`), **`jw_join` + `jw_craft` (der
+  ?wardenfight-Totem-Grant) feuern live und persistieren** (Spieler `SmokeT5` in `t5smoke` mit
+  mire_totem angelegt — via MCP `execute_sql` verifiziert; `default` unberührt, 19 Spieler). Der
+  **volle Realtime-Loop ist im HEADLESS-Preview NICHT fahrbar** (mit `?pump` stockt der Realtime-
+  Channel; ohne `?pump` friert der Tab ein — dokumentierte Env-Grenze, kein T5-Bug). Die T5-
+  Live-Pfad-Änderung (SupabaseBackend `arenaRectOf(warden)`/`playersInArena(warden)` +
+  `wardenArenas` in WorldData) ist minimal, build-grün und logisch identisch zum Mock (dort voll
+  browserverifiziert). Aufräumen: alle world_id='t5smoke'-Zeilen + world-Zeile gelöscht; Env-
+  Overrides (blank = Mock) zurückgesetzt.
+- OFFEN (niedriges Restrisiko): der **finale Live-Loop in einem ECHTEN Browser** (deine
+  normale Live-Session — der Headless-Preview kann den Realtime-Channel nicht) + der echte
+  2-Browser-Boots-Sichtbarkeitstest (Solo-Mock zeigt nur Bots; `armor`-Wire ist T3-pixelverifiziert).
 
-## Nächstes Ticket (T5)
+## Offene Punkte für den Owner
+1. **Live-Smoke** auf einer Wegwerf-World (nie 'default' anfassen) + echter 2-Browser-Sichtbar-
+   keitstest der Boots, wenn gewünscht. Solo-Mock ist voll durch.
+2. **~~Doku-Punkt Chest-Cuirass~~ ERLEDIGT:** Während dieser Session ist `f38e73d`
+   („docs(adr-0017): Amendment 1 — rung-3 armor is a chest Cuirass, not Gloves") auf master
+   gelandet und ist jetzt HEAD (sauberer Docs-Only-Nachfahre von 34b22d3; T5-Änderungen liegen
+   unberührt darüber). ADR-0017 (Amendment 1) + die Plan-Tabelle sind auf den Brustpanzer
+   nachgezogen. Kein offener Doku-Punkt mehr. (HINWEIS: HEAD war bei Session-Start 3b5da57;
+   der Owner hat f38e73d parallel committet.)
+3. **MIRE_QUEST_STEPS an den HUD-Tracker hängen?** Die Daten sind da (reine Prädikate). Wiring
+   braucht (a) die wardens-Snapshot-State in hud.ts (altar.broken + gateOpen), (b) eine UX-
+   Entscheidung, WANN der dritte Tracker erscheint (nach dem Delve-Quest?). Bewusst deferred.
+4. **Tuning-Werte** (owner-facing): Brine-Kiln-Kosten (plank4/stone6/obsidian2), Boots
+   (tideglass6/plank2/fiber2), Tide-Periode/Wade-Slow, Mirefang-Band — alle im Code, änderbar.
 
-T5 Mire-Vertikalschnitt (Details im Plan): authored Altar/Arena an der Mangrovenküste,
-echtes Mire-Kit (Steigwasser-Wellenreihen + Geysir-Spalten), Mirefang-Drop (WEAPON_COMBAT
-+ Tide-Passiv), Warden-Sprite in assetConfig registrieren (mire-warden.png liegt bereit),
-Tide-Mechanik (~35-min-Periode, teilt 24h nicht), Brine Kiln (Refiner-Kernel!), Tideglass
-Boots ans Ende der Kette, Quest-Steps, Lore-Tafel, i18n. Die T4-Dev-Brücken (?wardenfight
-am Guardian-Altar, Altar-Panel-Anbindung) dann auf den echten Altar umziehen.
+## Nächste Tickets
+- Nach der Browser-Verifikation von T5: **T6** (Echowächter + Hushdark, Echoes-Mechanik) →
+  **T7** (Verdant-Wächter + Grüne Terrassen). Der `activeBoss`/`wardenArenas`/`KIT_ART`/
+  Refiner-Rahmen ist jetzt so gebaut, dass T6/T7 überwiegend Daten + Art + je eine zweite
+  Arena/Distrikt-Anlage sind.
 
-## Session-Learnings (nicht im Repo dokumentiert)
-
-- NIE mehrzeilige `npx tsx -e "…"` auf dieser Maschine — hängt stumm im Hintergrund.
-  Immer Script-Datei schreiben und ausführen.
-- Byte-Stabilitäts-Beweis nach jedem genmap: Vorher-JSONs kopieren, Diff auf gepinnte Region
-  (x<300 ∧ y<300) == 0, Nicht-Distrikt-Node-Ids unverändert, BFS Tor→Insel begehbar.
-- Owner-Sprache: Deutsch. Visueller Anspruch: jede neue Zone braucht eigene Palette +
-  Ambiente (Memory art-style-mature-pixelart), Signalfarbe je Realm; erntbare Nodes müssen
-  sich vom Dekor abheben.
-- Spend-Limit kann Subagenten killen: Workflows fail-fast bauen, inline-Fallback bereithalten.
-- Dev-Server nur auf Owner-Wunsch starten, danach STOPPEN (explizite Ansage).
+## Session-Learnings (Repo-relevant)
+- NIE mehrzeilige `npx tsx -e` (hängt stumm) — Script-Datei.
+- genmap-Arena-in-gepinnter-Zone geht byte-stabil NUR wenn: (a) Terrain NACH Node+Decor-Loops
+  carven (Ground-Writes ändern pick-Ergebnis, nicht -Anzahl), (b) Footprint-Nodes via keptNodes
+  evakuieren (IDs bleiben), (c) Decor per decorGid NACH den pick-Loops leeren (nie decor=null
+  davor — das verschiebt den pick-Stream). Beweis-Skript: gepinnte Diffs == 0 außerhalb Footprint.
+- Zweite Arena = zweiter dormant Boss-Sprite (nicht ein geteilter, der umzieht) — sonst
+  verschwindet der andere Wächter im MP, während anderswo gekämpft wird. `activeBoss()`-Bundle
+  gewählt per `activeWarden` ist das Muster.

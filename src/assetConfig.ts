@@ -103,6 +103,9 @@ export const OBJECTS: Record<string, ObjectDef> = {
    * 6 airborne, 7 landing
    */
   guardian: { url: '/assets/objects/guardian.png', frameWidth: 96, frameHeight: 96, frame: 0 },
+  // the Mire Warden (ADR-0017 rung 1): same 8-frame 96x96 boss-sheet contract as
+  // the Guardian (0 slumber, 1..2 idle, 3..4 eye open, 5 windup, 6 airborne, 7 land)
+  mire_warden: { url: '/assets/objects/mire-warden.png', frameWidth: 96, frameHeight: 96, frame: 0 },
 };
 
 export const AUDIO: Record<string, string> = {

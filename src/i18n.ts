@@ -559,6 +559,8 @@ const en = {
     realmGateDormant: 'The gate is dormant — what lies beyond still slumbers.',
     realmEntered: (name: string) => `You step through the gate — ${name}.`,
     realmLeft: 'You step back through the gate into the World.',
+    // ADR-0017 rung 1 — the Tide gates the salt-reed banks
+    reedSubmerged: 'The tide has drowned the reeds — wait for the ebb to cut them.',
   },
 
   delve: {
@@ -1112,6 +1114,8 @@ const de: Strings = {
     realmGateDormant: 'Das Tor ruht — was dahinter liegt, schlummert noch.',
     realmEntered: (name) => `Du trittst durch das Tor — ${name}.`,
     realmLeft: 'Du trittst durch das Tor zurück in die Welt.',
+    // ADR-0017 rung 1 — die Gezeit versperrt die Salzried-Bänke
+    reedSubmerged: 'Die Flut hat die Riede ertränkt — warte auf die Ebbe, um sie zu schneiden.',
   },
 
   delve: {

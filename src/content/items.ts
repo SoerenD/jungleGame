@@ -7,6 +7,8 @@ export type ResourceId =
   | 'fruit'
   // the Sunken Mire's raw Resource (ADR-0017 rung 1: salt-reed → tideglass)
   | 'saltreed'
+  // refined from saltreed at a Brine Kiln (ADR-0017 §6) — crafts the Tideglass Boots
+  | 'tideglass'
   | 'map_piece'
   // v2 — Guardian drops and tier-2 Resources
   | 'guardian_scale'
@@ -43,6 +45,9 @@ export type ToolId =
   // v4 — tier-1 Tools, no Guardian drops
   | 'bow'
   | 'hand_torch'
+  // ADR-0017 rung 1 — the Mire Warden's participation weapon drop: a pure-combat
+  // blade that also ignores the Sunken Mire's tide wade-slow (realm-synergy passive)
+  | 'mirefang'
   // Dungeons v1 (ADR-0007) — the first pure-combat Tool: no harvest use
   | 'sword'
   // ADR-0011 — the Deep's reward: a pure-combat molten two-hander (sidegrade)
@@ -73,6 +78,9 @@ export type StructureId =
   | 'table'
   // the Forge: a crafting station where the heavy forged tools/weapons are made
   | 'forge'
+  // ADR-0017 rung 1 — the Sunken Mire's Refiner: tempers salt-reed into tideglass
+  // over real time (the generic refiner kernel, §6). A 2×2 code-art Building.
+  | 'brine_kiln'
   // A3 (ADR-0010) — the Village: the Hall (founding + communal spawn), the four
   // later milestone Buildings, and per-tier decor unlocks. Progress lives in the
   // per-world Village record, not these tiles (re-founding never resets it).
@@ -133,7 +141,8 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   stone: { name: 'Stone', kind: 'resource', desc: 'Broken out of rocks.' },
   fiber: { name: 'Fiber', kind: 'resource', desc: 'Cut from vines — needs a machete.' },
   fruit: { name: 'Fruit', kind: 'resource', desc: 'Picked from fruit bushes.' },
-  saltreed: { name: 'Salt-Reed', kind: 'resource', desc: 'Pale brine-crusted reeds cut from the banks of the Sunken Mire. One day a Brine Kiln will temper them into tideglass.' },
+  saltreed: { name: 'Salt-Reed', kind: 'resource', desc: 'Pale brine-crusted reeds cut from the banks of the Sunken Mire. A Brine Kiln tempers them into tideglass.' },
+  tideglass: { name: 'Tideglass', kind: 'resource', desc: 'Sea-green glass tempered from salt-reed in a Brine Kiln. Fused into boots, it carries the tide’s pull in every stride.' },
   map_piece: { name: 'Torn Map Piece', kind: 'resource', desc: 'A scrap of an old treasure map. Collect 3 and an X appears on your minimap — dig there!' },
   guardian_scale: { name: 'Guardian Scale', kind: 'resource', desc: 'A stone-hard scale shed by the Guardian of the Ruins. Every Player who lands a hit in a victorious fight earns them.' },
   hardwood: { name: 'Ancient Hardwood', kind: 'resource', desc: 'Timber from the oldest trees — only an Ancient Axe can cut it.' },
@@ -159,6 +168,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   fishing_rod: { name: 'Fishing Rod', kind: 'tool', desc: 'Cast at a fishing spot and wait for the bite. Works only while in hand.' },
   bow: { name: 'Bow', kind: 'tool', desc: 'Looses arrows at the Guardian from range in an Eye Window — safe but lower DPS than melee, no ammo. Craftable before the first fight.' },
   hand_torch: { name: 'Hand Torch', kind: 'tool', desc: 'Hold it to light your way with a warm orange glow at night. Distinct from the placed Torch.' },
+  mirefang: { name: 'Mirefang', kind: 'tool', desc: 'A brine-forged blade pried from the fallen Mire Warden — the participation prize for everyone who struck it. A pure-combat weapon that strikes Warden, Husks and Guardian alike; carried, its bearer wades the Sunken Mire’s tide unslowed.' },
   sword: { name: 'Sword', kind: 'tool', desc: 'The Delve’s reward: a pure-combat blade — it grants no gathering bonus and unlocks no Node, but strikes Husks, the Deep Guardian, and the Guardian with the game’s heaviest melee band.' },
   forgebrand: { name: 'Forgebrand', kind: 'tool', desc: 'The Deep’s reward: a pure-combat molten two-hander — no gathering bonus, no Node. It swings slower than the Sword but lands a heavier per-hit band (net damage on par), and strikes Husks, both bosses, and the Guardian alike.' },
   // Fabled set — the rarest reward in the game: a ~1% drop from ANY boss, one tier
@@ -201,6 +211,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   // heavy metal gear (Ancient Axe/Pickaxe, Sword, Forgebrand) — they can no longer
   // be made from the pack alone.
   forge: { name: 'Forge', kind: 'structure', desc: 'A 2×2 furnace-and-anvil workshop. Stand close to forge the heavy metal Tools and weapons — the Ancient Axe, Ancient Pickaxe, Sword and Forgebrand can only be made here.', blocks: true, w: 2, h: 2 },
+  brine_kiln: { name: 'Brine Kiln', kind: 'structure', desc: 'A 2×2 kiln for the Sunken Mire: deposit salt-reed and collect tideglass after its slow, salt-hot work. The tideglass then crafts the Tideglass Boots.', blocks: true, w: 2, h: 2 },
   // A3 (ADR-0010): the Village. The Hall founds the Village wherever it is raised
   // and becomes the communal wake point; the four later Buildings are each a
   // tier's milestone; the rest are per-tier decor. Contributions feed one shared,
@@ -226,7 +237,8 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   stone: { name: 'Stein', desc: 'Aus Felsen herausgebrochen.' },
   fiber: { name: 'Fasern', desc: 'Von Ranken geschnitten — braucht eine Machete.' },
   fruit: { name: 'Frucht', desc: 'Von Obststräuchern gepflückt.' },
-  saltreed: { name: 'Salzried', desc: 'Blasse, salzverkrustete Riede von den Ufern des Versunkenen Moors. Eines Tages wird ein Sole-Ofen sie zu Gezeitenglas härten.' },
+  saltreed: { name: 'Salzried', desc: 'Blasse, salzverkrustete Riede von den Ufern des Versunkenen Moors. Ein Sole-Ofen härtet sie zu Gezeitenglas.' },
+  tideglass: { name: 'Gezeitenglas', desc: 'Seegrünes Glas, im Sole-Ofen aus Salzried gehärtet. Zu Stiefeln verschmolzen trägt es den Sog der Gezeiten in jedem Schritt.' },
   map_piece: { name: 'Zerrissener Kartenfetzen', desc: 'Ein Fetzen einer alten Schatzkarte. Sammle 3 und ein ✕ erscheint auf deiner Minikarte — grabe dort!' },
   guardian_scale: { name: 'Wächterschuppe', desc: 'Eine steinharte Schuppe, abgeworfen vom Wächter der Ruinen. Jeder Spieler, der in einem siegreichen Kampf einen Treffer landet, verdient sie.' },
   hardwood: { name: 'Uraltes Hartholz', desc: 'Holz der ältesten Bäume — nur eine Uralte Axt kann es schlagen.' },
@@ -252,6 +264,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   fishing_rod: { name: 'Angelrute', desc: 'An einer Angelstelle auswerfen und auf den Biss warten. Wirkt nur in der Hand.' },
   bow: { name: 'Bogen', desc: 'Verschießt Pfeile aus der Ferne auf den Wächter in einem Augenfenster — sicher, aber geringere DPS als Nahkampf, keine Munition. Vor dem ersten Kampf herstellbar.' },
   hand_torch: { name: 'Handfackel', desc: 'Halte sie, um deinen Weg nachts mit warmem orangem Schein zu erleuchten. Nicht zu verwechseln mit der platzierten Fackel.' },
+  mirefang: { name: 'Moorzahn', desc: 'Eine soleschmiedete Klinge, dem gefallenen Moorwächter abgerungen — die Beute für alle, die ihn trafen. Eine reine Kampfwaffe, die Wächter, Hüllen und den Wächter der Ruinen gleichermaßen trifft; getragen watet ihr Träger ungebremst durch die Gezeiten des Versunkenen Moors.' },
   sword: { name: 'Schwert', desc: 'Der Lohn des Schachts: eine reine Kampfklinge — sie gibt keinen Ernte-Bonus und schaltet keinen Knotenpunkt frei, trifft aber Hüllen, den Tiefenwächter und den Wächter mit dem schwersten Nahkampfband des Spiels.' },
   forgebrand: { name: 'Schmiedebrand', desc: 'Der Lohn der Tiefe: ein reiner Kampf-Zweihänder aus Magma — kein Ernte-Bonus, kein Knotenpunkt. Er schwingt langsamer als das Schwert, landet aber ein schwereres Schadensband (unterm Strich gleichauf), und trifft Hüllen, beide Bosse und den Wächter.' },
   fabled_sword: { name: 'Sagenhaftes Schwert', desc: 'Eine legendäre Klinge, makellos zwischen den Ruinen — eine seltene Beute, die nur ein gefallener Boss hergibt (~1%). Die schärfste Nahkampfwaffe überhaupt: ein schnelles, kritstarkes Band eine Stufe über dem geschmiedeten Schwert.' },
@@ -284,6 +297,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   sawmill: { name: 'Sägewerk', desc: 'Eine 2×2-Holzmühle: Holz einlegen, Bretter holen, wenn ihre langsame Arbeit getan ist. Das erste echte Gebäude.' },
   table: { name: 'Tisch', desc: 'Ein stabiler Brettertisch fürs Lager.' },
   forge: { name: 'Schmiede', desc: 'Eine 2×2-Werkstatt aus Ofen und Amboss. Stell dich nah heran, um die schweren Metallwerkzeuge und -waffen zu schmieden — Uralte Axt, Uralte Spitzhacke, Schwert und Schmiedebrand lassen sich nur hier fertigen.' },
+  brine_kiln: { name: 'Sole-Ofen', desc: 'Ein 2×2-Ofen für das Versunkene Moor: Salzried einlegen und Gezeitenglas holen, wenn seine langsame, salzheiße Arbeit getan ist. Aus dem Gezeitenglas entstehen die Gezeitenglas-Stiefel.' },
   village_hall: { name: 'Dorfhalle', desc: 'Errichte sie irgendwo, um das Dorf zu gründen und zur Heimat zu machen: Jeder ohne Hängematte erwacht hier. Stell dich nah heran und drücke E, um Ressourcen und Beute in den gemeinsamen Vorrat zu geben. Ein Neugründen setzt das Dorf nie zurück.' },
   village_well: { name: 'Dorfbrunnen', desc: 'Der Weiler-Meilenstein: Errichte ihn in der Dorfzone bei vollem Vorrat, um aus dem Lager einen Weiler zu machen.' },
   market_square: { name: 'Marktplatz', desc: 'Der Dorf-Meilenstein: ein belebter Stand, der einen Weiler zum vollen Dorf erhebt.' },
