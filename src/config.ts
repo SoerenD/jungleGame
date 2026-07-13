@@ -76,6 +76,14 @@ export const BRINE_KILN: RefinerConfig = {
   msPerUnit: FAST_REGROW ? 5_000 : 120_000,
   cap: 10,
 };
+// The Chime Kiln (ADR-0017 rung 2): the Hushdark's Refiner — echo-crystal →
+// hushsteel over real time, on the SAME generic kernel (no new RPC).
+export const CHIME_KILN: RefinerConfig = {
+  inputItem: 'echo_crystal',
+  outputItem: 'hushsteel',
+  msPerUnit: FAST_REGROW ? 5_000 : 120_000,
+  cap: 10,
+};
 
 // ---------------------------------------------------------------- fog of war
 /** exploration is tracked in chunks of this many tiles per side */
@@ -227,6 +235,27 @@ export const WADE_SLOW_FACTOR = 0.6;
  *  dev-scaled so it never swallows a whole shortened test cycle */
 export const TIDE_EXPOSURE_SLACK_MS = DEV_TIDE ? 2_000 : import.meta.env.DEV ? 8_000 : 60_000;
 
+// ---------------------------------------------------------------- the Echoes (ADR-0017 rung 2)
+// The Hushdark's signature mechanic. Unlike the Tide (pure client f(clock)), an
+// echo is a RECORDED, SERVER-PERSISTED, shared movement loop (migration 0015):
+// you walk for ECHO_PERIOD_MS and a shade of you replays that path forever, and
+// vault doors open only when several pedestals are each covered by an overlaid
+// ghost within the same loop window (async co-op — layer the shades of absent
+// friends). Recording starts are QUANTISED server-side to `serverNow mod period`
+// so every loop shares phase and ghosts overlay in sync (handover §Quantisierung).
+// The period is passed to jw_echo_record so it can quantise with the same value.
+// ?echotest shortens the loop and eases the vault so the whole loop is testable
+// solo in seconds; every client on one world shares the period, so quantisation
+// still aligns (the same dev/prod env caveat the Tide carries).
+export const DEV_ECHO = params.has('echotest');
+/** ghost recording/loop length — quantised so shared loops phase-align */
+export const ECHO_PERIOD_MS = DEV_ECHO ? 8_000 : import.meta.env.DEV ? 12_000 : 20_000;
+/** a ghost/player counts as covering a pedestal within this many tiles of it */
+export const ECHO_PEDESTAL_RADIUS = 0.9;
+/** a recording must carry at least this many distinct sampled positions (anti-parking:
+ *  a motionless shade cannot be captured, so it can never trivially hold a pedestal) */
+export const ECHO_MIN_MOVE_TILES = 1.5;
+
 // ---------------------------------------------------------------- v2: the Seal
 // In dev the Seal asks for tiny per-head quotas so the whole arc is testable
 // solo; add ?slowseal to use the real numbers.
@@ -257,8 +286,14 @@ export function sealQuotas(heads: number): Record<'wood' | 'stone' | 'fiber' | '
 // clamped by the same generic jw_contribute_warden loop. Dev-tiny under the
 // FAST_SEAL regime so the whole arc is testable solo.
 export const WARDEN_ALTAR_PER_HEAD: Record<string, Record<string, number>> = FAST_SEAL
-  ? { mire: { hardwood: 2, obsidian: 1, cooked_fish: 1 } }
-  : { mire: { hardwood: 6, obsidian: 4, cooked_fish: 3 } };
+  ? {
+      mire: { hardwood: 2, obsidian: 1, cooked_fish: 1 },
+      echo: { saltreed: 2, tideglass: 1, cooked_fish: 1 },
+    }
+  : {
+      mire: { hardwood: 6, obsidian: 4, cooked_fish: 3 },
+      echo: { saltreed: 6, tideglass: 4, cooked_fish: 3 },
+    };
 
 /** the live altar target of one Warden: per-head × online heads (floored at 1) */
 export function wardenAltarQuotas(wardenId: string, heads: number): Record<string, number> {

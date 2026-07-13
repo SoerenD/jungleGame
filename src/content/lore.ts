@@ -48,6 +48,16 @@ const TABLETS_EN: Record<string, Tablet> = {
     title: 'Tablet of the Tide',
     text: 'When the coast drowned, the sea did not take the reeds — it only hid them, and gives them back twice a turning. The Mire Warden guards the low water; wake it at the megalith on the Mangrove Coast, and its fall unlocks this drowned realm forever. Learn the tide: wade when the water ebbs and cut the salt-reed exposed, temper it in the Brine Kiln, and the tideglass will carry the sea in your stride. The tide keeps no clock but its own — come back for it.',
   },
+  t8: {
+    id: 't8',
+    title: 'Tablet of the Hushdark',
+    text: 'Below the Cavern Mouth the world falls silent, and silence here has a memory. The Echo Warden hoards it; wake it at the maw, and its fall opens the Hushdark forever. In this dark your own steps linger — walk, and a shade of you walks the same path again and again, twenty breaths without end. The old vaults will not answer one traveller: lay the shades of your absent kin upon the pedestals together, and when they all stand as one the stone remembers enough to open. Cut the echo crystal, ring it in the Chime Kiln, and hushsteel will still the din around your brow.',
+  },
+  t9: {
+    id: 't9',
+    title: 'Tablet of the Deep Vault',
+    text: 'Deeper still the Hushdark keeps what the first vault only hinted: that a shade, once laid, outlasts the one who cast it. The old masters did not hoard this place — they left themselves in it, so no traveller after them would walk it alone. Open the deep court, and the stone offers you the same. Leave your shade upon the memorial, named, and walk on: those who come after will find you waiting, and know the way is passable.',
+  },
 };
 
 const TABLETS_DE: Record<string, Tablet> = {
@@ -90,6 +100,16 @@ const TABLETS_DE: Record<string, Tablet> = {
     id: 't7',
     title: 'Steintafel der Gezeiten',
     text: 'Als die Küste ertrank, nahm das Meer die Riede nicht — es verbarg sie nur und gibt sie bei jeder Wende zweimal zurück. Der Moorwächter hütet das niedrige Wasser; weck ihn am Megalithen an der Mangrovenküste, und sein Fall öffnet dieses ertrunkene Reich für immer. Lerne die Gezeit: wate, wenn das Wasser ebbt, und schneide das freiliegende Salzried, härte es im Sole-Ofen, und das Gezeitenglas trägt das Meer in deinem Schritt. Die Gezeit kennt keine Uhr als ihre eigene — komm für sie wieder.',
+  },
+  t8: {
+    id: 't8',
+    title: 'Steintafel des Stilldunkels',
+    text: 'Unter dem Höhlenschlund verstummt die Welt, und die Stille hat hier ein Gedächtnis. Der Echowächter hütet sie; weck ihn am Schlund, und sein Fall öffnet das Stilldunkel für immer. In dieser Dunkelheit verweilen deine eigenen Schritte — geh, und ein Schatten deiner selbst geht denselben Pfad wieder und wieder, zwanzig Atemzüge ohne Ende. Die alten Gewölbe antworten keinem einzelnen Wanderer: lege die Schatten deiner abwesenden Gefährten gemeinsam auf die Podeste, und wenn sie alle wie einer stehen, erinnert sich der Stein genug, um sich zu öffnen. Schneide den Echokristall, läutere ihn im Klang-Ofen, und Stillstahl beruhigt das Getöse um deine Stirn.',
+  },
+  t9: {
+    id: 't9',
+    title: 'Steintafel des Tiefen Gewölbes',
+    text: 'Tiefer noch hütet das Stilldunkel, was das erste Gewölbe nur andeutete: dass ein Schatten, einmal gelegt, den überdauert, der ihn warf. Die alten Meister horteten diesen Ort nicht — sie ließen sich selbst darin zurück, damit kein Wanderer nach ihnen ihn allein ginge. Öffne den tiefen Hof, und der Stein bietet dir dasselbe. Lege deinen Schatten, benannt, auf das Mahnmal und geh weiter: die nach dir kommen, werden dich wartend finden und wissen, dass der Weg begehbar ist.',
   },
 };
 

@@ -36,6 +36,7 @@ import {
 import { footprint, ITEMS, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { NODE_TYPES, toolSatisfies, type NodeTypeId } from '../content/nodeTypes';
 import { RECIPES } from '../content/recipes';
+import { quantizeStart, type EchoSample, type Ghost } from '../content/echoes';
 import {
   emptyVillage,
   villageBuff,
@@ -202,6 +203,14 @@ interface Db {
   sawmills?: Record<string, { wood: number; since: number }>;
   /** per-Refiner queue (generic kernel, ADR-0017 §6): raw input refining since `since` */
   refiners?: Record<string, { input: number; since: number }>;
+  /** the Echoes (ADR-0017 rung 2): persisted movement shades, keyed by ghost id */
+  echoes?: Record<string, { who: string; recordedAt: number; periodMs: number; samples: EchoSample[]; kind?: 'echo' | 'greeting' }>;
+  /** players who have ever felled the Reverberant — gates the one-time epic helm +
+   *  reliquary. Its own dedicated ledger, mirroring reverb_trophies in migration
+   *  0015, so the marquee reward is granted exactly once and never pre-empted. */
+  reverbTrophies?: string[];
+  /** per-(who, week) Reverberant weekly-clear ledger, keyed "who#week" */
+  reverbClears?: Record<string, boolean>;
   chatLog: ChatMsg[];
   world?: {
     gateOpen: boolean;
@@ -1626,6 +1635,107 @@ export class MockBackend implements Backend {
     this.emit('realmOpened', wardenId);
     this.pushChat({ from: t.system.sender, text: t.system.realmOpened(t.warden.realmName(wardenId), this.me ?? ''), ts: Date.now() });
     return { ok: true, wardenId };
+  }
+
+  // ---------------------------------------------------------------- the Echoes (ADR-0017 rung 2)
+
+  /** record a movement shade — spends a Chime Charm, quantised like the server */
+  async recordEcho(ghostId: string, samples: EchoSample[], periodMs: number): Promise<{ ghost: Ghost; inventory: Inventory } | null> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p || !ghostId || samples.length < 2 || samples.length > 400) return null;
+    if ((p.inventory.chime_charm ?? 0) < 1) return null;
+    p.inventory.chime_charm = (p.inventory.chime_charm ?? 0) - 1; // spend the charm (§7 sink)
+    const recordedAt = quantizeStart(Date.now(), periodMs);
+    const echoes = (this.db.echoes ??= {});
+    echoes[ghostId] = { who: this.me ?? '', recordedAt, periodMs, samples };
+    this.saveNow();
+    return { ghost: { ghostId, who: this.me ?? '', recordedAt, periodMs, samples }, inventory: { ...p.inventory } };
+  }
+
+  /** list every shade in this World (RPC-read parity — never presence) */
+  async listEchoes(): Promise<Ghost[]> {
+    await this.lag();
+    return Object.entries(this.db.echoes ?? {}).map(([ghostId, g]) => ({
+      ghostId,
+      who: g.who,
+      recordedAt: g.recordedAt,
+      periodMs: g.periodMs,
+      samples: g.samples,
+      kind: g.kind ?? 'echo',
+    }));
+  }
+
+  /** leave a permanent, named greeting shade (mastery mark; one per Player) */
+  async leaveGreeting(samples: EchoSample[], periodMs: number): Promise<Ghost | null> {
+    await this.lag();
+    if (!this.me || samples.length < 2 || samples.length > 400) return null;
+    const recordedAt = quantizeStart(Date.now(), periodMs);
+    const ghostId = `${this.me}@greet`;
+    const echoes = (this.db.echoes ??= {});
+    echoes[ghostId] = { who: this.me, recordedAt, periodMs, samples, kind: 'greeting' };
+    this.saveNow();
+    return { ghostId, who: this.me, recordedAt, periodMs, samples, kind: 'greeting' };
+  }
+
+  /** clear one shade (no orphaned recordings) */
+  async forgetEcho(ghostId: string): Promise<void> {
+    await this.lag();
+    if (this.db.echoes) delete this.db.echoes[ghostId];
+    this.saveNow();
+  }
+
+  /** summon the Reverberant by solving the puzzle — no altar/totem, keeps the mutex */
+  async summonReverberant(): Promise<SummonResult> {
+    await this.lag();
+    this.reconcileGuardian();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { ok: false, reason: 'NO_TOTEM' };
+    if (this.db.world!.fight) return { ok: false, reason: 'FIGHT_IN_PROGRESS' };
+    const fight: DbFight = {
+      warden: 'reverb',
+      summonedAt: Date.now(),
+      engagedAt: null,
+      roster: [],
+      hp: 0,
+      maxHp: 0,
+      participants: [],
+      knockdowns: {},
+      lastKnockdownWave: {},
+      emptySlumberAt: null,
+    };
+    this.db.world!.fight = fight;
+    this.saveNow();
+    this.scheduleSlumberCheck();
+    this.pushChat({ from: t.system.sender, text: t.system.reverbRises(this.me ?? ''), ts: Date.now() });
+    const pub = this.fightState()!;
+    this.emit('guardianSummoned', pub);
+    return { ok: true, fight: pub, inventory: { ...p.inventory } };
+  }
+
+  /** the Reverberant's defeat reward — epic helm + reliquary (first-ever) + weekly sigil/resources */
+  async claimReverb(week: number): Promise<{ ok: boolean; inventory?: Inventory; firstEver?: boolean; weekly?: boolean }> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p) return { ok: false };
+    const trophies = (this.db.reverbTrophies ??= []);
+    const firstEver = !trophies.includes(this.me ?? '');
+    if (firstEver) {
+      trophies.push(this.me ?? '');
+      p.inventory.hushsteel_helm_epic = (p.inventory.hushsteel_helm_epic ?? 0) + 1;
+      p.inventory.hushdark_reliquary = (p.inventory.hushdark_reliquary ?? 0) + 1;
+    }
+    const clears = (this.db.reverbClears ??= {});
+    const key = `${this.me}#${week}`;
+    const weekly = !clears[key];
+    if (weekly) {
+      clears[key] = true;
+      p.inventory.echo_sigil = (p.inventory.echo_sigil ?? 0) + 1;
+      p.inventory.echo_crystal = (p.inventory.echo_crystal ?? 0) + 8;
+      p.inventory.hushsteel = (p.inventory.hushsteel ?? 0) + 2;
+    }
+    this.saveNow();
+    return { ok: true, inventory: { ...p.inventory }, firstEver, weekly };
   }
 
   // ---------------------------------------------------------------- the Delve (ADR-0007)

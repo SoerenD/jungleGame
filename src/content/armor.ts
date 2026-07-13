@@ -36,8 +36,12 @@ export interface ArmorBuff {
 
 export interface ArmorDef extends ArmorBuff {
   slot: ArmorSlot;
-  /** overlay palette the avatar composer bakes onto the 20-frame sheet */
-  art: { base: string; shade: string; accent: string };
+  /** overlay palette the avatar composer bakes onto the 20-frame sheet. `glow` is
+   *  an optional 4th hue for the epic silhouette's lit accents (e.g. the violet
+   *  horn-tips); the composer falls back to `accent` when it is absent. */
+  art: { base: string; shade: string; accent: string; glow?: string };
+  /** cosmetic: draw the EPIC crested/glowing helm silhouette (same slot + stats) */
+  epic?: boolean;
 }
 
 /**
@@ -58,6 +62,14 @@ export const ARMOR_BUFFS: Partial<Record<ItemId, ArmorDef>> = {
   hushsteel_helm: {
     slot: 'helm', moveSpeed: 0, attackSpeed: 0, bandMin: 2, bandMax: 3,
     art: { base: '#5a6b85', shade: '#39445a', accent: '#93a8c9' },
+  },
+  // the Reverberant's transfiguration: SAME slot + SAME band as the plain helm,
+  // but drawn as the epic "Spread Horns" crown (avatars.ts branches on `epic`) —
+  // a dark blued-steel helm with heavy horns to the frame edges, tips lit violet
+  hushsteel_helm_epic: {
+    slot: 'helm', moveSpeed: 0, attackSpeed: 0, bandMin: 2, bandMax: 3,
+    art: { base: '#454f68', shade: '#2a3245', accent: '#93a8c9', glow: '#c9a0ff' },
+    epic: true,
   },
 };
 

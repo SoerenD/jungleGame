@@ -224,8 +224,8 @@ const en = {
 
   // ADR-0017 — the Warden ladder's display names (ids stay english-internal)
   warden: {
-    name: (id: string) => (({ mire: 'the Mire Warden' }) as Record<string, string>)[id] ?? id,
-    realmName: (id: string) => (({ mire: 'the Sunken Mire' }) as Record<string, string>)[id] ?? id,
+    name: (id: string) => (({ mire: 'the Mire Warden', echo: 'the Echo Warden', reverb: 'the Reverberant' }) as Record<string, string>)[id] ?? id,
+    realmName: (id: string) => (({ mire: 'the Sunken Mire', echo: 'the Hushdark' }) as Record<string, string>)[id] ?? id,
   },
 
   // ADR-0017 — a Warden altar's Offering-bars panel (the Seal panel, per rung)
@@ -561,6 +561,16 @@ const en = {
     realmLeft: 'You step back through the gate into the World.',
     // ADR-0017 rung 1 — the Tide gates the salt-reed banks
     reedSubmerged: 'The tide has drowned the reeds — wait for the ebb to cut them.',
+    // ADR-0017 rung 2 — the Echoes: recorded movement shades open the Hushdark vaults
+    echoArmed: '🔊 Recording your echo — walk your path, and a shade of you will loop it forever.',
+    echoCaptured: 'Your echo is set — it walks this loop forever now.',
+    echoNeedsCharm: 'You need a Chime Charm to arm a recording — ring one from hushsteel.',
+    echoTooStill: 'That echo barely moved — a still shade holds nothing. Walk a real path.',
+    reliquaryEarned: '🏆 An Echo Reliquary is yours — raise it where all can see the Reverberant fell!',
+    reverbEpicHelm: '👑 You take the Reverberant Helm — your Hushsteel Helm, transfigured. Same weight, epic style.',
+    reverbWeekly: 'The Reverberant yields this week: an Echo Sigil, echo crystal and hushsteel.',
+    greetingLeft: 'Your greeting shade will walk the Hushdark forever, for all who come after.',
+    greetingLocked: 'Master the deep vault first — then the memorial will take your mark.',
   },
 
   delve: {
@@ -576,6 +586,14 @@ const en = {
     gateTo: (name: string) => `Realm gate · press E to enter ${name}`,
     dormant: 'A dormant Realm gate',
     return: 'Realm gate · press E to return to the World',
+  },
+
+  // ADR-0017 rung 2 — the Hushdark's Echoes: pedestal + vault floating labels
+  echo: {
+    pedestal: 'Echo pedestal · press E to arm a recording (spends a Chime Charm)',
+    recording: (s: number) => `Recording your echo… ${s}s`,
+    memorial: 'Memorial plinth · press E to leave your greeting shade',
+    memorialLocked: 'Memorial plinth · master the deep vault to leave your mark',
   },
 
   // ADR-0015 — the generated Depths' naming word lists. Names are COMPOSED from
@@ -624,6 +642,7 @@ const en = {
       `🏆 THE GUARDIAN IS BESTED! ${who} carried the day — ${scales} Guardian Scales to every fighter. It sinks back into slumber.`,
     // ADR-0017 — the Warden ladder's narration
     wardenStirs: (name: string, who: string) => `${who} set a Warden Totem upon the altar — ${name} STIRS! Gather at the arena and strike to begin.`,
+    reverbRises: (who: string) => `⚡ the pedestals align — ${who} has solved the court, and THE REVERBERANT rises! Strike to begin.`,
     wardenBested: (name: string, who: string) => `🏆 ${name.toUpperCase()} IS BESTED! ${who} carried the day — the Spoils hold each fighter's due.`,
     wardenAltarComplete: (name: string) => `⚡ the altar's Offering is complete — a Warden Totem will wake ${name}!`,
     wardenNoStrike: (name: string) => `no one struck in time — ${name} loses interest and sinks back into slumber. The totem is spent.`,
@@ -788,8 +807,8 @@ const de: Strings = {
   },
 
   warden: {
-    name: (id) => (({ mire: 'Der Moorwächter' }) as Record<string, string>)[id] ?? id,
-    realmName: (id) => (({ mire: 'das Versunkene Moor' }) as Record<string, string>)[id] ?? id,
+    name: (id) => (({ mire: 'Der Moorwächter', echo: 'Der Echowächter', reverb: 'Der Nachhall' }) as Record<string, string>)[id] ?? id,
+    realmName: (id) => (({ mire: 'das Versunkene Moor', echo: 'das Stilldunkel' }) as Record<string, string>)[id] ?? id,
   },
 
   wardenAltar: {
@@ -1116,6 +1135,16 @@ const de: Strings = {
     realmLeft: 'Du trittst durch das Tor zurück in die Welt.',
     // ADR-0017 rung 1 — die Gezeit versperrt die Salzried-Bänke
     reedSubmerged: 'Die Flut hat die Riede ertränkt — warte auf die Ebbe, um sie zu schneiden.',
+    // ADR-0017 rung 2 — die Echoes: aufgezeichnete Schatten öffnen die Stilldunkel-Gewölbe
+    echoArmed: '🔊 Dein Echo wird aufgezeichnet — geh deinen Pfad, und ein Schatten deiner selbst läuft ihn für immer.',
+    echoCaptured: 'Dein Echo steht — es läuft diese Schleife nun für immer.',
+    echoNeedsCharm: 'Du brauchst ein Klang-Amulett, um eine Aufnahme scharf zu stellen — läutere eins aus Stillstahl.',
+    echoTooStill: 'Dieses Echo hat sich kaum bewegt — ein stiller Schatten hält nichts. Geh einen echten Pfad.',
+    reliquaryEarned: '🏆 Eine Echo-Reliquie ist dein — richte sie auf, wo alle sehen, dass der Nachhall fiel!',
+    reverbEpicHelm: '👑 Du nimmst den Nachhall-Helm — dein Stillstahl-Helm, verklärt. Gleiches Gewicht, epischer Stil.',
+    reverbWeekly: 'Der Nachhall gibt diese Woche her: ein Echo-Sigel, Echokristall und Stillstahl.',
+    greetingLeft: 'Dein Begrüßungs-Schatten wird das Stilldunkel für immer durchwandern, für alle, die nach dir kommen.',
+    greetingLocked: 'Meistere erst das tiefe Gewölbe — dann nimmt das Mahnmal dein Zeichen an.',
   },
 
   delve: {
@@ -1131,6 +1160,14 @@ const de: Strings = {
     gateTo: (name) => `Reichstor · drücke E, um ${name} zu betreten`,
     dormant: 'Ein ruhendes Reichstor',
     return: 'Reichstor · drücke E zur Rückkehr in die Welt',
+  },
+
+  // ADR-0017 rung 2 — die Echoes des Stilldunkels: Podest- und Gewölbe-Beschriftungen
+  echo: {
+    pedestal: 'Echo-Podest · drücke E, um eine Aufnahme scharf zu stellen (kostet ein Klang-Amulett)',
+    recording: (s) => `Dein Echo wird aufgezeichnet… ${s}s`,
+    memorial: 'Mahnmal · drücke E, um deinen Begrüßungs-Schatten zu hinterlassen',
+    memorialLocked: 'Mahnmal · meistere das tiefe Gewölbe, um dein Zeichen zu hinterlassen',
   },
 
   // ADR-0015 — Wortlisten der erzeugten Tiefen. Namen werden pro Tiefenzahl aus
@@ -1175,6 +1212,7 @@ const de: Strings = {
     guardianStirs: (who) => `${who} legte eine Opfergabe auf den Altar — der Wächter REGT SICH! Sammelt euch an der Arena und schlagt zu, um zu beginnen.`,
     delveOpened: (who) => `das Geröll gibt nach — ${who} hat den Schacht geöffnet! Ein kalter Luftzug steigt aus der Tiefe auf.`,
     wardenStirs: (name, who) => `${who} setzte ein Wächter-Totem auf den Altar — ${name} REGT SICH! Sammelt euch an der Arena und schlagt zu, um zu beginnen.`,
+    reverbRises: (who) => `⚡ die Podeste richten sich aus — ${who} hat den Hof gelöst, und DER NACHHALL erhebt sich! Schlagt zu, um zu beginnen.`,
     wardenBested: (name, who) => `🏆 ${name.toUpperCase()} IST BEZWUNGEN! ${who} trug den Sieg davon — die Beute hält jedes Kämpfers Anteil bereit.`,
     wardenAltarComplete: (name) => `⚡ die Opfergabe des Altars ist vollbracht — ein Wächter-Totem weckt ${name}!`,
     wardenNoStrike: (name) => `niemand schlug rechtzeitig zu — ${name} verliert das Interesse und sinkt zurück in den Schlummer. Das Totem ist verbraucht.`,

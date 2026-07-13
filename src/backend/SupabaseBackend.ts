@@ -44,6 +44,7 @@ import {
 import { sanitizeAppearance } from '../avatars';
 import { armorBuff, ARMOR_BUFFS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
 import { kitOf, wardenDef } from '../content/wardens';
+import type { EchoSample, Ghost } from '../content/echoes';
 import { asset } from '../paths';
 import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
 import { t } from '../i18n';
@@ -1149,6 +1150,67 @@ export class SupabaseBackend implements Backend {
     this.relay('realmOpened', wardenId);
     this.pushChat(t.system.sender, t.system.realmOpened(t.warden.realmName(wardenId), this.me ?? ''));
     return { ok: true, wardenId };
+  }
+
+  // ---------------------------------------------------------------- the Echoes (ADR-0017 rung 2)
+
+  /** record a movement shade — spends a Chime Charm; the server quantises the start */
+  async recordEcho(ghostId: string, samples: EchoSample[], periodMs: number): Promise<{ ghost: Ghost; inventory: Inventory } | null> {
+    const res = await this.rpc<any>('jw_echo_record', {
+      p_who: this.me,
+      p_ghost: ghostId,
+      p_period: periodMs,
+      p_samples: samples,
+    });
+    if (!res || res.ok === false) return null;
+    if (res.inventory) this.inv = res.inventory as Inventory;
+    const g = res.ghost;
+    return {
+      ghost: { ghostId: g.ghostId, who: g.who, recordedAt: g.recordedAt, periodMs: g.periodMs, samples: g.samples },
+      inventory: { ...this.inv },
+    };
+  }
+
+  /** list every shade in this World (an RPC read — never presence, the rate-limit gotcha) */
+  async listEchoes(): Promise<Ghost[]> {
+    const res = await this.rpc<any[]>('jw_echo_list', {});
+    if (!res || !Array.isArray(res)) return [];
+    return res.map((g) => ({ ghostId: g.ghostId, who: g.who, recordedAt: g.recordedAt, periodMs: g.periodMs, samples: g.samples, kind: g.kind ?? 'echo' }));
+  }
+
+  /** leave a permanent, named greeting shade (mastery mark; one per Player) */
+  async leaveGreeting(samples: EchoSample[], periodMs: number): Promise<Ghost | null> {
+    const res = await this.rpc<any>('jw_echo_greet', { p_who: this.me, p_period: periodMs, p_samples: samples });
+    if (!res || res.ok === false) return null;
+    const g = res.ghost;
+    return { ghostId: g.ghostId, who: g.who, recordedAt: g.recordedAt, periodMs: g.periodMs, samples: g.samples, kind: 'greeting' };
+  }
+
+  /** clear one of your own shades */
+  async forgetEcho(ghostId: string): Promise<void> {
+    await this.rpc('jw_echo_forget', { p_who: this.me, p_ghost: ghostId });
+  }
+
+  /** summon the Reverberant by solving the puzzle — no altar/totem, keeps the mutex */
+  async summonReverberant(): Promise<SummonResult> {
+    const res = await this.rpc<any>('jw_summon_reverb', {
+      p_who: this.me,
+      p_awake_ms: GUARDIAN_AWAKE_MS,
+      p_dormant_ms: DORMANT_TIMEOUT_MS,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'FIGHT_IN_PROGRESS' };
+    const fight = this.fightPublic(res.fight)!;
+    this.pushChat(t.system.sender, t.system.reverbRises(this.me ?? ''));
+    this.relay('guardianSummoned', fight);
+    return { ok: true, fight, inventory: { ...this.inv } };
+  }
+
+  /** the Reverberant's defeat reward — server-guarded (idempotent) epic helm + weekly sigil */
+  async claimReverb(week: number): Promise<{ ok: boolean; inventory?: Inventory; firstEver?: boolean; weekly?: boolean }> {
+    const res = await this.rpc<any>('jw_reverb_claim', { p_who: this.me, p_week: week });
+    if (!res || res.ok === false) return { ok: false };
+    if (res.inventory) this.inv = res.inventory as Inventory;
+    return { ok: true, inventory: { ...this.inv }, firstEver: !!res.firstEver, weekly: !!res.weekly };
   }
 
   // ---------------------------------------------------------------- the Delve (ADR-0007)

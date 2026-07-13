@@ -3,7 +3,7 @@ import { getLang } from '../i18n';
 import type { Inventory } from '../backend/types';
 import type { ResourceId, ToolId } from './items';
 
-export type NodeTypeId = 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed';
+export type NodeTypeId = 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed' | 'echo_crystal_seam';
 
 export interface NodeType {
   id: NodeTypeId;
@@ -124,6 +124,18 @@ const BASE_NODE_TYPES: Record<NodeTypeId, NodeType> = {
     regrowMs: regrow(150_000),
     blocks: false,
   },
+  // the Hushdark's own Node (ADR-0017 rung 2): a cold crystal seam mined from the
+  // cavern floor — the Realm's basic Resource, free bare-handed, a pickaxe (or its
+  // ancient upgrade) halves the work. A Chime Kiln rings the crystal into hushsteel.
+  echo_crystal_seam: {
+    id: 'echo_crystal_seam',
+    name: 'Echo-Crystal Seam',
+    maxHp: 3,
+    yield: { echo_crystal: 2 },
+    bonusTool: 'pickaxe',
+    regrowMs: regrow(150_000),
+    blocks: false,
+  },
 };
 
 /** German display names for the Resource Nodes (all other fields stay shared) */
@@ -136,6 +148,7 @@ const NODE_NAMES_DE: Record<NodeTypeId, string> = {
   obsidian_rock: 'Obsidianfels',
   fishing_spot: 'Angelstelle',
   salt_reed_bed: 'Salzried-Bett',
+  echo_crystal_seam: 'Echokristall-Ader',
 };
 
 export const NODE_TYPES: Record<NodeTypeId, NodeType> =

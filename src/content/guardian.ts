@@ -442,6 +442,64 @@ export function makeMireWaveTiles(w: number, h: number, seed: number): WardenKit
   };
 }
 
+/**
+ * The Echo Warden's slam families (ADR-0017 rung 2): the Hushdark's own geometry —
+ * an expanding concentric SOUND-RING that steps outward each wave, trailed by a
+ * delayed ECHO-REPEAT of the wavefront one beat behind it (a second ring lagging
+ * inward), with a resonance spoke punishing pure ring-camping on the loudest wave.
+ * Deliberately distinct from the Mire's bands/columns/comb and the Guardian's
+ * ring/cross/stripe/scatter, while reusing the telegraph → slam → Eye-Window
+ * rhythm. Each wave leaves a standable annulus (and the center) to dodge into.
+ * Pure f(index) — the echo is recomputed from the wavefront radius, no state.
+ */
+export function makeEchoWaveTiles(w: number, h: number, seed: number): WardenKit['waveTiles'] {
+  return (index: number, density: number): boolean[] => {
+    const grid = new Array<boolean>(w * h).fill(false);
+    const rng = mulberry32(seed ^ (index * 2654435761));
+    const set = (x: number, y: number) => {
+      if (x >= 0 && y >= 0 && x < w && y < h) grid[y * w + x] = true;
+    };
+    const cx = w / 2 - 0.5;
+    const cy = h / 2 - 0.5;
+    const maxR = Math.min(w, h) / 2 - 0.5;
+    // the wavefront radius steps outward each wave, wrapping every 3 (the pulse)
+    const ringOf = (i: number) => 1.8 + (((i % 3) + 3) % 3) * ((maxR - 1.8) / 2);
+    const ring = (r: number) => {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (Math.abs(Math.hypot(x - cx, y - cy) - r) <= 0.9) set(x, y);
+        }
+      }
+    };
+    const rNow = ringOf(index);
+    ring(rNow);
+    // the delayed echo-repeat: the wavefront that already passed, trailing 2.6
+    // tiles inside the current ring — leaves a standable gap between the two
+    const rEcho = rNow - 2.6;
+    if (rEcho >= 0.8) ring(rEcho);
+    // the loudest wave adds one resonance spoke through the center (ring-camping punish)
+    if (((index % 3) + 3) % 3 === 2) {
+      const vertical = Math.floor(rng() * 2) === 0;
+      const span = Math.max(w, h);
+      for (let t = 0; t < span; t++) {
+        if (vertical) set(Math.round(cx), t);
+        else set(t, Math.round(cy));
+      }
+    }
+    // fury densification: extra 2x2 resonance bursts on top of the base rings
+    const extra = Math.round((density - 1) * 5);
+    for (let b = 0; b < extra; b++) {
+      const x = Math.floor(rng() * (w - 1));
+      const y = Math.floor(rng() * (h - 1));
+      set(x, y);
+      set(x + 1, y);
+      set(x, y + 1);
+      set(x + 1, y + 1);
+    }
+    return grid;
+  };
+}
+
 /** danger tiles of the kit's slam wave `index`, in arena-local coordinates */
 export function waveTiles(index: number, density = 1, kit: WardenKit = GUARDIAN_KIT): boolean[] {
   return kit.waveTiles(index, density);

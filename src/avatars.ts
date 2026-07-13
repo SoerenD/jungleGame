@@ -150,6 +150,7 @@ export function drawBlockheadSheet(a: Appearance, equipped?: EquippedArmor): HTM
   const boots = equipped?.boots ? ARMOR_BUFFS[equipped.boots]?.art : undefined;
   const chest = equipped?.chest ? ARMOR_BUFFS[equipped.chest]?.art : undefined;
   const helm = equipped?.helm ? ARMOR_BUFFS[equipped.helm]?.art : undefined;
+  const helmEpic = !!(equipped?.helm && ARMOR_BUFFS[equipped.helm]?.epic); // the Reverberant crown
   const canvas = document.createElement('canvas');
   canvas.width = AVATAR_W * 5;
   canvas.height = AVATAR_H * 4;
@@ -322,6 +323,31 @@ export function drawBlockheadSheet(a: Appearance, equipped?: EquippedArmor): HTM
             px(2, hy + 4, 2, 3, helm.base);
             px(2, hy + 7, 2, 4, helm.shade);
           }
+        }
+      }
+      if (helm && helmEpic) {
+        // the Reverberant crown — W2 "Spread Horns": heavy blued-steel horns sweep
+        // out past the temples to the frame edges at head height, tips hooking up and
+        // lit violet. Wide by design (edge to edge) so it FRAMES the head instead of
+        // stacking on top. `glow` is the violet horn-light (falls back to accent).
+        const eglow = helm.glow ?? helm.accent;
+        if (d === 'up') {
+          // the back of the horned helm: horns to both edges, the crown ridge lit
+          px(7, hy, 2, 2, eglow); // glowing crown ridge (over the bowl)
+          px(1, hy + 1, 1, 2, helm.base); px(0, hy + 1, 1, 2, helm.base); // left horn out
+          px(0, hy - 1, 1, 2, helm.base); px(0, hy - 2, 1, 1, eglow); // …tip hooks up, lit
+          px(14, hy + 1, 1, 2, helm.base); px(15, hy + 1, 1, 2, helm.base); // right horn out
+          px(15, hy - 1, 1, 2, helm.base); px(15, hy - 2, 1, 1, eglow);
+        } else {
+          px(7, hy - 1, 2, 1, eglow); // violet brow glint between the horns
+          // left horn: temple root → straight out to the frame edge → tip hooks up
+          px(2, hy + 1, 1, 2, helm.shade); // root shadow at the temple
+          px(1, hy + 1, 1, 2, helm.base); px(0, hy + 1, 1, 2, helm.base); // horizontal span
+          px(0, hy - 1, 1, 2, helm.base); px(0, hy - 2, 1, 1, eglow); // upturned lit tip
+          // right horn (mirror)
+          px(13, hy + 1, 1, 2, helm.shade);
+          px(14, hy + 1, 1, 2, helm.base); px(15, hy + 1, 1, 2, helm.base);
+          px(15, hy - 1, 1, 2, helm.base); px(15, hy - 2, 1, 1, eglow);
         }
       }
       ctx.restore();

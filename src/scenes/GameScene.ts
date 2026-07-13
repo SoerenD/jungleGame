@@ -3,6 +3,15 @@ import { OBJECTS, TILESET } from '../assetConfig';
 import { AVATAR_H, AVATAR_IDLE, AVATAR_SWING, AVATAR_W, ensureAvatarTexture } from '../avatars';
 import { armorBuff, armorDef, sanitizeEquipped, type EquippedArmor } from '../content/armor';
 import { kitOf, wardenDef, wardenForRealm, WARDENS } from '../content/wardens';
+import {
+  ghostPoseAt,
+  ghostTravelTiles,
+  poseOnPedestal,
+  vaultWeek,
+  type EchoSample,
+  type Ghost,
+  type Pose,
+} from '../content/echoes';
 import type {
   Backend,
   ChatMsg,
@@ -61,9 +70,14 @@ import {
   SWING_CADENCE_MS,
   TEST_REFINER,
   BRINE_KILN,
+  CHIME_KILN,
   TIDE_PERIOD_MS,
   WADE_SLOW_FACTOR,
   TIDE_EXPOSURE_SLACK_MS,
+  ECHO_PERIOD_MS,
+  ECHO_PEDESTAL_RADIUS,
+  ECHO_MIN_MOVE_TILES,
+  DEV_ECHO,
   TILE,
   ZOOM,
   CREATURE_DENSITY,
@@ -133,6 +147,8 @@ import {
   FOUNTAIN_WISH_THRESHOLD,
   FORGE_ART,
   KILN_ART,
+  CHIME_KILN_ART,
+  RELIQUARY_ART,
   inventoryCapacity,
   inVillageZone,
   villageBuff,
@@ -189,6 +205,19 @@ interface WorldData {
    * fields; every further Warden's court lives here with the same anatomy.
    */
   wardenArenas?: Record<string, WardenArena>;
+  /** the Hushdark's pedestal-vaults (ADR-0017 rung 2) — omitted outside that Realm */
+  hushdarkVaults?: HushdarkVault[];
+  /** the memorial plinth where a master leaves a permanent named greeting shade */
+  hushdarkMemorial?: { tx: number; ty: number } | null;
+}
+
+/** one Hushdark vault: pedestals to cover with overlaid shades + a claim door */
+interface HushdarkVault {
+  id: string;
+  pedestals: { tx: number; ty: number }[];
+  door: { tx: number; ty: number };
+  /** the DEEP vault — sealed until the first (shallow) vault is opened that week */
+  deep?: boolean;
 }
 
 /** one Warden's authored court in the World: the Guardian-arena anatomy, per rung */
@@ -387,6 +416,10 @@ const KIT_ART: Record<string, KitArt> = {
   guardian: { spriteKey: 'guardian', idle: 'guardian-idle', eye: 'guardian-eye', glowBase: 0xb478ff, fury: [0xb478ff, 0xff9a3d, 0xff4433], danger: 0xff3322, slam: 0xff2211, lunge: 0xffa02f, ring: 0xff5a2f, eyeTint: 0xffb437, ward: 0xffb9a0 },
   // the Mire Warden's rising-water court: teal telegraphs, a tideglass eye + Ward
   mire: { spriteKey: 'mire_warden', idle: 'mire-idle', eye: 'mire-eye', glowBase: 0x2f8f74, fury: [0x2f8f74, 0x39c39a, 0x63e0b8], danger: 0x1f9e7a, slam: 0x14c79a, lunge: 0x63e0b8, ring: 0x2fd6a6, eyeTint: 0x9ffbe4, ward: 0xa0ffe8 },
+  // the Echo Warden's sound-ring court: cold blue-steel telegraphs, a hushsteel eye + Ward
+  echo: { spriteKey: 'echo_warden', idle: 'echo-idle', eye: 'echo-eye', glowBase: 0x5a6b85, fury: [0x5a6b85, 0x7d8fb0, 0x93a8c9], danger: 0x4a6a9a, slam: 0x6f8fd0, lunge: 0x93a8c9, ring: 0x8fb0e0, eyeTint: 0xbcd0ee, ward: 0xb1c6ea },
+  // the Reverberant (the puzzle-summoned deeper foe): the echo sheet, violet echo-light
+  reverb: { spriteKey: 'echo_warden', idle: 'echo-idle', eye: 'echo-eye', glowBase: 0x9a7bd0, fury: [0x9a7bd0, 0xb6a0e8, 0xdcccff], danger: 0x7a5ad0, slam: 0x9f7fe0, lunge: 0xc9b0ff, ring: 0xb090f0, eyeTint: 0xecdcff, ward: 0xc9b8ff },
 };
 
 /** deterministic per-id variance so the forest looks grown, not stamped */
@@ -449,6 +482,7 @@ const CHIP_TINTS: Record<NodeTypeId, number[]> = {
   obsidian_rock: [0x2e2838, 0x554a6a, 0x8f84b8],
   fishing_spot: [0x66b8e0, 0x9ad4ee, 0x3f86b8],
   salt_reed_bed: [0xb3a76e, 0x8f855a, 0xd8dcd2],
+  echo_crystal_seam: [0x93a8c9, 0x5a6b85, 0xd6e4f5],
 };
 /** damage pips: 2px cells above a damaged node — shown only while it was hit
  *  recently, then faded out (the mob HP bar's idea, smaller and quieter) */
@@ -628,6 +662,57 @@ export class GameScene extends Phaser.Scene {
   private mireMonumentPos = { x: 0, y: 0 };
   private mireBroken = false;
   private nearMireAltar = false;
+  // ---- ADR-0017 rung 2: the Echo Warden's parallel arena in The Cavern Mouth
+  // (same second-dormant-sprite pattern as the Mire, MP-correct).
+  private echoSprite?: Phaser.GameObjects.Sprite;
+  private echoShadow?: Phaser.GameObjects.Image;
+  private echoGlow?: Phaser.GameObjects.Image;
+  private echoEyeGlow?: Phaser.GameObjects.Image;
+  private echoBlockers: Phaser.GameObjects.Rectangle[] = [];
+  private echoHomeSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private echoEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private echoArenaRect: { x: number; y: number; w: number; h: number } | null = null;
+  private echoSealGate: { tx: number; ty: number }[] = [];
+  private echoAltarPos = { x: 0, y: 0 };
+  private echoMonumentPos = { x: 0, y: 0 };
+  private echoBroken = false;
+  private nearEchoAltar = false;
+  // ---- ADR-0017 rung 2: the Reverberant — a puzzle-SUMMONED boss (NOT dormant-
+  // visible). Its sprite is pre-built hidden and revealed on summon; it rises in
+  // the pedestal court (wardenArenas.reverb) when the 3-pedestal puzzle is solved.
+  private reverbSprite?: Phaser.GameObjects.Sprite;
+  private reverbShadow?: Phaser.GameObjects.Image;
+  private reverbGlow?: Phaser.GameObjects.Image;
+  private reverbEyeGlow?: Phaser.GameObjects.Image;
+  private reverbBlockers: Phaser.GameObjects.Rectangle[] = [];
+  private reverbHomeSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private reverbEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private reverbArenaRect: { x: number; y: number; w: number; h: number } | null = null;
+  private reverbSealGate: { tx: number; ty: number }[] = [];
+  private reverbBroken = false;
+  /** the post-victory delayed hide (so the death-throes play): held so a fresh
+   *  summon within the delay can CANCEL it — else the stale timer would hide the
+   *  newly-risen boss mid-fight (invisible, walk-through) */
+  private reverbHideTimer?: Phaser.Time.TimerEvent;
+  /** guards the summon-on-solve from firing every frame while covered */
+  private reverbSummonBusy = false;
+  /** true once this Player has defeated the Reverberant this session (gates the memorial) */
+  private reverbDefeated = false;
+  // ---- ADR-0017 rung 2: the Echoes mechanic state (only active inside the Hushdark)
+  /** the in-progress 20s recording (null when not recording); `greeting` = the
+   *  permanent memorial mark rather than an ordinary vault-solving shade */
+  private echoRecording: { ghostId: string; startedAt: number; lastSampleAt: number; samples: EchoSample[]; greeting?: boolean } | null = null;
+  /** which ghost slot the next recording overwrites (a Player keeps ECHO_SLOTS shades) */
+  private echoNextSlot = 0;
+  /** the World's shades, refreshed from the backend (RPC read, never presence) */
+  private echoGhosts: Ghost[] = [];
+  private echoLastListAt = 0;
+  /** per-ghost render sprites (greetings also carry a nameplate), reaped on district exit */
+  private echoGhostViews = new Map<string, { sprite: Phaser.GameObjects.Sprite; shadow: Phaser.GameObjects.Image; label?: Phaser.GameObjects.Text }>();
+  /** the pedestal + vault-door markers (rebuilt lazily for the active district) */
+  private hushVaultGfx: Phaser.GameObjects.Graphics | null = null;
+  /** vault ids the client currently derives as SOLVED (all pedestals covered) */
+  private hushVaultOpen = new Set<string>();
   /** which Warden the active fight's VISUALS belong to (null = the Guardian, rung 0) */
   private activeWarden: string | null = null;
   // ---- Dungeons v1: the Delve (ADR-0007) — an ephemeral, host-simmed instance
@@ -733,6 +818,9 @@ export class GameScene extends Phaser.Scene {
   private mireAmbience = 0;
   /** ADR-0017 rung 1: the Tide's rising-water sheen — alpha tracks tideHeight */
   private tideVeil!: Phaser.GameObjects.Rectangle;
+  /** ADR-0017 rung 2: the Hushdark's cold, muffled dark — a blue-black veil, 0..1 blend */
+  private hushVeil!: Phaser.GameObjects.Rectangle;
+  private hushAmbience = 0;
   private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leavesActive = false;
@@ -1007,6 +1095,105 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    // ---- ADR-0017 rung 2: the Echo Warden's court in The Cavern Mouth — a THIRD
+    // authored arena, its own dormant sprite/altar/monument (MP-correct), fought
+    // through activeBoss() by fight.warden. Byte-for-byte the Mire block, echo* fields.
+    const we = this.world.wardenArenas?.echo;
+    if (we) {
+      this.echoArenaRect = we.arena;
+      this.echoSealGate = we.sealGate;
+      {
+        const a = we.altar;
+        const x = (a.tx + 1) * TILE;
+        const y = (a.ty + 1) * TILE;
+        this.objImage(x, y, 'guardian_altar');
+        this.addBlockerBody(a.tx, a.ty);
+        this.addBlockerBody(a.tx + 1, a.ty);
+        this.addShadow(x, y - 1, 24);
+        this.echoAltarPos = { x, y };
+      }
+      {
+        const m = we.monument;
+        const x = (m.tx + 1) * TILE;
+        const y = (m.ty + 1) * TILE;
+        this.objImage(x, y, 'seal_monument');
+        this.addBlockerBody(m.tx, m.ty);
+        this.addBlockerBody(m.tx + 1, m.ty);
+        this.addShadow(x, y - 1, 22);
+        this.echoMonumentPos = { x, y };
+      }
+      {
+        const g = we.home;
+        const arena = we.arena;
+        const art = KIT_ART.echo;
+        const x = (g.tx + 1.5) * TILE;
+        const y = (g.ty + 3) * TILE;
+        this.echoHomeSpot = { ax: g.tx + 1 - arena.x, ay: g.ty + 1 - arena.y };
+        const gate = we.sealGate;
+        const mid = gate[Math.floor(gate.length / 2)] ?? { tx: arena.x + Math.floor(arena.w / 2), ty: arena.y + arena.h - 1 };
+        this.echoEntranceSpot = {
+          ax: Math.max(0, Math.min(arena.w - 1, mid.tx - arena.x)),
+          ay: Math.max(0, Math.min(arena.h - 1, mid.ty - arena.y)),
+        };
+        this.echoSprite = this.add.sprite(x, y, art.spriteKey, 0);
+        this.echoSprite.setOrigin(0.5, 1);
+        this.echoSprite.setDepth(y);
+        this.echoShadow = this.addShadow(x, y - 2, 60);
+        for (let dy = 0; dy < 3; dy++) {
+          for (let dx = 0; dx < 3; dx++) this.echoBlockers.push(this.addBlockerBody(g.tx + dx, g.ty + dy));
+        }
+        this.echoGlow = this.add
+          .image(x, y - 45, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(art.glowBase)
+          .setScale(2.6)
+          .setAlpha(0)
+          .setDepth(890_001);
+        this.glows.push({ img: this.echoGlow, base: 0.5, x, y });
+        this.echoEyeGlow = this.add
+          .image(x, y - 61, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(art.eyeTint)
+          .setScale(1.5)
+          .setAlpha(0)
+          .setDepth(890_002);
+      }
+    }
+
+    // ---- ADR-0017 rung 2: the Reverberant — pre-built HIDDEN (no altar/monument;
+    // summoned by the puzzle). The sprite/glow/blockers exist so activeBoss('reverb')
+    // routes correctly, but stay invisible + disabled until it RISES on summon
+    // (startFight) and are hidden again on defeat (endFight). NOT in `this.glows`
+    // (no dormant ambient pulse — the fight drives its glow).
+    const wr = this.world.wardenArenas?.reverb;
+    if (wr) {
+      this.reverbArenaRect = wr.arena;
+      this.reverbSealGate = wr.sealGate;
+      const g = wr.home;
+      const arena = wr.arena;
+      const art = KIT_ART.reverb;
+      const x = (g.tx + 1.5) * TILE;
+      const y = (g.ty + 3) * TILE;
+      this.reverbHomeSpot = { ax: g.tx + 1 - arena.x, ay: g.ty + 1 - arena.y };
+      const gate = wr.sealGate;
+      const mid = gate[Math.floor(gate.length / 2)] ?? { tx: arena.x + Math.floor(arena.w / 2), ty: arena.y + arena.h - 1 };
+      this.reverbEntranceSpot = {
+        ax: Math.max(0, Math.min(arena.w - 1, mid.tx - arena.x)),
+        ay: Math.max(0, Math.min(arena.h - 1, mid.ty - arena.y)),
+      };
+      this.reverbSprite = this.add.sprite(x, y, art.spriteKey, 0).setOrigin(0.5, 1).setDepth(y).setTint(0xc9b0ff).setScale(1.15).setVisible(false);
+      this.reverbShadow = this.addShadow(x, y - 2, 66).setVisible(false);
+      for (let dy = 0; dy < 3; dy++) {
+        for (let dx = 0; dx < 3; dx++) {
+          const b = this.addBlockerBody(g.tx + dx, g.ty + dy);
+          (b.body as Phaser.Physics.Arcade.StaticBody).enable = false;
+          this.reverbBlockers.push(b);
+        }
+      }
+      this.reverbGlow = this.add.image(x, y - 45, 'glow').setBlendMode(Phaser.BlendModes.ADD).setTint(art.glowBase).setScale(2.8).setAlpha(0).setDepth(890_001).setVisible(false);
+      this.reverbEyeGlow = this.add.image(x, y - 61, 'glow').setBlendMode(Phaser.BlendModes.ADD).setTint(art.eyeTint).setScale(1.6).setAlpha(0).setDepth(890_002).setVisible(false);
+    }
+
     // player — the Avatar texture is composed from this Player's palette picks
     // (+ the worn Armor overlays, restored from the join and re-baked on equip)
     this.equipped = sanitizeEquipped(this.me.equipped, this.me.inventory);
@@ -1192,6 +1379,9 @@ export class GameScene extends Phaser.Scene {
     // the Tide's rising-water sheen: a teal wash over the district that swells and
     // ebbs with the clock (ADR-0017 rung 1). Sits just over the stagnant veil.
     this.tideVeil = this.add.rectangle(0, 0, 10, 10, 0x2f8f74).setAlpha(0).setDepth(899_986);
+    // the Hushdark's cold, muffled dark (ADR-0017 rung 2): a deep blue-black veil
+    // over the district, faded in on gate crossing exactly like the Mire's veil.
+    this.hushVeil = this.add.rectangle(0, 0, 10, 10, 0x0a1020).setAlpha(0).setDepth(899_985);
     for (let i = 0; i < 7; i++) {
       this.mirePuffs.push(
         this.add
@@ -1400,9 +1590,16 @@ export class GameScene extends Phaser.Scene {
       // (the grant is deferred to the take — see openLoot/claimLoot). Non-fighters
       // in the arena still get the death-throes spectacle, but no loot bag.
       if (participants.includes(this.me.name)) {
-        const def = wardenDef(wardenId);
-        if (def) this.openLoot({ ...def.drops, ...this.rollFabledDrops() }, t.loot.fromWarden(t.warden.name(def.id)));
-        else this.openLoot({ guardian_scale: GUARDIAN_SCALE_DROP, ...this.rollFabledDrops() }, t.loot.fromGuardian);
+        // ADR-0017 rung 2: the Reverberant's reward flows through a SERVER-GUARDED
+        // claim (epic helm + reliquary once-ever, Echo Sigil + resources weekly) —
+        // not the free Spoils window, so it can't be farmed by re-summoning.
+        if (wardenId === 'reverb') {
+          void this.claimReverbReward();
+        } else {
+          const def = wardenDef(wardenId);
+          if (def) this.openLoot({ ...def.drops, ...this.rollFabledDrops() }, t.loot.fromWarden(t.warden.name(def.id)));
+          else this.openLoot({ guardian_scale: GUARDIAN_SCALE_DROP, ...this.rollFabledDrops() }, t.loot.fromGuardian);
+        }
       }
     });
     this.backend.on('guardianSlumber', () => this.endFight('slumber'));
@@ -1442,7 +1639,7 @@ export class GameScene extends Phaser.Scene {
 
   /** bake a sprite for every Village Building + Wildlife decor from its art spec — no PNGs */
   private bakeVillageTextures(): void {
-    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART, ...KILN_ART })) {
+    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART, ...KILN_ART, ...CHIME_KILN_ART, ...RELIQUARY_ART })) {
       if (!art) continue;
       const key = `st_${id}`;
       if (this.textures.exists(key)) continue;
@@ -1660,6 +1857,34 @@ export class GameScene extends Phaser.Scene {
         art: KIT_ART.mire,
       };
     }
+    if (this.activeWarden === 'echo' && this.echoSprite && this.echoArenaRect) {
+      return {
+        sprite: this.echoSprite,
+        shadow: this.echoShadow!,
+        glow: this.echoGlow!,
+        eyeGlow: this.echoEyeGlow!,
+        blockers: this.echoBlockers,
+        arena: this.echoArenaRect,
+        homeSpot: this.echoHomeSpot,
+        entranceSpot: this.echoEntranceSpot,
+        sealGate: this.echoSealGate,
+        art: KIT_ART.echo,
+      };
+    }
+    if (this.activeWarden === 'reverb' && this.reverbSprite && this.reverbArenaRect) {
+      return {
+        sprite: this.reverbSprite,
+        shadow: this.reverbShadow!,
+        glow: this.reverbGlow!,
+        eyeGlow: this.reverbEyeGlow!,
+        blockers: this.reverbBlockers,
+        arena: this.reverbArenaRect,
+        homeSpot: this.reverbHomeSpot,
+        entranceSpot: this.reverbEntranceSpot,
+        sealGate: this.reverbSealGate,
+        art: KIT_ART.reverb,
+      };
+    }
     return {
       sprite: this.guardianSprite,
       shadow: this.guardianShadow,
@@ -1677,12 +1902,36 @@ export class GameScene extends Phaser.Scene {
   /** mark the active fight's boss slain/whole (its own wreck flag) */
   private setBossBroken(v: boolean): void {
     if (this.activeWarden === 'mire') this.mireBroken = v;
+    else if (this.activeWarden === 'echo') this.echoBroken = v;
+    else if (this.activeWarden === 'reverb') this.reverbBroken = v;
     else this.guardianBroken = v;
+  }
+
+  /** the Reverberant is summon-only: show/hide its pre-built sprite + blockers */
+  private setReverbVisible(v: boolean): void {
+    if (!this.reverbSprite) return;
+    this.reverbSprite.setVisible(v);
+    this.reverbShadow?.setVisible(v);
+    this.reverbGlow?.setVisible(v);
+    this.reverbEyeGlow?.setVisible(v);
+    for (const b of this.reverbBlockers) (b.body as Phaser.Physics.Arcade.StaticBody).enable = v;
+    if (v) {
+      // rises from the court floor — a quick scale/alpha pop
+      this.reverbSprite.setAlpha(0).setScale(0.8);
+      this.tweens.add({ targets: this.reverbSprite, alpha: 1, scaleX: 1.15, scaleY: 1.15, duration: 520, ease: 'Back.Out' });
+    }
   }
 
   private startFight(fight: FightState, fresh: boolean): void {
     this.exhaustedThisFight = false;
     this.activeWarden = fight.warden ?? null; // pick the boss BEFORE restore/place
+    if (fight.warden === 'reverb') {
+      // a re-summon may race a prior kill's post-victory hide — cancel it so the
+      // newly-risen boss is never hidden/un-collided out from under an active fight
+      this.reverbHideTimer?.remove();
+      this.reverbHideTimer = undefined;
+      this.setReverbVisible(true); // the Reverberant rises
+    }
     this.restoreGuardianWhole(); // a summon rekindles the runes: rebuild any slain wreck
     if (fight.engagedAt === null) {
       this.fight = fight;
@@ -1846,6 +2095,22 @@ export class GameScene extends Phaser.Scene {
       b.sprite.setFrame(0);
       this.sfx('roar', 0.35);
       bus.emit('toast', wardenName ? t.toast.wardenUnbeaten(wardenName) : t.toast.guardianUnbeaten, 'bad');
+    }
+    // the Reverberant is summon-only: it leaves NO lingering wreck in the walkable
+    // puzzle court — hide it (after the death-throes on victory, at once on slumber)
+    if (this.activeWarden === 'reverb') {
+      this.reverbHideTimer?.remove(); // never stack two pending hides
+      const hide = () => {
+        this.reverbHideTimer = undefined;
+        this.setReverbVisible(false);
+        this.reverbBroken = false;
+      };
+      if (kind === 'victory') this.reverbHideTimer = this.time.delayedCall(1400, hide);
+      else hide();
+      // re-arm the summon latch so a fresh solve raises it again (the one-fight
+      // mutex still gates re-summon; without this the ?echotest ever-covers path
+      // would stay 'solved' forever and the latch could never re-arm)
+      this.reverbSummonBusy = false;
     }
     this.activeWarden = null; // the fight's visuals are resolved — back to dormant selection
   }
@@ -2240,6 +2505,15 @@ export class GameScene extends Phaser.Scene {
     return this.wardenAltarAction('mire');
   }
 
+  /** E at the Echo Warden's altar in The Cavern Mouth (ADR-0017 rung 2) — same
+   *  generic arc as the Mire's, keyed 'echo'. */
+  private echoAltarAction(): EAction | null {
+    if (!this.world.wardenArenas?.echo) return null;
+    const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.echoAltarPos.x, this.echoAltarPos.y - 8);
+    if (d > INTERACT_RANGE + 8) return null;
+    return this.wardenAltarAction('echo');
+  }
+
   private summonAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.guardianAltarPos.x, this.guardianAltarPos.y - 8);
     if (d > INTERACT_RANGE + 8) return null;
@@ -2278,7 +2552,7 @@ export class GameScene extends Phaser.Scene {
     const def = WARDENS[id];
     // float text pops at THIS Warden's altar (the Mire's real altar, not the
     // Guardian's) — ?wardenfight is gone, every Warden has its own altar position
-    const altarPos = id === 'mire' ? this.mireAltarPos : this.guardianAltarPos;
+    const altarPos = id === 'mire' ? this.mireAltarPos : id === 'echo' ? this.echoAltarPos : this.guardianAltarPos;
     if (this.fight) {
       return { swing: false, run: () => bus.emit('toast', t.toast.fightAlreadyRaging, 'info') };
     }
@@ -3790,7 +4064,7 @@ export class GameScene extends Phaser.Scene {
         };
       }
     }
-    const special = this.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.guardianAction();
+    const special = this.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.echoAltarAction() ?? this.guardianAction();
     if (special) return special;
     if (Phaser.Math.Distance.Between(px, py, this.altarPos.x, this.altarPos.y - 8) < INTERACT_RANGE + 8) {
       return {
@@ -3877,6 +4151,12 @@ export class GameScene extends Phaser.Scene {
     // the salt-reed → tideglass config (the kernel is untouched; data + art only)
     const kiln = this.nearbyStructure(['brine_kiln']);
     if (kiln) return { swing: false, run: () => this.openRefiner(kiln.id, BRINE_KILN, ITEMS.brine_kiln.name) };
+    // ADR-0017 rung 2: the Chime Kiln — the same generic Refiner, echo crystal → hushsteel
+    const chime = this.nearbyStructure(['chime_kiln']);
+    if (chime) return { swing: false, run: () => this.openRefiner(chime.id, CHIME_KILN, ITEMS.chime_kiln.name) };
+    // ADR-0017 rung 2: the Echoes — arm a recording at a pedestal / claim an open vault
+    const echoE = this.echoAction();
+    if (echoE) return echoE;
 
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
@@ -4845,6 +5125,14 @@ export class GameScene extends Phaser.Scene {
       this.nearMireAltar = nearWarden;
       bus.emit('warden-altar-near', nearWarden ? 'mire' : null);
     }
+    // ADR-0017 rung 2: the Echo Warden's altar Offering-bars panel in The Cavern Mouth
+    const nearEcho =
+      !!this.world.wardenArenas?.echo &&
+      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.echoAltarPos.x, this.echoAltarPos.y) < TILE * 6;
+    if (nearEcho !== this.nearEchoAltar) {
+      this.nearEchoAltar = nearEcho;
+      bus.emit('warden-altar-near', nearEcho ? 'echo' : null);
+    }
     // the Village Hall shows the tier/pool panel on approach (ADR-0010)
     const hall = this.village.hall;
     const nearHall =
@@ -5701,6 +5989,267 @@ export class GameScene extends Phaser.Scene {
     return out;
   }
 
+  // ============================================================ the Echoes (ADR-0017 rung 2)
+  // Recorded, server-persisted movement shades + pedestal-vaults, all as pure
+  // f(loop-phase) client-side (content/echoes.ts). Runs only inside the Hushdark.
+
+  /** the Hushdark frame: refresh shades, advance a recording, render shades, vaults */
+  private updateEchoes(time: number, _delta: number): void {
+    const inHush = this.activeDistrict?.id === 'the_hushdark';
+    const now = Date.now();
+    // refresh the shade list + the vault-claim weeks (RPC reads; throttled; NEVER
+    // presence — rate-limit gotcha). The vault weeks gate the deep vault + claims.
+    if (inHush && time - this.echoLastListAt > 3000) {
+      this.echoLastListAt = time;
+      void this.backend.listEchoes().then((gs) => {
+        this.echoGhosts = gs;
+      });
+    }
+    // advance an in-progress recording (sample the Player, close at the period)
+    if (this.echoRecording) {
+      if (!inHush) {
+        this.echoRecording = null; // left mid-recording — abandon (no charm spent yet)
+      } else {
+        const rec = this.echoRecording;
+        const elapsed = now - rec.startedAt;
+        if (now - rec.lastSampleAt >= 110 && rec.samples.length < 400) {
+          rec.lastSampleAt = now;
+          rec.samples.push({ t: Math.min(elapsed, ECHO_PERIOD_MS), x: this.player.x / TILE, y: this.player.y / TILE, dir: this.lastDir });
+        }
+        if (elapsed >= ECHO_PERIOD_MS) this.finishEchoRecording();
+      }
+    }
+    if (!inHush) {
+      this.reapEchoViews();
+      if (this.hushVaultGfx) this.hushVaultGfx.setVisible(false);
+      return;
+    }
+    this.renderGhosts(now);
+    this.updateVaults(now);
+  }
+
+  /** E at a Hushdark pedestal arms a 20s recording; a chime_charm is required */
+  private armEchoRecording(): void {
+    if (this.echoRecording) return;
+    if ((this.inventory.chime_charm ?? 0) < 1) {
+      bus.emit('toast', t.toast.echoNeedsCharm, 'bad');
+      return;
+    }
+    const ghostId = `${this.me.name}#${this.echoNextSlot}`;
+    this.echoNextSlot = (this.echoNextSlot + 1) % 3; // a Player keeps up to 3 shades
+    this.echoRecording = { ghostId, startedAt: Date.now(), lastSampleAt: 0, samples: [] };
+    bus.emit('toast', t.toast.echoArmed, 'info');
+  }
+
+  /** E at the memorial: record the PERMANENT greeting shade (no charm — the reward) */
+  private armGreetingRecording(): void {
+    if (this.echoRecording) return;
+    this.echoRecording = { ghostId: `${this.me.name}@greet`, startedAt: Date.now(), lastSampleAt: 0, samples: [], greeting: true };
+    bus.emit('toast', t.toast.echoArmed, 'info');
+  }
+
+  /** close a recording: reject a motionless shade (anti-parking), else persist it —
+   *  an ordinary shade via recordEcho (spends a charm), a greeting via leaveGreeting */
+  private finishEchoRecording(): void {
+    const rec = this.echoRecording;
+    this.echoRecording = null;
+    if (!rec) return;
+    if (ghostTravelTiles(rec.samples) < ECHO_MIN_MOVE_TILES) {
+      bus.emit('toast', t.toast.echoTooStill, 'bad'); // no charm spent (nothing sent)
+      return;
+    }
+    if (rec.greeting) {
+      void this.backend.leaveGreeting(rec.samples, ECHO_PERIOD_MS).then((ghost) => {
+        if (!ghost) return;
+        this.echoGhosts = [ghost, ...this.echoGhosts.filter((g) => g.ghostId !== ghost.ghostId)];
+        bus.emit('toast', t.toast.greetingLeft, 'good');
+      });
+      return;
+    }
+    void this.backend.recordEcho(rec.ghostId, rec.samples, ECHO_PERIOD_MS).then((res) => {
+      if (!res) {
+        bus.emit('toast', t.toast.echoNeedsCharm, 'bad');
+        return;
+      }
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+      this.echoGhosts = [res.ghost, ...this.echoGhosts.filter((g) => g.ghostId !== res.ghost.ghostId)];
+      bus.emit('toast', t.toast.echoCaptured, 'good');
+    });
+  }
+
+  /** position a translucent shade per listed ghost; reap views for vanished shades.
+   *  Ordinary shades are cold blue; a greeting shade is warm gold + a floating name. */
+  private renderGhosts(now: number): void {
+    const live = new Set<string>();
+    for (const g of this.echoGhosts) {
+      const pose = ghostPoseAt(now, g, g.periodMs);
+      if (!pose) continue;
+      live.add(g.ghostId);
+      const x = pose.x * TILE;
+      const y = pose.y * TILE;
+      const greeting = g.kind === 'greeting';
+      const frame = AVATAR_IDLE[(pose.dir ?? 'down') as Dir];
+      let view = this.echoGhostViews.get(g.ghostId);
+      if (!view) {
+        const texKey = this.textures.exists(`avatar-${g.who}`) ? `avatar-${g.who}` : `avatar-${this.me.name}`;
+        const sprite = this.add
+          .sprite(x, y, texKey, frame)
+          .setOrigin(0.5, 1)
+          .setAlpha(greeting ? 0.55 : 0.42)
+          .setTint(greeting ? 0xffd98a : 0x9fc4ff);
+        const shadow = this.addShadow(x, y - 1, 12).setAlpha(0.22);
+        view = { sprite, shadow };
+        if (greeting) {
+          view.label = this.add
+            .text(x, y - AVATAR_H - 4, g.who, { fontFamily: 'monospace', fontSize: '9px', color: '#ffe6a8' })
+            .setOrigin(0.5, 1)
+            .setDepth(y + 1);
+        }
+        this.echoGhostViews.set(g.ghostId, view);
+      }
+      view.sprite.setPosition(x, y).setDepth(y).setFrame(frame);
+      view.shadow.setPosition(x, y - 1);
+      view.label?.setPosition(x, y - AVATAR_H - 4).setDepth(y + 1);
+    }
+    for (const [id, view] of this.echoGhostViews) {
+      if (!live.has(id)) {
+        view.sprite.destroy();
+        view.shadow.destroy();
+        view.label?.destroy();
+        this.echoGhostViews.delete(id);
+      }
+    }
+  }
+
+  /** does any point of a shade's loop cross the pedestal? (dev vault-open aid only) */
+  private ghostEverCovers(g: Ghost, ped: { tx: number; ty: number }): boolean {
+    const steps = 24;
+    for (let i = 0; i < steps; i++) {
+      const pose = ghostPoseAt(g.recordedAt + (i / steps) * g.periodMs, g, g.periodMs);
+      if (poseOnPedestal(pose, { tx: ped.tx + 0.5, ty: ped.ty + 0.5 }, ECHO_PEDESTAL_RADIUS)) return true;
+    }
+    return false;
+  }
+
+  private ensureVaultGfx(): Phaser.GameObjects.Graphics {
+    if (!this.hushVaultGfx) this.hushVaultGfx = this.add.graphics().setDepth(3);
+    return this.hushVaultGfx;
+  }
+
+  /** derive the puzzle from live-player + shade coverage; when all three pedestals
+   *  are covered AT ONCE (and no fight runs), SUMMON the Reverberant — the puzzle
+   *  is a boss key, not a loot lever. Draws the pedestals + the court seal. */
+  private updateVaults(now: number): void {
+    const vaults = this.world.hushdarkVaults ?? [];
+    const gfx = this.ensureVaultGfx();
+    gfx.clear().setVisible(true);
+    const coverers: (Pose | null)[] = [{ x: this.player.x / TILE, y: this.player.y / TILE }];
+    for (const r of this.remotes.values()) coverers.push({ x: r.sprite.x / TILE, y: r.sprite.y / TILE });
+    for (const g of this.echoGhosts) coverers.push(ghostPoseAt(now, g, g.periodMs));
+    let anySolved = false;
+    for (const v of vaults) {
+      const centre = (p: { tx: number; ty: number }) => ({ tx: p.tx + 0.5, ty: p.ty + 0.5 });
+      const coveredNow = (p: { tx: number; ty: number }) => coverers.some((c) => poseOnPedestal(c, centre(p), ECHO_PEDESTAL_RADIUS));
+      let solved = v.pedestals.every(coveredNow);
+      // ?echotest aid: a pedestal also counts if a shade's loop EVER crosses it, so
+      // the async-coop plumbing is solo-testable without perfect phase alignment
+      if (!solved && DEV_ECHO) {
+        solved = v.pedestals.every((ped) => coveredNow(ped) || this.echoGhosts.some((g) => this.ghostEverCovers(g, ped)));
+      }
+      if (solved) anySolved = true;
+      for (const ped of v.pedestals) this.drawPlinth(gfx, ped.tx, ped.ty, coveredNow(ped) ? 0x63ffb0 : 0x93a8c9);
+      this.drawVaultDoor(gfx, v.door.tx, v.door.ty, solved); // the court seal — bright when solved
+      if (solved) this.hushVaultOpen.add(v.id);
+      else this.hushVaultOpen.delete(v.id);
+      // fire the summon exactly once per coverage event (re-armed when coverage drops)
+      if (solved && !this.fight && !this.reverbSummonBusy) {
+        this.reverbSummonBusy = true;
+        void this.summonReverberant();
+      }
+    }
+    if (!anySolved && !this.fight) this.reverbSummonBusy = false; // re-arm for the next solve
+    // the memorial plinth — warm once you've defeated the Reverberant, cold when locked
+    const mem = this.world.hushdarkMemorial;
+    if (mem) this.drawPlinth(gfx, mem.tx, mem.ty, this.reverbDefeated ? 0xffd98a : 0x6b6478);
+  }
+
+  private drawPlinth(gfx: Phaser.GameObjects.Graphics, tx: number, ty: number, color: number): void {
+    const x = (tx + 0.5) * TILE;
+    const y = (ty + 0.5) * TILE;
+    gfx.fillStyle(color, 0.18).fillCircle(x, y, TILE * 0.5);
+    gfx.lineStyle(2, color, 0.85).strokeCircle(x, y, TILE * 0.5);
+  }
+
+  private drawVaultDoor(gfx: Phaser.GameObjects.Graphics, tx: number, ty: number, solved: boolean): void {
+    const x = (tx + 0.5) * TILE;
+    const y = (ty + 0.5) * TILE;
+    const c = solved ? 0xc9b0ff : 0x3a4560; // violet when solved (the Reverberant's colour)
+    gfx.fillStyle(c, solved ? 0.34 : 0.5).fillRect(x - TILE * 0.6, y - TILE * 0.6, TILE * 1.2, TILE * 1.2);
+    gfx.lineStyle(2, solved ? 0xe6dcff : 0x93a8c9, 0.9).strokeRect(x - TILE * 0.6, y - TILE * 0.6, TILE * 1.2, TILE * 1.2);
+  }
+
+  /** solving the 3-pedestal puzzle summons the Reverberant (no altar/totem) */
+  private async summonReverberant(): Promise<void> {
+    const res = await this.backend.summonReverberant().catch(() => ({ ok: false as const }));
+    // on ok, the guardianSummoned event drives startFight (the boss rises); the busy
+    // latch stays until coverage drops, and the one-fight mutex blocks any re-summon.
+    if (!res.ok) this.reverbSummonBusy = false; // a refused summon may retry
+  }
+
+  /** the Reverberant's defeat reward (server-guarded, idempotent): the epic helm +
+   *  Reliquary on the first-ever clear, an Echo Sigil + resources once per week */
+  private async claimReverbReward(): Promise<void> {
+    this.reverbDefeated = true; // unlocks the memorial greeting
+    const res = await this.backend.claimReverb(vaultWeek(Date.now())).catch(() => ({ ok: false as const }));
+    if (!res.ok) return;
+    if ('inventory' in res && res.inventory) {
+      this.inventory = res.inventory;
+      bus.emit('inventory', this.inventory);
+    }
+    if ('weekly' in res && res.weekly) bus.emit('toast', t.toast.reverbWeekly, 'good');
+    if ('firstEver' in res && res.firstEver) {
+      bus.emit('toast', t.toast.reverbEpicHelm, 'good');
+      bus.emit('toast', t.toast.reliquaryEarned, 'good');
+    }
+  }
+
+  /** E in the Hushdark: arm a recording at a pedestal, or (once you've defeated the
+   *  Reverberant) leave a permanent greeting at the memorial. The puzzle itself is
+   *  solved by COVERAGE (shades on the 3 pedestals), which summons the boss — no
+   *  door to press. */
+  private echoAction(): EAction | null {
+    if (this.activeDistrict?.id !== 'the_hushdark' || this.fight) return null;
+    const px = this.player.x / TILE;
+    const py = this.player.y / TILE;
+    const near = (p: { tx: number; ty: number }) => Math.hypot(px - (p.tx + 0.5), py - (p.ty + 0.5)) <= 1.4;
+    // the memorial plinth: leave a permanent greeting once you've bested the Reverberant
+    const mem = this.world.hushdarkMemorial;
+    if (mem && near(mem)) {
+      if (!this.reverbDefeated) return { swing: false, run: () => bus.emit('toast', t.toast.greetingLocked, 'info') };
+      return { swing: false, run: () => this.armGreetingRecording() };
+    }
+    // a pedestal: arm a recording (the shade that solves the puzzle)
+    if (!this.echoRecording) {
+      for (const v of this.world.hushdarkVaults ?? []) {
+        for (const ped of v.pedestals) {
+          if (near(ped)) return { swing: false, run: () => this.armEchoRecording() };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** destroy every shade sprite (district exit / scene shutdown) */
+  private reapEchoViews(): void {
+    for (const view of this.echoGhostViews.values()) {
+      view.sprite.destroy();
+      view.shadow.destroy();
+      view.label?.destroy();
+    }
+    this.echoGhostViews.clear();
+  }
+
   /** the whole Delve frame: dark ambiance, movement, host sim, render, combat, netcode */
   private updateDelve(time: number, delta: number): void {
     const dt = delta / 1000;
@@ -5710,6 +6259,7 @@ export class GameScene extends Phaser.Scene {
     this.duskOverlay.setAlpha(0);
     this.mireVeil.setAlpha(0);
     this.tideVeil.setAlpha(0);
+    this.hushVeil.setAlpha(0);
     for (const p of this.mirePuffs) p.setAlpha(0);
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
@@ -6732,6 +7282,16 @@ export class GameScene extends Phaser.Scene {
       this.tideVeil.setAlpha(0);
       for (const p of this.mirePuffs) p.setAlpha(0);
     }
+    // ADR-0017 rung 2: the Hushdark's cold muffled dark — fades in over ~a second
+    // on gate crossing, deepest where the night overlay hasn't already blacked it out
+    const hushTarget = this.activeDistrict?.id === 'the_hushdark' ? 1 : 0;
+    this.hushAmbience += (hushTarget - this.hushAmbience) * Math.min(1, delta / 450);
+    this.hushVeil
+      .setPosition(cam.midPoint.x, cam.midPoint.y)
+      .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
+      .setAlpha(this.hushAmbience * 0.34 * (1 - Math.pow(night, 1.6) * 0.6));
+    // the Echoes mechanic runs only inside the Hushdark (recording + shade replay + vaults)
+    if (hushTarget || this.hushAmbience > 0.01) this.updateEchoes(time, delta);
     // v4: light follows only a held Hand Torch (warm orange, dim like a flame)
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
@@ -6819,6 +7379,10 @@ export class GameScene extends Phaser.Scene {
           this.cameras.main.shake(600, 0.008);
           bus.emit('toast', phase.index === 1 ? t.fight.furyRestless : t.fight.furyFury, 'bad');
         }
+        // the Reverberant is kept OUT of the dormant glow pool (no idle pulse
+        // before it is summoned), so nothing lights its body glow — drive it HERE
+        // for the fight so its smoulder + fury-colour tint read like the others
+        if (this.activeWarden === 'reverb') bv.glow.setAlpha(0.5 + 0.12 * Math.sin(time / 90));
         const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS, kit);
         if (wave.index !== this.renderedWave) {
           this.renderedWave = wave.index;

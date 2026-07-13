@@ -2,6 +2,7 @@ import type { ItemId, StructureId, ToolId } from '../content/items';
 import type { NodeTypeId } from '../content/nodeTypes';
 import type { VillageRecord } from '../content/village';
 import type { EquippedArmor } from '../content/armor';
+import type { EchoSample, Ghost } from '../content/echoes';
 
 /** legacy tint-preset id — only survives in pre-update Player rows for migration */
 export type AvatarId = 0 | 1 | 2 | 3;
@@ -638,6 +639,37 @@ export interface Backend {
    * The client has already checked the key is carried.
    */
   openRealmGate(wardenId: string): Promise<OpenRealmResult>;
+  /**
+   * the Echoes (ADR-0017 rung 2): record a shade of your movement — a captured
+   * path that loops forever, PERSISTED and SHARED so absent friends' shades can be
+   * layered on a vault's pedestals (async co-op). Spends one Chime Charm (§7 sink).
+   * The server quantises the start to `serverNow mod periodMs` so loop phases align;
+   * the client passes the period. Returns the stored shade + the charged inventory,
+   * or null if rejected (no charm, too short).
+   */
+  recordEcho(ghostId: string, samples: EchoSample[], periodMs: number): Promise<{ ghost: Ghost; inventory: Inventory } | null>;
+  /** list every shade in this World (an RPC read — never presence, the rate-limit gotcha) */
+  listEchoes(): Promise<Ghost[]>;
+  /** clear one of your own shades (no orphaned recordings; frees a pedestal) */
+  forgetEcho(ghostId: string): Promise<void>;
+  /**
+   * leave a PERMANENT, named greeting shade (ADR-0017 rung 2 — the mastery mark):
+   * one per Player ("<who>@greet"), never cycled out, that everyone finds walking
+   * the Hushdark. The client gates it behind opening the deep vault.
+   */
+  leaveGreeting(samples: EchoSample[], periodMs: number): Promise<Ghost | null>;
+  /**
+   * summon the Reverberant (ADR-0017 rung 2) by SOLVING the pedestal puzzle — no
+   * altar, no totem; the one-fight mutex still applies. The fight rides the same
+   * world.fight slot + guardian* events, kit-keyed on warden 'reverb'.
+   */
+  summonReverberant(): Promise<SummonResult>;
+  /**
+   * claim the Reverberant's participation reward on its defeat (server-guarded,
+   * idempotent): the epic Reverberant Helm + Echo Reliquary on the Player's
+   * FIRST-ever clear, and an Echo Sigil + resources once per `week` thereafter.
+   */
+  claimReverb(week: number): Promise<{ ok: boolean; inventory?: Inventory; firstEver?: boolean; weekly?: boolean }>;
   /**
    * clear the rubble sealing the Delve mine shaft — a one-time, server-ordered
    * world flag (like the vine gate). The client has already checked an Ancient

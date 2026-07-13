@@ -90,6 +90,13 @@ const pick = <T>(arr: T[]): T => arr[Math.floor(rng() * arr.length)];
 const rng2 = mulberry32(1017);
 const rand2 = (min: number, max: number) => min + rng2() * (max - min);
 const pick2 = <T>(arr: T[]): T => arr[Math.floor(rng2() * arr.length)];
+// the Hushdark (ADR-0017 rung 2) draws from its OWN third stream so it perturbs
+// NEITHER the pinned map (rng) NOR the already-shipped Sunken Mire district (rng2):
+// the appended-space tile-variant loop shares rng2, so a new district must add no
+// rng2 draws AND no decor there (each of its tiles still draws exactly one pick2,
+// same count as the void cliff it replaces), keeping the Mire district byte-stable.
+const rng3 = mulberry32(2027);
+const rand3 = (min: number, max: number) => min + rng3() * (max - min);
 
 // ---------------------------------------------------------------- grid
 type Ground =
@@ -351,6 +358,7 @@ const zones = [
   // can ever match one — zoneAt for the old World is unchanged, first-hit order
   // preserved. Deliberately NOT dangerous: predators never spawn in a Realm.
   { name: 'The Sunken Mire', x: 100, y: 300, w: 108, h: 72, dangerous: false }, // rung 1 Realm (T2 stub; T5 fills it in)
+  { name: 'The Hushdark', x: 16, y: 300, w: 80, h: 72, dangerous: false }, // rung 2 Realm (ADR-0017; T6)
 ];
 
 function zoneAt(x: number, y: number): string {
@@ -363,7 +371,7 @@ function zoneAt(x: number, y: number): string {
 // ---------------------------------------------------------------- resource nodes + foliage
 interface NodeOut {
   id: string;
-  type: 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed';
+  type: 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed' | 'echo_crystal_seam';
   tx: number;
   ty: number;
 }
@@ -387,6 +395,21 @@ const inMireArenaOuter = (x: number, y: number) =>
   x >= MIRE_ARENA.x - 1 && x <= MIRE_ARENA.x + MIRE_ARENA.w && y >= MIRE_ARENA.y - 1 && y <= MIRE_ARENA.y + MIRE_ARENA.h;
 const isMireMonument = (x: number, y: number) =>
   (x === MIRE_MONUMENT.tx || x === MIRE_MONUMENT.tx + 1) && y === MIRE_MONUMENT.ty;
+
+// ---- ADR-0017 rung 2: the Echo Warden's arena in The Cavern Mouth. Same anatomy
+// and same LATE, RNG-FREE carve discipline as the Mire arena, sited in the clear
+// NW quadrant of the Cavern Mouth — well away from the Delve shaft (56,260), its
+// approach column (x≈56–60) and the obsidian veins (x≥38 / y≥252). A stone-floored
+// court walled in cliff, its cold blue-steel look supplied scene-side by KIT_ART.
+const ECHO_ARENA = { x: 20, y: 224, w: ARENA_W, h: ARENA_H };
+const ECHO_HOME = { tx: ECHO_ARENA.x + Math.floor(ARENA_W / 2) - 1, ty: ECHO_ARENA.y + 1 }; // 3x3, top-center
+const ECHO_SEAL_GATE = [ECHO_ARENA.x + 7, ECHO_ARENA.x + 8, ECHO_ARENA.x + 9].map((tx) => ({ tx, ty: ECHO_ARENA.y + ECHO_ARENA.h })); // south Ward gap
+const ECHO_ALTAR = { tx: ECHO_ARENA.x + 7, ty: ECHO_ARENA.y + 10 }; // inside near the gate
+const ECHO_MONUMENT = { tx: ECHO_ARENA.x + 7, ty: ECHO_ARENA.y + ECHO_ARENA.h + 2 }; // 2 tiles, outside the gate
+const inEchoArenaOuter = (x: number, y: number) =>
+  x >= ECHO_ARENA.x - 1 && x <= ECHO_ARENA.x + ECHO_ARENA.w && y >= ECHO_ARENA.y - 1 && y <= ECHO_ARENA.y + ECHO_ARENA.h;
+const isEchoMonument = (x: number, y: number) =>
+  (x === ECHO_MONUMENT.tx || x === ECHO_MONUMENT.tx + 1) && y === ECHO_MONUMENT.ty;
 
 const nodes: NodeOut[] = [];
 const foliage: { kind: string; tx: number; ty: number }[] = [];
@@ -460,8 +483,15 @@ function tryPlaceNode(type: NodeOut['type'], x: number, y: number): void {
   if (occupied.has(key)) return;
   const g = ground[y][x];
   // mire_peat/mire_mud only exist in district space, so accepting them cannot
-  // change any pinned-map placement outcome
-  if (g !== 'grass' && g !== 'swamp' && g !== 'mire_peat' && g !== 'mire_mud' && !((type === 'rock' || type === 'obsidian_rock') && g === 'stone_floor')) return;
+  // change any pinned-map placement outcome; echo_crystal_seam is placed ONLY in
+  // the Hushdark district (never during pinned gen), so accepting it on stone_floor
+  // cannot change any pinned placement either
+  if (
+    g !== 'grass' && g !== 'swamp' && g !== 'mire_peat' && g !== 'mire_mud' &&
+    !((type === 'rock' || type === 'obsidian_rock') && g === 'stone_floor') &&
+    !(type === 'echo_crystal_seam' && g === 'stone_floor')
+  )
+    return;
   if (Math.abs(x - SPAWN.tx) <= 2 && Math.abs(y - SPAWN.ty) <= 2) return;
   if ((type === 'tree' || type === 'hardwood_tree') && nearWater(x, y)) return;
   occupied.add(key);
@@ -827,6 +857,20 @@ interface DistrictOut {
 }
 const districts: DistrictOut[] = [];
 
+// the Hushdark's pedestal-vaults (ADR-0017 rung 2): each vault opens only while
+// every one of its pedestal tiles is covered at once by an overlaid echo/player
+// (async co-op); `door` is where the opened cache is claimed. GameScene + backend
+// derive open/claim from these — the tiles are walkable plinths, never blockers.
+const hushdarkVaults: { id: string; pedestals: { tx: number; ty: number }[]; door: { tx: number; ty: number } }[] = [];
+// the memorial plinth: where a Player who has defeated the Reverberant leaves a
+// permanent, named greeting shade for others (ADR-0017 rung 2, the async-coop mark)
+let hushdarkMemorial: { tx: number; ty: number } | null = null;
+// the Reverberant's arena (ADR-0017 rung 2): the 3-pedestal puzzle court IS the
+// boss court — a full ARENA_W×ARENA_H so the wave grid lines up. No cliff walls /
+// no Ward (open court); the boss rises here when the puzzle is solved.
+const REVERB_ARENA = { x: 32, y: 334, w: ARENA_W, h: ARENA_H }; // contains all 3 pedestals
+const REVERB_HOME = { tx: REVERB_ARENA.x + Math.floor(ARENA_W / 2) - 1, ty: REVERB_ARENA.y + 1 };
+
 // void filler: every appended tile starts as unwalkable cliff — cheap to
 // render, impossible to walk, and the moat that seals district space off from
 // the World's open south/east edges. District interiors are carved out below.
@@ -1004,6 +1048,84 @@ function findGateSpot(cx: number, cy: number, maxR = 10): { tx: number; ty: numb
   });
 }
 
+// ---- rung 2: The Hushdark, south of The Cavern Mouth. A cold stone cavern of
+// grey floor ringed in cliff, with near-black ink pools and a cluster of ritual
+// pedestals around a sealed vault. Built ONLY from existing tiles and its OWN
+// third RNG stream (rng3) with NO decor, so neither the pinned map nor the
+// already-shipped Sunken Mire district shifts by a byte. The Hushdark's identity
+// is carried scene-side by a cold, muffled ambience veil + its Zone name.
+{
+  const rect = { x: 16, y: 300, w: 80, h: 72 }; // keep in sync with its Zone rect above
+  // interior: a grey cavern floor with a 1-tile cliff ring (the void supplies it)
+  fillRect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2, 'stone_floor');
+
+  // near-black ink pools scattered through the cavern (rng3 stream, no decor)
+  fillCircle(34, 356, 6, 'mire_water', ['stone_floor']);
+  fillCircle(74, 348, 7, 'mire_water', ['stone_floor']);
+  fillCircle(60, 362, 5, 'mire_water', ['stone_floor']);
+  for (let i = 0; i < 14; i++) {
+    fillCircle(rand3(rect.x + 6, rect.x + rect.w - 6), rand3(rect.y + 12, rect.y + rect.h - 6), rand3(1.1, 2.6), 'mire_water', ['stone_floor']);
+  }
+  // stalagmite clumps — small cliff outcrops that break the floor's line of sight
+  for (let i = 0; i < 10; i++) {
+    fillCircle(rand3(rect.x + 5, rect.x + rect.w - 5), rand3(rect.y + 8, rect.y + rect.h - 5), rand3(0.8, 1.6), 'cliff', ['stone_floor']);
+  }
+
+  // the gate landing — a dry paved threshold near the Cavern Mouth's south edge
+  const dGate = { tx: 56, ty: 303 };
+  fillRect(dGate.tx - 3, dGate.ty - 1, 7, 5, 'stone_floor');
+  fillRect(dGate.tx - 2, dGate.ty, 5, 3, 'sand');
+
+  // the pedestal court (ADR-0017 rung 2): three ritual pedestals spaced too far
+  // for one shade to hold together. Solving the puzzle (a shade on each of the
+  // three at once) SUMMONS the Reverberant, which rises HERE — so the court is
+  // sized to the boss arena (REVERB_ARENA, ARENA_W×ARENA_H, open, no cliff walls).
+  const door = { tx: 40, ty: 340 };
+  const pedestals = [
+    { tx: 34, ty: 337 },
+    { tx: 46, ty: 337 },
+    { tx: 40, ty: 346 },
+  ];
+  fillRect(REVERB_ARENA.x, REVERB_ARENA.y, REVERB_ARENA.w, REVERB_ARENA.h, 'stone_floor'); // clear the court of pools
+  for (const ped of pedestals) {
+    ground[ped.ty][ped.tx] = 'sand'; // a pale plinth
+    occupied.add(`${ped.tx},${ped.ty}`); // no crystal node ever spawns on a plinth
+  }
+  ground[door.ty][door.tx] = 'sand';
+  occupied.add(`${door.tx},${door.ty}`);
+  hushdarkVaults.push({ id: 'hush_vault_1', pedestals, door });
+
+  // the memorial plinth: a lone pillar just south of the court where a Player who
+  // has defeated the Reverberant leaves their permanent, named greeting shade
+  hushdarkMemorial = { tx: 40, ty: 350 };
+  fillRect(hushdarkMemorial.tx - 2, hushdarkMemorial.ty - 4, 5, 6, 'stone_floor'); // bridge court→memorial, keep reachable
+  ground[hushdarkMemorial.ty][hushdarkMemorial.tx] = 'sand';
+  occupied.add(`${hushdarkMemorial.tx},${hushdarkMemorial.ty}`);
+  foliage.push({ kind: 'ruin_pillar', tx: hushdarkMemorial.tx, ty: hushdarkMemorial.ty - 1 });
+  occupied.add(`${hushdarkMemorial.tx},${hushdarkMemorial.ty - 1}`);
+
+  // the Hushdark's OWN Resource: echo-crystal seams on the open cavern floor
+  // (ADR-0017 rung 2 chain — the Chime Kiln rings them into hushsteel)
+  for (const [x, y] of [
+    [26, 314], [70, 316], [30, 328], [80, 330], [22, 348], [84, 358], [50, 320],
+    [66, 332], [38, 360], [78, 366], [28, 366], [86, 344],
+  ] as [number, number][]) {
+    placeNodeNear('echo_crystal_seam', x, y);
+  }
+  // rock outcrops as the secondary pull — stone, mined from the cavern floor (a
+  // bare cave has no vines; rock is accepted on stone_floor, unlike fiber_vine)
+  for (const [x, y] of [[24, 320], [82, 322], [46, 360], [72, 358], [34, 350], [60, 314]] as [number, number][]) {
+    placeNodeNear('rock', x, y);
+  }
+  const worldGate = findGateSpot(50, 292); // Cavern Mouth, near its south edge, clear of the Delve
+  districts.push({
+    id: 'the_hushdark',
+    name: 'The Hushdark',
+    rect,
+    gate: { worldTx: worldGate.tx, worldTy: worldGate.ty, districtTx: dGate.tx, districtTy: dGate.ty },
+  });
+}
+
 // decor: flowers and small plants on open grass. Loop 1 is the pinned 300×300
 // map in its exact old row-major order (same main-stream RNG draws); loop 2 is
 // the appended district space, drawing from the district stream.
@@ -1042,6 +1164,24 @@ for (const m of [MIRE_MONUMENT, { tx: MIRE_MONUMENT.tx + 1, ty: MIRE_MONUMENT.ty
   if (g === 'water' || g === 'mire_water' || g === 'cliff') ground[m.ty][m.tx] = 'sand';
 }
 
+// ---- ADR-0017 rung 2: carve the Echo Warden's arena into The Cavern Mouth, the
+// same LATE + RNG-FREE discipline as the Mire arena: a cliff wall ring, a stone
+// floor court, the south Ward gap. Ground writes only — footprint decor is dropped
+// from decorGid below the tile-variant picks (picks still made, count preserved),
+// and footprint nodes are evicted by id via keptNodes.
+for (let y = ECHO_ARENA.y - 1; y <= ECHO_ARENA.y + ECHO_ARENA.h; y++) {
+  for (let x = ECHO_ARENA.x - 1; x <= ECHO_ARENA.x + ECHO_ARENA.w; x++) {
+    if (!inBounds(x, y)) continue;
+    const isWall = x === ECHO_ARENA.x - 1 || x === ECHO_ARENA.x + ECHO_ARENA.w || y === ECHO_ARENA.y - 1 || y === ECHO_ARENA.y + ECHO_ARENA.h;
+    ground[y][x] = isWall ? 'cliff' : 'stone_floor';
+  }
+}
+for (const g of ECHO_SEAL_GATE) ground[g.ty][g.tx] = 'stone_floor'; // the entrance gap the Ward blocks
+for (const m of [ECHO_MONUMENT, { tx: ECHO_MONUMENT.tx + 1, ty: ECHO_MONUMENT.ty }]) {
+  const g = ground[m.ty][m.tx];
+  if (g === 'water' || g === 'mire_water' || g === 'cliff') ground[m.ty][m.tx] = 'sand';
+}
+
 // ---------------------------------------------------------------- secrets
 // Placed AFTER node generation on purpose: nodes standing on these tiles are
 // evicted (already-assigned node ids stay stable for existing saves).
@@ -1054,6 +1194,8 @@ const tablets = [
   { id: 't5', tx: 166, ty: 32 }, // v2: Tablet of the Seal, on the arena approach
   { id: 't6', tx: 246, ty: 147 }, // frontier: Overgrown Temple court (ADR-0009)
   { id: 't7', tx: 155, ty: 304 }, // ADR-0017 rung 1: Tablet of the Tide, on the Sunken Mire's gate landing
+  { id: 't8', tx: 48, ty: 306 }, // ADR-0017 rung 2: Tablet of the Hushdark, inside the Hushdark district
+  { id: 't9', tx: 38, ty: 350 }, // ADR-0017 rung 2: by the memorial, south of the Reverberant's court
 ];
 const altar = { tx: 35, ty: 75 }; // watches the hidden grove entrance
 const gate = [73, 74, 75, 76, 77].map((y) => ({ tx: 32, ty: y }));
@@ -1097,7 +1239,9 @@ const keptNodes = nodes.filter(
     !reservedTiles.has(`${n.tx},${n.ty}`) &&
     !inArenaOuter(n.tx, n.ty) &&
     !inMireArenaOuter(n.tx, n.ty) &&
-    !isMireMonument(n.tx, n.ty),
+    !isMireMonument(n.tx, n.ty) &&
+    !inEchoArenaOuter(n.tx, n.ty) &&
+    !isEchoMonument(n.tx, n.ty),
 );
 
 // ---------------------------------------------------------------- outputs
@@ -1118,6 +1262,12 @@ for (let dy = 0; dy < 3; dy++) {
 for (let dy = 0; dy < 3; dy++) {
   for (let dx = 0; dx < 3; dx++) {
     blocked[(MIRE_HOME.ty + dy) * W + (MIRE_HOME.tx + dx)] = 2;
+  }
+}
+// the Echo Warden's 3x3 resting place, likewise solid (ADR-0017 rung 2)
+for (let dy = 0; dy < 3; dy++) {
+  for (let dx = 0; dx < 3; dx++) {
+    blocked[(ECHO_HOME.ty + dy) * W + (ECHO_HOME.tx + dx)] = 2;
   }
 }
 
@@ -1147,6 +1297,12 @@ for (let y = 0; y < H; y++) {
 // drowned-flagstone court or its cliff walls.
 for (let y = MIRE_ARENA.y - 1; y <= MIRE_ARENA.y + MIRE_ARENA.h; y++) {
   for (let x = MIRE_ARENA.x - 1; x <= MIRE_ARENA.x + MIRE_ARENA.w; x++) {
+    if (inBounds(x, y)) decorGid[y][x] = 0;
+  }
+}
+// ADR-0017 rung 2: same discard for the Echo arena footprint
+for (let y = ECHO_ARENA.y - 1; y <= ECHO_ARENA.y + ECHO_ARENA.h; y++) {
+  for (let x = ECHO_ARENA.x - 1; x <= ECHO_ARENA.x + ECHO_ARENA.w; x++) {
     if (inBounds(x, y)) decorGid[y][x] = 0;
   }
 }
@@ -1229,7 +1385,27 @@ const worldData = {
       monument: MIRE_MONUMENT,
       sealGate: MIRE_SEAL_GATE,
     },
+    echo: {
+      arena: ECHO_ARENA,
+      home: ECHO_HOME,
+      altar: ECHO_ALTAR,
+      monument: ECHO_MONUMENT,
+      sealGate: ECHO_SEAL_GATE,
+    },
+    // the Reverberant (ADR-0017 rung 2): summoned by SOLVING the pedestal puzzle,
+    // not an altar — so no altar/monument/Ward. Its arena is the open puzzle court.
+    reverb: {
+      arena: REVERB_ARENA,
+      home: REVERB_HOME,
+      altar: REVERB_HOME, // vestigial (never used — no altar interaction)
+      monument: REVERB_HOME, // vestigial
+      sealGate: [], // no Ward — the boss rises inside the open court
+    },
   },
+  // ADR-0017 rung 2: the Hushdark's pedestal-vaults (echo-coverage → weekly cache)
+  hushdarkVaults,
+  // the memorial plinth where a master leaves a permanent named greeting shade
+  hushdarkMemorial,
 };
 
 const outDir = path.resolve(import.meta.dirname, '../public/map');

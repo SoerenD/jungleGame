@@ -9,6 +9,13 @@ export type ResourceId =
   | 'saltreed'
   // refined from saltreed at a Brine Kiln (ADR-0017 §6) — crafts the Tideglass Boots
   | 'tideglass'
+  // the Hushdark's raw Resource (ADR-0017 rung 2: echo-crystal seam → hushsteel)
+  | 'echo_crystal'
+  // refined from echo_crystal at a Chime Kiln (ADR-0017 §6) — crafts the Hushsteel Helm
+  | 'hushsteel'
+  // ADR-0017 rung 2 — the Reverberant's weekly prestige token (the depth_sigil
+  // shape: pure prestige, crafts nothing, pooled to the Village)
+  | 'echo_sigil'
   | 'map_piece'
   // v2 — Guardian drops and tier-2 Resources
   | 'guardian_scale'
@@ -29,6 +36,10 @@ export type ResourceId =
   // key. Never consumed — any Player opens the gate once with it in hand
   // (the Delve-shaft pattern), then it stays a trophy.
   | 'mire_key'
+  // ADR-0017 rung 2 — the Echo Warden's participation drop: the Hushdark's gate
+  // key. Never consumed — any Player opens the gate once with it in hand, then
+  // it stays a trophy (the mire_key pattern).
+  | 'hushdark_key'
   // ADR-0012 — open-world Wildlife drops (hide/meat/trophy family). Feed EXISTING
   // loops only: the Village pool, a cooked-meat campfire recipe, decor Structures.
   | 'hide'
@@ -81,6 +92,13 @@ export type StructureId =
   // ADR-0017 rung 1 — the Sunken Mire's Refiner: tempers salt-reed into tideglass
   // over real time (the generic refiner kernel, §6). A 2×2 code-art Building.
   | 'brine_kiln'
+  // ADR-0017 rung 2 — the Hushdark's Refiner: rings echo-crystal into hushsteel
+  // over real time (the generic refiner kernel, §6). A 2×2 code-art Building.
+  | 'chime_kiln'
+  // ADR-0017 rung 2 — the ONE-TIME prestige trophy for solving your first Hushdark
+  // vault: a placeable Echo Reliquary. Not craftable (the golden_idol pattern) —
+  // it is only ever granted by that first vault open.
+  | 'hushdark_reliquary'
   // A3 (ADR-0010) — the Village: the Hall (founding + communal spawn), the four
   // later milestone Buildings, and per-tier decor unlocks. Progress lives in the
   // per-world Village record, not these tiles (re-founding never resets it).
@@ -100,11 +118,19 @@ export type StructureId =
 /** carried consumables that are neither Resources nor Tools */
 export type ConsumableId = 'summon_totem' | 'cooked_fish' | 'cooked_meat'
   // ADR-0017 — the Warden Totems: one crafted Offering per rung, consumed on summon
-  | 'mire_totem';
+  | 'mire_totem'
+  | 'echo_totem'
+  // ADR-0017 rung 2 §7 — the Hushdark's renewable consumable sink for hushsteel:
+  // a charm you spend to arm an Echo recording (renewable demand, never a one-shot)
+  | 'chime_charm';
 // ADR-0017 §3/§4 — the Warden ladder's visible Armor: one piece per Realm,
 // worn (players.equipped), drawn on the Avatar, each granting ONE attribute
 // (tuning in content/armor.ts).
-export type ArmorId = 'tideglass_boots' | 'verdant_cuirass' | 'hushsteel_helm';
+export type ArmorId = 'tideglass_boots' | 'verdant_cuirass' | 'hushsteel_helm'
+  // ADR-0017 rung 2 — the EPIC transfiguration of the Hushsteel Helm, the
+  // once-ever reward for defeating the Reverberant. SAME slot + SAME band (+2/+3)
+  // as the plain helm — a pure cosmetic upgrade (a crested, glowing silhouette).
+  | 'hushsteel_helm_epic';
 export type ItemId = ResourceId | ToolId | StructureId | ConsumableId | ArmorId;
 
 export interface ItemDef {
@@ -143,6 +169,9 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   fruit: { name: 'Fruit', kind: 'resource', desc: 'Picked from fruit bushes.' },
   saltreed: { name: 'Salt-Reed', kind: 'resource', desc: 'Pale brine-crusted reeds cut from the banks of the Sunken Mire. A Brine Kiln tempers them into tideglass.' },
   tideglass: { name: 'Tideglass', kind: 'resource', desc: 'Sea-green glass tempered from salt-reed in a Brine Kiln. Fused into boots, it carries the tide’s pull in every stride.' },
+  echo_crystal: { name: 'Echo Crystal', kind: 'resource', desc: 'A cold, ringing crystal cut from a seam in the Hushdark. A Chime Kiln rings it out into hushsteel.' },
+  hushsteel: { name: 'Hushsteel', kind: 'resource', desc: 'Cold blued steel rung out of echo crystal in a Chime Kiln. Forged into a helm, every blow it backs lands with the Hushdark’s weight.' },
+  echo_sigil: { name: 'Echo Sigil', kind: 'resource', desc: 'A ringing sigil struck from the Reverberant, one each week it is felled. Pure prestige — it crafts nothing; give it to the Village pool and let the deed speak.' },
   map_piece: { name: 'Torn Map Piece', kind: 'resource', desc: 'A scrap of an old treasure map. Collect 3 and an X appears on your minimap — dig there!' },
   guardian_scale: { name: 'Guardian Scale', kind: 'resource', desc: 'A stone-hard scale shed by the Guardian of the Ruins. Every Player who lands a hit in a victorious fight earns them.' },
   hardwood: { name: 'Ancient Hardwood', kind: 'resource', desc: 'Timber from the oldest trees — only an Ancient Axe can cut it.' },
@@ -155,6 +184,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   forge_core: { name: 'Forge Core', kind: 'resource', desc: 'The white-hot heart of the Forgeborn, granted to everyone who descended and fought it. Rare — forges the Forgebrand.' },
   depth_sigil: { name: 'Depth Sigil', kind: 'resource', desc: 'Proof of a boss felled in the generated Depths (3+), one per Stage. Pure prestige — it crafts nothing; give it to the Village pool, and let the Depth Record speak.' },
   mire_key: { name: 'Key to the Sunken Mire', kind: 'resource', desc: 'A brine-crusted key of fused tideglass, pried from the fallen Mire Warden. Carry it to the megalith arch on the Mangrove Coast — one turn opens the Sunken Mire for everyone, forever.' },
+  hushdark_key: { name: 'Key to the Hushdark', kind: 'resource', desc: 'A cold key of hushsteel that hums with a swallowed note, pried from the fallen Echo Warden. Carry it to the maw at the Cavern Mouth — one turn opens the Hushdark for everyone, forever.' },
   hide: { name: 'Hide', kind: 'resource', desc: 'Tough hide from foraged or hunted Wildlife. Give it to the Village, or lay it as a rug.' },
   meat: { name: 'Raw Meat', kind: 'resource', desc: 'Fresh meat from Wildlife. Cook it at a campfire for a hearty meal that quickens your step.' },
   trophy: { name: 'Wild Trophy', kind: 'resource', desc: 'A prize rack or fang from the wilds — rare. Mount it, or grace the Village pool with it.' },
@@ -180,6 +210,8 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
 
   summon_totem: { name: 'Summoning Totem', kind: 'consumable', desc: 'An Offering for the arena altar — wakes the Guardian. Consumed on summon.' },
   mire_totem: { name: 'Mire Warden Totem', kind: 'consumable', desc: 'A totem of hardwood and obsidian, forged for the altar on the Mangrove Coast. Once the altar’s Offering is complete, it wakes the Mire Warden. Consumed on summon.' },
+  echo_totem: { name: 'Echo Warden Totem', kind: 'consumable', desc: 'A totem of salt-reed and tideglass, forged for the altar at the Cavern Mouth. Once the altar’s Offering is complete, it wakes the Echo Warden. Consumed on summon.' },
+  chime_charm: { name: 'Chime Charm', kind: 'consumable', desc: 'A little bell of hushsteel. Spend it at a pedestal in the Hushdark to arm an echo recording — a shade of you that walks its loop forever.' },
   cooked_fish: { name: 'Cooked Fish', kind: 'food', desc: 'Warm and hearty. Eating it quickens your step for a while.' },
   cooked_meat: { name: 'Cooked Meat', kind: 'food', desc: 'Roasted at a campfire. Eating it quickens your step for a while — the same warmth a cooked fish gives.' },
 
@@ -188,6 +220,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   tideglass_boots: { name: 'Tideglass Boots', kind: 'armor', desc: 'Boots shod in sea-green tideglass, tempered from salt-reed in a Brine Kiln. Worn, they carry the tide’s pull in every stride (+8% move speed) — and everyone sees them on you.' },
   verdant_cuirass: { name: 'Verdant-woven Cuirass', kind: 'armor', desc: 'A plated cuirass woven from living pearlgrain fibre of the Verdant Terraces — light as leaf, yet it wraps the whole torso. Worn, every strike flows like wind through grass (+8% attack speed) — and it visibly re-armours you to every friend.' },
   hushsteel_helm: { name: 'Hushsteel Helm', kind: 'armor', desc: 'A helm of cold hushsteel rung out of echo crystal in a Chime Kiln. Worn, every blow lands with the Hushdark’s weight (a heavier damage band) — visible to every friend.' },
+  hushsteel_helm_epic: { name: 'Reverberant Helm', kind: 'armor', desc: 'The Hushsteel Helm transfigured by the fall of the Reverberant — a crested, cold-glowing crown ringed with echo-light. Exactly the same weight in a blow (+2/+3 band); pure, earned style. Only ever taken from that boss.' },
 
   campfire: { name: 'Campfire', kind: 'structure', desc: 'A cozy fire. Cooks fish, too.', blocks: true },
   torch: { name: 'Torch', kind: 'structure', desc: 'Lights the path.', blocks: false },
@@ -196,6 +229,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   tiki_statue: { name: 'Tiki Statue', kind: 'structure', desc: 'Watches the jungle.', blocks: true },
   fruit_basket: { name: 'Fruit Basket', kind: 'structure', desc: 'A welcoming snack pile.', blocks: false },
   golden_idol: { name: 'Golden Idol', kind: 'structure', desc: 'A gleaming trophy dug from a buried treasure. Cannot be crafted.', blocks: true },
+  hushdark_reliquary: { name: 'Echo Reliquary', kind: 'structure', desc: 'A cold hushsteel shrine that hums with a swallowed note — the mark of the first Hushdark vault you ever opened. Not craftable; raise it where all can see the puzzle was solved.', blocks: true },
   obsidian_statue: { name: 'Obsidian Statue', kind: 'structure', desc: 'A gleaming black sentinel.', blocks: true },
   hardwood_arch: { name: 'Hardwood Arch', kind: 'structure', desc: 'A grand gateway of ancient timber.', blocks: false },
   guardian_trophy: { name: 'Guardian Trophy', kind: 'structure', desc: 'Proof the Guardian was faced — and bested.', blocks: true },
@@ -212,6 +246,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   // be made from the pack alone.
   forge: { name: 'Forge', kind: 'structure', desc: 'A 2×2 furnace-and-anvil workshop. Stand close to forge the heavy metal Tools and weapons — the Ancient Axe, Ancient Pickaxe, Sword and Forgebrand can only be made here.', blocks: true, w: 2, h: 2 },
   brine_kiln: { name: 'Brine Kiln', kind: 'structure', desc: 'A 2×2 kiln for the Sunken Mire: deposit salt-reed and collect tideglass after its slow, salt-hot work. The tideglass then crafts the Tideglass Boots.', blocks: true, w: 2, h: 2 },
+  chime_kiln: { name: 'Chime Kiln', kind: 'structure', desc: 'A 2×2 kiln for the Hushdark: deposit echo crystal and collect hushsteel after its slow, ringing work. The hushsteel then crafts the Hushsteel Helm.', blocks: true, w: 2, h: 2 },
   // A3 (ADR-0010): the Village. The Hall founds the Village wherever it is raised
   // and becomes the communal wake point; the four later Buildings are each a
   // tier's milestone; the rest are per-tier decor. Contributions feed one shared,
@@ -239,6 +274,9 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   fruit: { name: 'Frucht', desc: 'Von Obststräuchern gepflückt.' },
   saltreed: { name: 'Salzried', desc: 'Blasse, salzverkrustete Riede von den Ufern des Versunkenen Moors. Ein Sole-Ofen härtet sie zu Gezeitenglas.' },
   tideglass: { name: 'Gezeitenglas', desc: 'Seegrünes Glas, im Sole-Ofen aus Salzried gehärtet. Zu Stiefeln verschmolzen trägt es den Sog der Gezeiten in jedem Schritt.' },
+  echo_crystal: { name: 'Echokristall', desc: 'Ein kalter, klingender Kristall, aus einer Ader im Stilldunkel geschnitten. Ein Klang-Ofen läutert ihn zu Stillstahl.' },
+  hushsteel: { name: 'Stillstahl', desc: 'Kalter, gebläuter Stahl, im Klang-Ofen aus Echokristall geläutert. Zu einem Helm geschmiedet trifft jeder Schlag mit dem Gewicht des Stilldunkels.' },
+  echo_sigil: { name: 'Echo-Sigel', desc: 'Ein klingendes Sigel, dem Nachhall abgeschlagen — eines pro Woche, in der er fällt. Reines Prestige — es stellt nichts her; gib es dem Dorfvorrat und lass die Tat sprechen.' },
   map_piece: { name: 'Zerrissener Kartenfetzen', desc: 'Ein Fetzen einer alten Schatzkarte. Sammle 3 und ein ✕ erscheint auf deiner Minikarte — grabe dort!' },
   guardian_scale: { name: 'Wächterschuppe', desc: 'Eine steinharte Schuppe, abgeworfen vom Wächter der Ruinen. Jeder Spieler, der in einem siegreichen Kampf einen Treffer landet, verdient sie.' },
   hardwood: { name: 'Uraltes Hartholz', desc: 'Holz der ältesten Bäume — nur eine Uralte Axt kann es schlagen.' },
@@ -251,6 +289,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   forge_core: { name: 'Schmiedekern', desc: 'Das weißglühende Herz des Schmiedegeborenen, verliehen an alle, die hinabstiegen und gegen ihn kämpften. Selten — schmiedet den Schmiedebrand.' },
   depth_sigil: { name: 'Tiefensiegel', desc: 'Beweis eines gefällten Bosses in den erzeugten Tiefen (3+), eines pro Stufe. Reines Prestige — es stellt nichts her; gib es dem Dorfvorrat, und lass den Tiefenrekord sprechen.' },
   mire_key: { name: 'Schlüssel zum Versunkenen Moor', desc: 'Ein salzverkrusteter Schlüssel aus verschmolzenem Gezeitenglas, dem gefallenen Moorwächter abgerungen. Trag ihn zum Megalith-Bogen an der Mangrovenküste — eine Drehung öffnet das Versunkene Moor für alle, für immer.' },
+  hushdark_key: { name: 'Schlüssel zum Stilldunkel', desc: 'Ein kalter Schlüssel aus Stillstahl, der mit einem verschluckten Ton summt, dem gefallenen Echowächter abgerungen. Trag ihn zum Schlund am Höhlenschlund — eine Drehung öffnet das Stilldunkel für alle, für immer.' },
   hide: { name: 'Fell', desc: 'Zähes Fell von erjagtem oder gesammeltem Wild. Gib es dem Dorf oder leg es als Teppich aus.' },
   meat: { name: 'Rohes Fleisch', desc: 'Frisches Fleisch von Wild. Brate es am Lagerfeuer für eine herzhafte Mahlzeit, die deinen Schritt beschleunigt.' },
   trophy: { name: 'Wildtrophäe', desc: 'Ein prächtiges Geweih oder Fangzahn aus der Wildnis — selten. Häng sie auf oder zier den Dorfvorrat damit.' },
@@ -273,12 +312,15 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
 
   summon_totem: { name: 'Beschwörungstotem', desc: 'Eine Opfergabe für den Arena-Altar — weckt den Wächter. Beim Beschwören verbraucht.' },
   mire_totem: { name: 'Totem des Moorwächters', desc: 'Ein Totem aus Hartholz und Obsidian, geschmiedet für den Altar an der Mangrovenküste. Ist die Opfergabe des Altars vollbracht, weckt es den Moorwächter. Beim Beschwören verbraucht.' },
+  echo_totem: { name: 'Totem des Echowächters', desc: 'Ein Totem aus Salzried und Gezeitenglas, geschmiedet für den Altar am Höhlenschlund. Ist die Opfergabe des Altars vollbracht, weckt es den Echowächter. Beim Beschwören verbraucht.' },
+  chime_charm: { name: 'Klang-Amulett', desc: 'Ein kleines Glöckchen aus Stillstahl. Gib es an einem Podest im Stilldunkel aus, um eine Echo-Aufnahme scharf zu stellen — ein Schatten deiner selbst, der seine Schleife für immer läuft.' },
   cooked_fish: { name: 'Gebratener Fisch', desc: 'Warm und herzhaft. Ihn zu essen beschleunigt deinen Schritt für eine Weile.' },
   cooked_meat: { name: 'Gebratenes Fleisch', desc: 'Am Lagerfeuer geröstet. Es zu essen beschleunigt deinen Schritt für eine Weile — dieselbe Wärme wie gebratener Fisch.' },
 
   tideglass_boots: { name: 'Gezeitenglas-Stiefel', desc: 'Stiefel, beschlagen mit seegrünem Gezeitenglas, im Sole-Ofen aus Salzried gehärtet. Getragen liegt der Sog der Gezeiten in jedem Schritt (+8% Tempo) — und jeder sieht sie an dir.' },
   verdant_cuirass: { name: 'Grüngewebter Brustpanzer', desc: 'Ein geplatteter Kürass, gewebt aus lebendiger Perlkorn-Faser der Grünen Terrassen — blattleicht und doch den ganzen Oberkörper umschließend. Getragen fließt jeder Schlag wie Wind durch Gras (+8% Angriffstempo) — und er panzert dich für alle Freunde sichtbar neu.' },
   hushsteel_helm: { name: 'Stillstahl-Helm', desc: 'Ein Helm aus kaltem Stillstahl, im Klang-Ofen aus Echokristall geläutert. Getragen trifft jeder Schlag mit dem Gewicht des Stilldunkels (ein schwereres Schadensband) — für alle Freunde sichtbar.' },
+  hushsteel_helm_epic: { name: 'Nachhall-Helm', desc: 'Der Stillstahl-Helm, verklärt durch den Fall des Nachhalls — eine gekrönte, kalt leuchtende Krone, umringt von Echo-Licht. Exakt dasselbe Gewicht im Schlag (+2/+3-Band); reiner, verdienter Stil. Nur je von diesem Boss zu erbeuten.' },
 
   campfire: { name: 'Lagerfeuer', desc: 'Ein gemütliches Feuer. Brät auch Fisch.' },
   torch: { name: 'Fackel', desc: 'Erleuchtet den Weg.' },
@@ -287,6 +329,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   tiki_statue: { name: 'Tiki-Statue', desc: 'Wacht über den Dschungel.' },
   fruit_basket: { name: 'Obstkorb', desc: 'Ein einladender Snack-Haufen.' },
   golden_idol: { name: 'Goldenes Götzenbild', desc: 'Eine glänzende Trophäe, aus einem vergrabenen Schatz gegraben. Nicht herstellbar.' },
+  hushdark_reliquary: { name: 'Echo-Reliquie', desc: 'Ein kalter Schrein aus Stillstahl, der mit einem verschluckten Ton summt — das Zeichen des ersten Stilldunkel-Gewölbes, das du je geöffnet hast. Nicht herstellbar; richte ihn auf, wo alle sehen, dass das Rätsel gelöst wurde.' },
   obsidian_statue: { name: 'Obsidianstatue', desc: 'Ein glänzender schwarzer Wächter.' },
   hardwood_arch: { name: 'Hartholzbogen', desc: 'Ein prächtiges Tor aus uraltem Holz.' },
   guardian_trophy: { name: 'Wächtertrophäe', desc: 'Beweis, dass der Wächter gestellt — und bezwungen — wurde.' },
@@ -298,6 +341,7 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   table: { name: 'Tisch', desc: 'Ein stabiler Brettertisch fürs Lager.' },
   forge: { name: 'Schmiede', desc: 'Eine 2×2-Werkstatt aus Ofen und Amboss. Stell dich nah heran, um die schweren Metallwerkzeuge und -waffen zu schmieden — Uralte Axt, Uralte Spitzhacke, Schwert und Schmiedebrand lassen sich nur hier fertigen.' },
   brine_kiln: { name: 'Sole-Ofen', desc: 'Ein 2×2-Ofen für das Versunkene Moor: Salzried einlegen und Gezeitenglas holen, wenn seine langsame, salzheiße Arbeit getan ist. Aus dem Gezeitenglas entstehen die Gezeitenglas-Stiefel.' },
+  chime_kiln: { name: 'Klang-Ofen', desc: 'Ein 2×2-Ofen für das Stilldunkel: Echokristall einlegen und Stillstahl holen, wenn seine langsame, klingende Arbeit getan ist. Aus dem Stillstahl entsteht der Stillstahl-Helm.' },
   village_hall: { name: 'Dorfhalle', desc: 'Errichte sie irgendwo, um das Dorf zu gründen und zur Heimat zu machen: Jeder ohne Hängematte erwacht hier. Stell dich nah heran und drücke E, um Ressourcen und Beute in den gemeinsamen Vorrat zu geben. Ein Neugründen setzt das Dorf nie zurück.' },
   village_well: { name: 'Dorfbrunnen', desc: 'Der Weiler-Meilenstein: Errichte ihn in der Dorfzone bei vollem Vorrat, um aus dem Lager einen Weiler zu machen.' },
   market_square: { name: 'Marktplatz', desc: 'Der Dorf-Meilenstein: ein belebter Stand, der einen Weiler zum vollen Dorf erhebt.' },

@@ -76,6 +76,31 @@ export function mireQuestComplete(p: MireProgress): boolean {
   return MIRE_QUEST_STEPS.every((s) => s.done(p));
 }
 
+/**
+ * The Hushdark quest ("The Hushdark", ADR-0017 rung 2): the arc from the Cavern
+ * Mouth altar to the Hushsteel Helm. Same shape as the Mire quest — every step
+ * auto-ticks from the Warden altar/gate flags + the inventory (no new persistence):
+ * the Hushdark Key proves the Warden was bested, a hushsteel proves the Chime Kiln
+ * ran, the Helm proves the chain closed.
+ */
+export interface HushdarkProgress {
+  inventory: Inventory;
+  /** the per-Warden altar/gate progress (backend `wardens` snapshot) */
+  wardens: Record<string, WardenWorldState> | null;
+}
+
+export const HUSHDARK_QUEST_STEPS: { id: string; label: string; done: (p: HushdarkProgress) => boolean }[] = [
+  { id: 'echo_offering', label: pick('Complete the Offering at the Cavern Mouth altar', 'Die Opfergabe am Altar des Höhlenschlunds vollenden'), done: (p) => !!p.wardens?.echo?.altar.broken },
+  { id: 'best_echo', label: pick('Defeat the Echo Warden — earn the Hushdark Key', 'Den Echowächter bezwingen — Stilldunkel-Schlüssel verdienen'), done: (p) => (p.inventory.hushdark_key ?? 0) > 0 },
+  { id: 'open_hushdark_gate', label: pick('Open the gate to the Hushdark', 'Das Tor zum Stilldunkel öffnen'), done: (p) => !!p.wardens?.echo?.gateOpen },
+  { id: 'refine_hushsteel', label: pick('Ring echo crystal into hushsteel at a Chime Kiln', 'Echokristall im Klang-Ofen zu Stillstahl läutern'), done: (p) => (p.inventory.hushsteel ?? 0) > 0 },
+  { id: 'craft_helm', label: pick('Craft the Hushsteel Helm', 'Den Stillstahl-Helm herstellen'), done: (p) => (p.inventory.hushsteel_helm ?? 0) > 0 },
+];
+
+export function hushdarkQuestComplete(p: HushdarkProgress): boolean {
+  return HUSHDARK_QUEST_STEPS.every((s) => s.done(p));
+}
+
 export function hintRetired(j: JourneyState, hint: HintId): boolean {
   return (j.hintUses[hint] ?? 0) >= HINT_RETIRE_USES;
 }

@@ -201,6 +201,21 @@ export class BootScene extends Phaser.Scene {
         repeat: -1,
       });
     }
+    // ADR-0017 rung 2: the Echo Warden shares the same 8-frame boss-sheet contract
+    if (this.textures.exists('echo_warden')) {
+      this.anims.create({
+        key: 'echo-idle',
+        frames: this.anims.generateFrameNumbers('echo_warden', { start: 1, end: 2 }),
+        frameRate: 2,
+        repeat: -1,
+      });
+      this.anims.create({
+        key: 'echo-eye',
+        frames: this.anims.generateFrameNumbers('echo_warden', { start: 3, end: 4 }),
+        frameRate: 4,
+        repeat: -1,
+      });
+    }
     this.game.events.emit('assets-ready');
   }
 }

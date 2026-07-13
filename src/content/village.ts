@@ -345,7 +345,7 @@ export interface StructureArt {
    */
   kind:
     | 'hall' | 'well' | 'market' | 'keep' | 'monument' | 'fountain' | 'archJungle'
-    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge' | 'kiln';
+    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge' | 'kiln' | 'chime';
   /**
    * tiles the sprite rises ABOVE its footprint (defaults from shape: monument 2,
    * else 1). The bell-towered hall rises 3 so it out-scales the houses.
@@ -384,4 +384,23 @@ export const FORGE_ART: Partial<Record<StructureId, StructureArt>> = {
  */
 export const KILN_ART: Partial<Record<StructureId, StructureArt>> = {
   brine_kiln: { kind: 'kiln', body: '#5a6b6a', roof: '#33403f', trim: '#63e0b8', w: 2, h: 2, shape: 'building', glow: true },
+};
+
+/**
+ * Code-drawn art for the Hushdark's Chime Kiln (ADR-0017 rung 2) — same
+ * StructureArt pipeline as KILN_ART, but a cold blued-steel kiln ringing its
+ * hushsteel signal (#5a6b85 / #93a8c9) at its mouth instead of the Mire's teal.
+ */
+export const CHIME_KILN_ART: Partial<Record<StructureId, StructureArt>> = {
+  chime_kiln: { kind: 'chime', body: '#5a6b85', roof: '#2b3346', trim: '#93a8c9', w: 2, h: 2, shape: 'building', glow: true },
+};
+
+/**
+ * The Echo Reliquary (ADR-0017 rung 2): the one-time prestige trophy for solving
+ * your first Hushdark vault. Reuses the code-drawn 'monument' silhouette (like the
+ * Grand Monument) re-hued to cold hushsteel blue — a ringing obelisk. Not a Village
+ * Building; shares the StructureArt pipeline only.
+ */
+export const RELIQUARY_ART: Partial<Record<StructureId, StructureArt>> = {
+  hushdark_reliquary: { kind: 'monument', body: '#4a5568', roof: '#5a6b85', trim: '#93a8c9', w: 1, h: 1, shape: 'monument', glow: true },
 };
