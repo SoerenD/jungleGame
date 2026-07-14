@@ -248,6 +248,11 @@ export const VILLAGE_CONTRIB: Partial<Record<string, number>> = {
   plank: 4,
   hardwood: 5,
   obsidian: 6,
+  // ADR-0017 rung 3 — the Green Terraces' goods: the renewable wildgrain crop and
+  // its Loom-retted verdant fibre carry pool value like the other tiered materials
+  // (raw crop ~obsidian; the refined fibre a step above, ~map_piece).
+  wildgrain: 6,
+  verdant_fibre: 8,
   map_piece: 8,
   husk_shard: 3,
   guardian_scale: 15,
@@ -345,7 +350,7 @@ export interface StructureArt {
    */
   kind:
     | 'hall' | 'well' | 'market' | 'keep' | 'monument' | 'fountain' | 'archJungle'
-    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge' | 'kiln' | 'chime';
+    | 'banner' | 'lamp' | 'flowers' | 'trophy' | 'rug' | 'forge' | 'kiln' | 'chime' | 'loom';
   /**
    * tiles the sprite rises ABOVE its footprint (defaults from shape: monument 2,
    * else 1). The bell-towered hall rises 3 so it out-scales the houses.
@@ -393,6 +398,16 @@ export const KILN_ART: Partial<Record<StructureId, StructureArt>> = {
  */
 export const CHIME_KILN_ART: Partial<Record<StructureId, StructureArt>> = {
   chime_kiln: { kind: 'chime', body: '#5a6b85', roof: '#2b3346', trim: '#93a8c9', w: 2, h: 2, shape: 'building', glow: true },
+};
+
+/**
+ * Code-drawn art for the Green Terraces' Verdant Loom (ADR-0017 rung 3) — same
+ * StructureArt pipeline as CHIME_KILN_ART, but an upright timber weaving frame
+ * strung with living verdant warp threads (its retting glow is the Terraces'
+ * signal green #7cc96f / #4a9e52) instead of the kiln's cold hushsteel blue.
+ */
+export const VERDANT_LOOM_ART: Partial<Record<StructureId, StructureArt>> = {
+  verdant_loom: { kind: 'loom', body: '#6b5a34', roof: '#3a4a26', trim: '#7cc96f', w: 2, h: 2, shape: 'building', glow: true },
 };
 
 /**

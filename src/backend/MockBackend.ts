@@ -5,6 +5,7 @@ import {
   DEV_FIGHT_HP,
   DEV_VILLAGE,
   DEV_WARDEN_FIGHT,
+  DEV_VERDANT_FIGHT,
   DORMANT_TIMEOUT_MS,
   wardenAltarQuotas,
   WARDEN_ALTAR_PER_HEAD,
@@ -340,6 +341,13 @@ export class MockBackend implements Backend {
     }
     this.saveSoon();
     if (DEV_FIGHT) this.db.world.seal.broken = true; // ?fight — jump straight to the Guardian
+    if (DEV_VERDANT_FIGHT) {
+      // ?verdantfight — the Verdant Warden's altar starts broken so its granted
+      // totem summons at once (the warden-altar analog of ?fight's seal break)
+      const wardens = (this.db.world.wardens ??= {});
+      const wv = (wardens.verdant ??= { altar: { broken: false, contributed: {} }, gateOpen: false });
+      wv.altar.broken = true;
+    }
     if (DEV_VILLAGE) this.seedDevVillage(); // ?village — founded Capital + the ADR-0013 buildings
     this.scheduleSlumberCheck();
   }
@@ -533,6 +541,19 @@ export class MockBackend implements Backend {
       // whole solo arc (Offering → summon → fight → gate key)
       const grants: Partial<Record<ItemId, number>> = { mire_totem: 1 };
       for (const [item, per] of Object.entries(WARDEN_ALTAR_PER_HEAD.mire ?? {})) {
+        grants[item as ItemId] = per * 2;
+      }
+      for (const [item, n] of Object.entries(grants)) {
+        if ((p.inventory[item as ItemId] ?? 0) < n!) p.inventory[item as ItemId] = n!;
+      }
+      this.saveNow();
+    }
+    if (DEV_VERDANT_FIGHT) {
+      // ?verdantfight — the Verdant Warden's totem + enough altar goods for the
+      // whole solo arc (Offering → summon → fight → terrace key). Granted by item
+      // id (no wardenDef dependency), mirroring the ?wardenfight Mire grant.
+      const grants: Partial<Record<ItemId, number>> = { verdant_totem: 1 };
+      for (const [item, per] of Object.entries(WARDEN_ALTAR_PER_HEAD.verdant ?? {})) {
         grants[item as ItemId] = per * 2;
       }
       for (const [item, n] of Object.entries(grants)) {
@@ -1820,7 +1841,7 @@ export class MockBackend implements Backend {
       const roster = this.playersInArena(f.warden);
       if (!roster.includes(me)) roster.push(me); // the striker is always in the fight
       f.roster = roster;
-      f.maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * roster.length;
+      f.maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT || DEV_VERDANT_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * roster.length;
       f.hp = f.maxHp;
       this.scheduleSlumberCheck(); // switch from the dormant grace to the awake window
       this.emit('guardianEngaged', this.fightState()!); // clients re-anchor to engagedAt + raise the Ward
@@ -1961,6 +1982,15 @@ export class MockBackend implements Backend {
     const p = this.me ? this.db.players[this.me] : null;
     if (!p || (p.inventory.cooked_meat ?? 0) < 1) return { ok: false, reason: 'NOTHING_TO_EAT' };
     p.inventory.cooked_meat! -= 1;
+    this.saveNow();
+    return { ok: true, inventory: { ...p.inventory }, buffMs: SPEED_BUFF_MS };
+  }
+
+  async eatGrasweaveRation(): Promise<EatResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    if (!p || (p.inventory.grasweave_ration ?? 0) < 1) return { ok: false, reason: 'NOTHING_TO_EAT' };
+    p.inventory.grasweave_ration! -= 1;
     this.saveNow();
     return { ok: true, inventory: { ...p.inventory }, buffMs: SPEED_BUFF_MS };
   }

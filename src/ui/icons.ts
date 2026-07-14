@@ -7,7 +7,7 @@
 import { OBJECTS } from '../assetConfig';
 import { asset } from '../paths';
 import type { ItemId } from '../content/items';
-import { CHIME_KILN_ART, FORGE_ART, KILN_ART, RELIQUARY_ART, VILLAGE_ART, type StructureArt } from '../content/village';
+import { CHIME_KILN_ART, FORGE_ART, KILN_ART, RELIQUARY_ART, VERDANT_LOOM_ART, VILLAGE_ART, type StructureArt } from '../content/village';
 import { WILDLIFE_ART } from '../content/wildlife';
 
 /** shared palette: char → CSS color ('.' and unknown chars are transparent) */
@@ -190,6 +190,36 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '.xxxxxxxxx..',
     '....xxx.....',
     '.....f......',
+    '............',
+  ],
+  // ADR-0017 rung 3 — the Verdant chain: a golden wildgrain ear on its green stalk,
+  // and the supple green fibre retted from it (m amber grain, g/G/e green stem/thread)
+  wildgrain: [
+    '............',
+    '.....x......',
+    '....xmx.....',
+    '...xmnmx....',
+    '...xnmnx....',
+    '...xmnmx....',
+    '...xnmnx....',
+    '...xmnmx....',
+    '....xex.....',
+    '....xgx.....',
+    '....xgx.....',
+    '............',
+  ],
+  verdant_fibre: [
+    '............',
+    '....xxxx....',
+    '...xGggGx...',
+    '..xGgeegGx..',
+    '..xgeGgeGx..',
+    '..xGgeeggx..',
+    '..xgeGgegx..',
+    '..xGgeeggx..',
+    '..xgggggGx..',
+    '...xGGGGx...',
+    '....xxxx....',
     '............',
   ],
   wood: [
@@ -490,6 +520,22 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '......n.....',
     '............',
   ],
+  // ADR-0017 rung 3 — the Grasweave Ration: a pressed wildgrain bar (n/W grain,
+  // m flecks) bound with a green verdant-fibre wrap; eats like a cooked fish
+  grasweave_ration: [
+    '............',
+    '............',
+    '..xxxxxxxx..',
+    '.xnWnnWnnWx.',
+    '.xnnmnnmnnx.',
+    '.xggggggggx.',
+    '.xnnmnnmnnx.',
+    '.xnWnnWnnWx.',
+    '..xxxxxxxx..',
+    '............',
+    '............',
+    '............',
+  ],
   sword: [
     '............',
     '.........xx.',
@@ -722,6 +768,22 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '....xxxx....',
     '............',
   ],
+  // ADR-0017 rung 3 — the Verdant Warden's totem: a carved green idol, golden
+  // grain-lit eyes (e/g/G verdant body, m amber eyes)
+  verdant_totem: [
+    '............',
+    '...xxxxxx...',
+    '..xeeeeeex..',
+    '..xemxxmex..',
+    '..xeeeeeex..',
+    '..xGxeexGx..',
+    '..xeexxeex..',
+    '..xGeeeeGx..',
+    '...xxxxxx...',
+    '....xeex....',
+    '....xxxx....',
+    '............',
+  ],
   // the Hushdark's gate key — forged hushsteel shaft, echo-violet crystal ward
   hushdark_key: [
     '............',
@@ -734,6 +796,21 @@ export const GRIDS: Partial<Record<ItemId, string[]>> = {
     '.....xix....',
     '....xiPix...',
     '.....xiPx...',
+    '......xx....',
+    '............',
+  ],
+  // the Green Terraces' gate key — woven of living verdant fibre (green bow, e stem)
+  terrace_key: [
+    '............',
+    '...xxx......',
+    '..xGGgx.....',
+    '..xGxGx.....',
+    '..xgGGx.....',
+    '...xgx......',
+    '....xex.....',
+    '.....xex....',
+    '....xeGex...',
+    '.....xeGx...',
     '......xx....',
     '............',
   ],
@@ -1352,6 +1429,32 @@ function drawChimeKiln(R: Put, C: Clear): void {
   R(6, 18, 1, 1, ch2); R(23, 18, 1, 1, ch2);
 }
 
+// The Verdant Loom (ADR-0017 rung 3): an upright timber weaving frame strung with
+// living verdant warp threads, a woven bolt of green cloth gathering at the cloth
+// beam, and a soft retting shimmer — the Green Terraces' Refiner, kin to the kilns.
+function drawLoom(R: Put): void {
+  const wood = B_PAL.timber, woodHi = B_PAL.timberHi, woodD = '#3a2c1d';
+  const grnD = '#2f7a3d', grn = '#4a9e52', grn2 = '#7cc96f', core = '#c8f0b8';
+  // ground slab
+  R(2, 43, 28, 5, B_OUT); bStones(R, 3, 44, 26, 3, true);
+  // a faint rising retting shimmer
+  R(9, 1, 2, 1, '#9fd08a'); R(11, 0, 2, 1, '#c8f0b8'); R(8, 3, 2, 1, '#7bb069');
+  // two upright posts
+  R(3, 5, 5, 38, B_OUT); R(4, 6, 3, 36, wood); R(4, 6, 1, 36, woodHi);
+  R(24, 5, 5, 38, B_OUT); R(25, 6, 3, 36, wood); R(27, 6, 1, 36, woodD);
+  // top beam + heddle bar
+  R(3, 5, 26, 4, B_OUT); R(4, 6, 24, 2, wood); R(4, 6, 24, 1, woodHi);
+  R(6, 12, 20, 3, B_OUT); R(7, 13, 18, 1, woodHi);
+  // vertical warp threads strung between the beams
+  for (let x = 8; x <= 22; x += 2) { R(x, 9, 1, 30, grn); R(x, 9, 1, 2, grn2); }
+  R(8, 22, 16, 1, grnD); R(8, 30, 16, 1, grnD); // weft passes
+  // a woven bolt of green cloth gathering at the cloth beam
+  R(7, 34, 18, 6, B_OUT); R(8, 35, 16, 4, grn); R(8, 35, 16, 1, grn2); R(9, 37, 14, 1, grnD);
+  R(10, 36, 1, 1, core); R(15, 35, 1, 1, core); R(20, 37, 1, 1, core); // sheen
+  // cloth beam
+  R(6, 40, 20, 3, B_OUT); R(7, 41, 18, 1, woodHi);
+}
+
 // Overgrown-Jungle vine arch (mossy stone + hanging vines)
 const JP = {
   out: '#1c2018', stoneD: '#454b40', stoneM: '#5d6455', stone: '#78806e', stoneL: '#99a189',
@@ -1508,6 +1611,14 @@ function drawStructureIcon(R: Put, C: Clear, kind: StructureArt['kind']): void {
       R(2, 3, 8, 1, '#93a8c9'); // hushsteel rim
       R(4, 5, 4, 6, B_OUT); R(4, 6, 4, 5, '#5a6b85'); R(5, 7, 2, 4, '#93a8c9'); R(5, 8, 1, 2, '#d6e4f5');
       break;
+    case 'loom':
+      // upright timber frame strung with verdant warp threads + a green cloth bolt
+      R(1, 0, 2, 12, B_OUT); R(9, 0, 2, 12, B_OUT); // uprights
+      R(1, 0, 10, 2, B_OUT); R(2, 0, 8, 1, B_PAL.timberHi); // top beam
+      for (let x = 3; x <= 7; x += 2) R(x, 2, 1, 6, '#4a9e52'); // warp threads
+      R(3, 2, 6, 1, '#7cc96f');
+      R(2, 8, 8, 3, B_OUT); R(3, 8, 6, 2, '#4a9e52'); R(3, 8, 6, 1, '#7cc96f'); // cloth bolt
+      break;
   }
 }
 
@@ -1527,6 +1638,7 @@ const STRUCTURE_DRAWERS: Record<StructureArt['kind'], (R: Put, C: Clear) => void
   forge: (R, C) => drawForge(R, C),
   kiln: (R, C) => drawKiln(R, C),
   chime: (R, C) => drawChimeKiln(R, C),
+  loom: (R) => drawLoom(R),
 };
 
 /**
@@ -1561,6 +1673,7 @@ export function itemIcon(id: ItemId): string {
     FORGE_ART[id as keyof typeof FORGE_ART] ??
     KILN_ART[id as keyof typeof KILN_ART] ??
     CHIME_KILN_ART[id as keyof typeof CHIME_KILN_ART] ??
+    VERDANT_LOOM_ART[id as keyof typeof VERDANT_LOOM_ART] ??
     RELIQUARY_ART[id as keyof typeof RELIQUARY_ART];
   let url = '';
   if (grid) {

@@ -3,7 +3,7 @@ import { getLang } from '../i18n';
 import type { Inventory } from '../backend/types';
 import type { ResourceId, ToolId } from './items';
 
-export type NodeTypeId = 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed' | 'echo_crystal_seam';
+export type NodeTypeId = 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed' | 'echo_crystal_seam' | 'wildgrain_bed';
 
 export interface NodeType {
   id: NodeTypeId;
@@ -136,6 +136,19 @@ const BASE_NODE_TYPES: Record<NodeTypeId, NodeType> = {
     regrowMs: regrow(150_000),
     blocks: false,
   },
+  // the Verdant Warden's own Node (ADR-0017 rung 3): a hillside bed of wildgrain
+  // in the Green Terraces — the Realm's basic Resource, reaped free bare-handed, a
+  // machete halves the work. Cultivation (content/cultivation.ts, T7.2) gates its
+  // ripe window client-side; a Verdant Loom rets the wildgrain into verdant fibre.
+  wildgrain_bed: {
+    id: 'wildgrain_bed',
+    name: 'Wildgrain Bed',
+    maxHp: 3,
+    yield: { wildgrain: 2 },
+    bonusTool: 'machete',
+    regrowMs: regrow(150_000),
+    blocks: false,
+  },
 };
 
 /** German display names for the Resource Nodes (all other fields stay shared) */
@@ -147,8 +160,9 @@ const NODE_NAMES_DE: Record<NodeTypeId, string> = {
   hardwood_tree: 'Uralter Hartholzbaum',
   obsidian_rock: 'Obsidianfels',
   fishing_spot: 'Angelstelle',
-  salt_reed_bed: 'Salzried-Bett',
+  salt_reed_bed: 'Salzried-Bank',
   echo_crystal_seam: 'Echokristall-Ader',
+  wildgrain_bed: 'Wildkorn-Bank',
 };
 
 export const NODE_TYPES: Record<NodeTypeId, NodeType> =

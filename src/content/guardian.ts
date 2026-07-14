@@ -500,6 +500,93 @@ export function makeEchoWaveTiles(w: number, h: number, seed: number): WardenKit
   };
 }
 
+/**
+ * The Verdant Warden's slam families (ADR-0017 rung 3): the Green Terraces' own
+ * geometry — CULTIVATION, not water or sound. Three growth verbs: a branching
+ * vine that CREEPS up from the soil edge and forks as it spreads; diagonal
+ * terraced FURROWS that march across the hillside leaving planted lanes; and a
+ * radial BLOSSOM whose petals open outward from a safe seed-core, filling angular
+ * wedges (not concentric rings). Deliberately distinct from the Mire's horizontal
+ * bands/columns/comb and the Echo's expanding rings, while reusing the same
+ * telegraph → slam → Eye-Window rhythm. Each wave leaves dodgeable soil. Pure
+ * f(index) — every tile recomputed from the seeded PRNG, no state.
+ */
+export function makeVerdantWaveTiles(w: number, h: number, seed: number): WardenKit['waveTiles'] {
+  return (index: number, density: number): boolean[] => {
+    const grid = new Array<boolean>(w * h).fill(false);
+    const rng = mulberry32(seed ^ (index * 2654435761));
+    const set = (x: number, y: number) => {
+      if (x >= 0 && y >= 0 && x < w && y < h) grid[y * w + x] = true;
+    };
+    const family = index % 3;
+    if (family === 0) {
+      // creeping growth: 1–2 vines climb from the soil edge (bottom row), each
+      // tip advancing one row up with a horizontal drift and occasionally forking;
+      // the negative space between the branches is the safe ground
+      let tips: { x: number; y: number }[] = [];
+      const roots = 1 + Math.floor(rng() * 2);
+      for (let r = 0; r < roots; r++) tips.push({ x: 1 + Math.floor(rng() * (w - 2)), y: h - 1 });
+      let steps = 0;
+      while (tips.length > 0 && steps < h * 2) {
+        const next: { x: number; y: number }[] = [];
+        for (const t of tips) {
+          set(t.x, t.y);
+          if (t.y <= 0) continue;
+          const drift = Math.floor(rng() * 3) - 1; // -1, 0, +1
+          const nx = Math.max(0, Math.min(w - 1, t.x + drift));
+          next.push({ x: nx, y: t.y - 1 });
+          // occasional fork into a second climbing tip (capped so it stays sparse)
+          if (rng() < 0.22 && next.length < 8) {
+            const fx = Math.max(0, Math.min(w - 1, t.x + (rng() < 0.5 ? -1 : 1)));
+            next.push({ x: fx, y: t.y - 1 });
+          }
+        }
+        tips = next;
+        steps++;
+      }
+    } else if (family === 1) {
+      // terraced furrows: 2-wide diagonal planted rows march across the hillside,
+      // leaving 2-wide diagonal walking lanes between them (period 4, phase-shifted)
+      const period = 4;
+      const phase = Math.floor(rng() * period);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if ((x + y + phase) % period < 2) set(x, y);
+        }
+      }
+    } else {
+      // blossom: petals open outward from a safe seed-core at centre, filling
+      // angular WEDGES (not full rings); the gaps between petals — and the core —
+      // stay safe. A per-wave twist rotates which wedges are hot.
+      const cx = w / 2 - 0.5;
+      const cy = h / 2 - 0.5;
+      const petals = 5;
+      const twist = rng() * Math.PI * 2;
+      const coreR = 2.2;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          if (Math.hypot(dx, dy) < coreR) continue; // safe seed-core
+          const ang = Math.atan2(dy, dx) + twist;
+          if (Math.cos(petals * ang) > 0.2) set(x, y);
+        }
+      }
+    }
+    // fury densification: extra 2x2 seed-pod bursts on top of the base family
+    const extra = Math.round((density - 1) * 5);
+    for (let b = 0; b < extra; b++) {
+      const x = Math.floor(rng() * (w - 1));
+      const y = Math.floor(rng() * (h - 1));
+      set(x, y);
+      set(x + 1, y);
+      set(x, y + 1);
+      set(x + 1, y + 1);
+    }
+    return grid;
+  };
+}
+
 /** danger tiles of the kit's slam wave `index`, in arena-local coordinates */
 export function waveTiles(index: number, density = 1, kit: WardenKit = GUARDIAN_KIT): boolean[] {
   return kit.waveTiles(index, density);

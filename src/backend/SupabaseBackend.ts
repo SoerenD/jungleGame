@@ -5,6 +5,7 @@ import {
   DEV_FIGHT,
   DEV_FIGHT_HP,
   DEV_WARDEN_FIGHT,
+  DEV_VERDANT_FIGHT,
   DORMANT_TIMEOUT_MS,
   EXHAUSTION_KNOCKDOWNS,
   GUARDIAN_AWAKE_MS,
@@ -1310,7 +1311,7 @@ export class SupabaseBackend implements Backend {
     let eyeOpen = true;
     if (engaging) {
       roster = this.playersInArena(f.warden);
-      maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * Math.max(1, roster.length);
+      maxHp = DEV_FIGHT || DEV_WARDEN_FIGHT || DEV_VERDANT_FIGHT ? DEV_FIGHT_HP : HP_PER_HEAD * Math.max(1, roster.length);
     } else {
       // the Eye Window of the ACTIVE fight's kit (ADR-0017)
       eyeOpen = eyeOpenWithin(Date.now() - (f.engagedAt as number), GUARDIAN_AWAKE_MS, ADJUDICATION_SLACK_MS, kitOf(f.warden));
@@ -1506,6 +1507,22 @@ export class SupabaseBackend implements Backend {
       p_who: this.me,
       p_cost: { cooked_meat: 1 },
       p_output: 'cooked_meat',
+      p_count: 0,
+      p_requires_tool: null,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: 'NOTHING_TO_EAT' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, inventory: { ...this.inv }, buffMs: SPEED_BUFF_MS };
+  }
+
+  async eatGrasweaveRation(): Promise<EatResult> {
+    // consume 1 grasweave_ration through the generic craft RPC (count 0 output = a
+    // pure consume, exactly like eatCookedMeat) — the +20% move buff is applied
+    // client-side (ADR-0001), so NO new RPC/migration is needed (ADR-0017 rung 3).
+    const res = await this.rpc<any>('jw_craft', {
+      p_who: this.me,
+      p_cost: { grasweave_ration: 1 },
+      p_output: 'grasweave_ration',
       p_count: 0,
       p_requires_tool: null,
     });

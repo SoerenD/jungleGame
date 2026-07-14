@@ -15,6 +15,7 @@ import {
   LUNGE_ZONE,
   makeEchoWaveTiles,
   makeMireWaveTiles,
+  makeVerdantWaveTiles,
   MELEE_RING_HOT_FROM,
   MELEE_RING_MAX,
   MELEE_RING_MIN,
@@ -131,6 +132,39 @@ export const REVERB_KIT: WardenKit = {
   engageReturnMs: 560,
 };
 
+/**
+ * The Verdant Warden's fight kit (ADR-0017 rung 3, the final rung) — its OWN
+ * authored schedule on the Green Terraces' CULTIVATION geometry (creeping vine
+ * fronts + diagonal terraced furrows + a radial petal blossom, makeVerdantWaveTiles),
+ * a shade faster and denser than the Echo so rung 3 reads as the hardest realm-
+ * opener dance (still gentler than the Reverberant side-boss). Same arena
+ * dimensions as the Guardian's court; its visual identity (verdant green tints +
+ * the verdant-warden sheet) lives scene-side in KIT_ART.
+ * PURE DATA + PURE FUNCTIONS — node-importable, no browser globals, no ../config.
+ */
+const VERDANT_PHASES: FuryPhase[] = [
+  { index: 0, name: 'calm', wavePeriodMs: 4_200, telegraphMs: 1_450, slamMs: 800, eyeMs: 2_000, density: 1.2, lungeEvery: 4 },
+  { index: 1, name: 'restless', wavePeriodMs: 3_500, telegraphMs: 1_250, slamMs: 800, eyeMs: 1_600, density: 1.55, lungeEvery: 3 },
+  { index: 2, name: 'fury', wavePeriodMs: 2_900, telegraphMs: 950, slamMs: 800, eyeMs: 1_200, density: 2.0, lungeEvery: 3 },
+];
+
+export const VERDANT_KIT: WardenKit = {
+  id: 'verdant',
+  arenaW: ARENA_W,
+  arenaH: ARENA_H,
+  phases: VERDANT_PHASES,
+  furyThresholds: [0.4, 0.75],
+  waveTiles: makeVerdantWaveTiles(ARENA_W, ARENA_H, 0x6a09e667),
+  lungeSeed: 0xbb67ae85,
+  lungeZone: LUNGE_ZONE,
+  meleeRingMin: MELEE_RING_MIN,
+  meleeRingMax: MELEE_RING_MAX,
+  meleeRingHotFrom: MELEE_RING_HOT_FROM,
+  lungeWindupFrac: 0.35,
+  engageHoldMs: 220,
+  engageReturnMs: 560,
+};
+
 /** the ladder's rungs above the Guardian — rungs 2/3 land with T6/T7 */
 export const WARDENS: Record<string, WardenDef> = {
   mire: {
@@ -163,6 +197,17 @@ export const WARDENS: Record<string, WardenDef> = {
     gateKey: 'hushdark_key',
     realm: '',
     drops: {},
+  },
+  verdant: {
+    id: 'verdant',
+    kit: VERDANT_KIT,
+    totem: 'verdant_totem',
+    gateKey: 'terrace_key',
+    realm: 'green_terraces',
+    // participation rule (≥1 hit → full set): the gate key ALONE — like the Echo
+    // Warden, the Verdant Warden drops no weapon (its Realm reward is the
+    // Cultivation mechanic + the verdant_cuirass crafted from wildgrain, not a blade)
+    drops: { terrace_key: 1 },
   },
 };
 

@@ -736,6 +736,12 @@ export interface Backend {
    * NOT a new buff). Reuses the generic craft path server-side (no new RPC).
    */
   eatCookedMeat(): Promise<EatResult>;
+  /**
+   * consume one Grasweave Ration for the SAME move buff (ADR-0017 rung 3 — the
+   * repeatable wildgrain/verdant-fibre sink, NOT a new buff). Reuses the generic
+   * craft path server-side (no new RPC), exactly like eatCookedMeat.
+   */
+  eatGrasweaveRation(): Promise<EatResult>;
   /** remember that this Player has seen the intro story */
   markIntroSeen(): Promise<void>;
   /** tick one Journey objective for this Player (idempotent) */

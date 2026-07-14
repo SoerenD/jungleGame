@@ -91,14 +91,40 @@ export interface HushdarkProgress {
 
 export const HUSHDARK_QUEST_STEPS: { id: string; label: string; done: (p: HushdarkProgress) => boolean }[] = [
   { id: 'echo_offering', label: pick('Complete the Offering at the Cavern Mouth altar', 'Die Opfergabe am Altar des Höhlenschlunds vollenden'), done: (p) => !!p.wardens?.echo?.altar.broken },
-  { id: 'best_echo', label: pick('Defeat the Echo Warden — earn the Hushdark Key', 'Den Echowächter bezwingen — Stilldunkel-Schlüssel verdienen'), done: (p) => (p.inventory.hushdark_key ?? 0) > 0 },
-  { id: 'open_hushdark_gate', label: pick('Open the gate to the Hushdark', 'Das Tor zum Stilldunkel öffnen'), done: (p) => !!p.wardens?.echo?.gateOpen },
-  { id: 'refine_hushsteel', label: pick('Ring echo crystal into hushsteel at a Chime Kiln', 'Echokristall im Klang-Ofen zu Stillstahl läutern'), done: (p) => (p.inventory.hushsteel ?? 0) > 0 },
-  { id: 'craft_helm', label: pick('Craft the Hushsteel Helm', 'Den Stillstahl-Helm herstellen'), done: (p) => (p.inventory.hushsteel_helm ?? 0) > 0 },
+  { id: 'best_echo', label: pick('Defeat the Echo Warden — earn the Hushdark Key', 'Den Echowächter bezwingen — Schlüssel zur Grabesstille verdienen'), done: (p) => (p.inventory.hushdark_key ?? 0) > 0 },
+  { id: 'open_hushdark_gate', label: pick('Open the gate to the Hushdark', 'Das Tor zur Grabesstille öffnen'), done: (p) => !!p.wardens?.echo?.gateOpen },
+  { id: 'refine_hushsteel', label: pick('Ring echo crystal into hushsteel at a Chime Kiln', 'Echokristall im Klang-Ofen zu Klangstahl läutern'), done: (p) => (p.inventory.hushsteel ?? 0) > 0 },
+  { id: 'craft_helm', label: pick('Craft the Hushsteel Helm', 'Den Klangstahl-Helm herstellen'), done: (p) => (p.inventory.hushsteel_helm ?? 0) > 0 },
 ];
 
 export function hushdarkQuestComplete(p: HushdarkProgress): boolean {
   return HUSHDARK_QUEST_STEPS.every((s) => s.done(p));
+}
+
+/**
+ * The Terrace quest ("The Green Terraces", ADR-0017 rung 3, the final rung): the
+ * arc from the terraced-hillside altar to the Verdant-woven Cuirass. Same shape as
+ * the Mire and Hushdark quests — every step auto-ticks from the Warden altar/gate
+ * flags + the inventory (no new persistence): the Key to the Green Terraces proves
+ * the Warden was bested, a verdant fibre proves the Verdant Loom ran, the Cuirass
+ * proves the chain closed.
+ */
+export interface TerraceProgress {
+  inventory: Inventory;
+  /** the per-Warden altar/gate progress (backend `wardens` snapshot) */
+  wardens: Record<string, WardenWorldState> | null;
+}
+
+export const TERRACE_QUEST_STEPS: { id: string; label: string; done: (p: TerraceProgress) => boolean }[] = [
+  { id: 'verdant_offering', label: pick('Complete the Offering at the terraced-hillside altar', 'Die Opfergabe am Altar am terrassierten Hang vollenden'), done: (p) => !!p.wardens?.verdant?.altar.broken },
+  { id: 'best_verdant', label: pick('Defeat the Verdant Warden — earn the Key to the Green Terraces', 'Den Grünwächter bezwingen — Schlüssel zu den Grünen Terrassen verdienen'), done: (p) => (p.inventory.terrace_key ?? 0) > 0 },
+  { id: 'open_terrace_gate', label: pick('Open the gate to the Green Terraces', 'Das Tor zu den Grünen Terrassen öffnen'), done: (p) => !!p.wardens?.verdant?.gateOpen },
+  { id: 'refine_verdant_fibre', label: pick('Ret wildgrain into verdant fibre at a Verdant Loom', 'Wildkorn am Grünwebstuhl zu Grünfaser rösten'), done: (p) => (p.inventory.verdant_fibre ?? 0) > 0 },
+  { id: 'craft_cuirass', label: pick('Craft the Verdant-woven Cuirass', 'Den Grüngewebten Brustpanzer herstellen'), done: (p) => (p.inventory.verdant_cuirass ?? 0) > 0 },
+];
+
+export function terraceQuestComplete(p: TerraceProgress): boolean {
+  return TERRACE_QUEST_STEPS.every((s) => s.done(p));
 }
 
 export function hintRetired(j: JourneyState, hint: HintId): boolean {

@@ -97,6 +97,15 @@ const pick2 = <T>(arr: T[]): T => arr[Math.floor(rng2() * arr.length)];
 // same count as the void cliff it replaces), keeping the Mire district byte-stable.
 const rng3 = mulberry32(2027);
 const rand3 = (min: number, max: number) => min + rng3() * (max - min);
+// the Green Terraces (ADR-0017 rung 3) draw from a FOURTH stream so they perturb
+// NONE of the pinned map (rng), the Sunken Mire (rng2) or the Hushdark (rng3). The
+// district uses NO decor AND NO grass — grass would fire the appended-space decor
+// loop's rng2 draws, and decor would add a tile-variant pick — either of which
+// would shift the SHARED pick2 sequence the Mire/Hushdark tile variants ride. With
+// neither, every Verdant tile still costs exactly ONE pick2 (same as the void cliff
+// it replaces), so the rng2 sequence stays byte-for-byte unchanged.
+const rng4 = mulberry32(3037);
+const rand4 = (min: number, max: number) => min + rng4() * (max - min);
 
 // ---------------------------------------------------------------- grid
 type Ground =
@@ -359,6 +368,7 @@ const zones = [
   // preserved. Deliberately NOT dangerous: predators never spawn in a Realm.
   { name: 'The Sunken Mire', x: 100, y: 300, w: 108, h: 72, dangerous: false }, // rung 1 Realm (T2 stub; T5 fills it in)
   { name: 'The Hushdark', x: 16, y: 300, w: 80, h: 72, dangerous: false }, // rung 2 Realm (ADR-0017; T6)
+  { name: 'The Green Terraces', x: 220, y: 300, w: 120, h: 72, dangerous: false }, // rung 3 Realm (ADR-0017; T7)
 ];
 
 function zoneAt(x: number, y: number): string {
@@ -371,7 +381,7 @@ function zoneAt(x: number, y: number): string {
 // ---------------------------------------------------------------- resource nodes + foliage
 interface NodeOut {
   id: string;
-  type: 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed' | 'echo_crystal_seam';
+  type: 'tree' | 'rock' | 'fruit_bush' | 'fiber_vine' | 'hardwood_tree' | 'obsidian_rock' | 'fishing_spot' | 'salt_reed_bed' | 'echo_crystal_seam' | 'wildgrain_bed';
   tx: number;
   ty: number;
 }
@@ -410,6 +420,23 @@ const inEchoArenaOuter = (x: number, y: number) =>
   x >= ECHO_ARENA.x - 1 && x <= ECHO_ARENA.x + ECHO_ARENA.w && y >= ECHO_ARENA.y - 1 && y <= ECHO_ARENA.y + ECHO_ARENA.h;
 const isEchoMonument = (x: number, y: number) =>
   (x === ECHO_MONUMENT.tx || x === ECHO_MONUMENT.tx + 1) && y === ECHO_MONUMENT.ty;
+
+// ---- ADR-0017 rung 3: the Verdant Warden's arena in the clear south-east frontier
+// grass — below the Overgrown Temple, east of the Mangrove Coast, well clear of
+// every other feature. It MUST live in the World (the fight drops terrace_key, the
+// key opens the gate, the gate is the only way into the district), so it follows
+// the same LATE, RNG-FREE carve discipline as the Mire and Echo arenas: a cliff-
+// walled stone court with a south Ward gap. Its green hillside identity is supplied
+// scene-side (KIT_ART + ambience veil). The Green Terraces it gates lie south (y>=300).
+const VERDANT_ARENA = { x: 268, y: 250, w: ARENA_W, h: ARENA_H };
+const VERDANT_HOME = { tx: VERDANT_ARENA.x + Math.floor(ARENA_W / 2) - 1, ty: VERDANT_ARENA.y + 1 }; // 3x3, top-center
+const VERDANT_SEAL_GATE = [VERDANT_ARENA.x + 7, VERDANT_ARENA.x + 8, VERDANT_ARENA.x + 9].map((tx) => ({ tx, ty: VERDANT_ARENA.y + VERDANT_ARENA.h })); // south Ward gap
+const VERDANT_ALTAR = { tx: VERDANT_ARENA.x + 7, ty: VERDANT_ARENA.y + 10 }; // inside near the gate
+const VERDANT_MONUMENT = { tx: VERDANT_ARENA.x + 7, ty: VERDANT_ARENA.y + VERDANT_ARENA.h + 2 }; // 2 tiles, outside the gate
+const inVerdantArenaOuter = (x: number, y: number) =>
+  x >= VERDANT_ARENA.x - 1 && x <= VERDANT_ARENA.x + VERDANT_ARENA.w && y >= VERDANT_ARENA.y - 1 && y <= VERDANT_ARENA.y + VERDANT_ARENA.h;
+const isVerdantMonument = (x: number, y: number) =>
+  (x === VERDANT_MONUMENT.tx || x === VERDANT_MONUMENT.tx + 1) && y === VERDANT_MONUMENT.ty;
 
 const nodes: NodeOut[] = [];
 const foliage: { kind: string; tx: number; ty: number }[] = [];
@@ -1126,6 +1153,83 @@ function findGateSpot(cx: number, cy: number, maxR = 10): { tx: number; ty: numb
   });
 }
 
+// ---- rung 3: The Green Terraces, appended east of the Sunken Mire in the far
+// south. Marsh-terraced hillside paddies of wildgrain: a swamp-green field stepped
+// by dry earthen embankments, fresh irrigation channels winding between them, a
+// paved gate landing at the north edge. Built ONLY from existing tiles and its OWN
+// fourth RNG stream (rng4), with NO decor and NO grass, so neither the pinned map
+// nor the already-shipped Mire/Hushdark districts shifts by a byte (each tile still
+// costs exactly one shared pick2, same as the void cliff it replaces). Its green
+// identity is carried scene-side by the ambience veil + the Zone name.
+{
+  const rect = { x: 220, y: 300, w: 120, h: 72 }; // keep in sync with its Zone rect above
+  // interior: a marsh-field base with a 1-tile cliff ring (the void supplies it)
+  fillRect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2, 'swamp');
+
+  // stepped terraces: dry earthen embankment walls band the hillside east–west,
+  // reading as the retaining steps between the flooded paddies (RNG-free)
+  for (const by of [316, 330, 344, 358]) {
+    fillRect(rect.x + 3, by, rect.w - 6, 2, 'mire_peat');
+  }
+
+  // the gate landing — a dry paved threshold at the north edge, painted before the
+  // channels so the arch approach can never flood
+  const dGate = { tx: 280, ty: 303 };
+  fillRect(dGate.tx - 3, dGate.ty - 1, 7, 5, 'mire_peat');
+  fillRect(dGate.tx - 2, dGate.ty, 5, 3, 'sand');
+
+  // fresh irrigation channels winding along the paddy steps (rng4 stream only),
+  // kept to the central and southern field so the northern grove stays dry. The
+  // `over:['swamp']` guard means water never cuts the dry embankments or landing.
+  let cx = 236;
+  let cy = 322;
+  for (let i = 0; i < 16; i++) {
+    cx += rand4(1.6, 3.4);
+    cy += rand4(-1.5, 2.2);
+    fillCircle(cx, cy, rand4(1.3, 2.4), 'water', ['swamp']);
+  }
+  cx = 322;
+  cy = 338;
+  for (let i = 0; i < 16; i++) {
+    cx -= rand4(1.6, 3.4);
+    cy += rand4(-2, 1.8);
+    fillCircle(cx, cy, rand4(1.3, 2.4), 'water', ['swamp']);
+  }
+  // still ponds scattered across the lower fields
+  for (let i = 0; i < 12; i++) {
+    fillCircle(rand4(rect.x + 10, rect.x + rect.w - 10), rand4(340, rect.y + rect.h - 8), rand4(1.1, 2.2), 'water', ['swamp']);
+  }
+
+  // the Green Terraces' OWN Resource: wildgrain beds crowd the marsh paddies
+  // between the embankments (ADR-0017 rung 3 chain — the Verdant Loom rets them
+  // into verdant fibre; Cultivation gates their ripe window client-side). Placed
+  // RNG-FREE after the Hushdark's nodes, so every pre-existing node id is stable.
+  for (const [x, y] of [
+    [228, 320], [246, 324], [266, 322], [288, 326], [308, 320], [328, 324],
+    [236, 338], [258, 340], [282, 336], [304, 342], [326, 338],
+    [248, 352], [274, 354], [300, 350], [322, 356], [290, 366],
+  ] as [number, number][]) {
+    placeNodeNear('wildgrain_bed', x, y);
+  }
+  // a hedgerow grove on the dry northern band for wood, and terrace boulders for
+  // stone — the familiar secondary pulls, both accepted off-grass (tree on swamp
+  // clear of the channels; rock on the mire_peat embankments)
+  for (const [x, y] of [[230, 308], [252, 310], [276, 308], [300, 309], [324, 311]] as [number, number][]) {
+    placeNodeNear('tree', x, y);
+  }
+  for (const [x, y] of [[240, 316], [286, 330], [312, 344], [258, 358]] as [number, number][]) {
+    placeNodeNear('rock', x, y);
+  }
+
+  const worldGate = findGateSpot(277, 292); // SE frontier, just north of the district
+  districts.push({
+    id: 'green_terraces',
+    name: 'The Green Terraces',
+    rect,
+    gate: { worldTx: worldGate.tx, worldTy: worldGate.ty, districtTx: dGate.tx, districtTy: dGate.ty },
+  });
+}
+
 // decor: flowers and small plants on open grass. Loop 1 is the pinned 300×300
 // map in its exact old row-major order (same main-stream RNG draws); loop 2 is
 // the appended district space, drawing from the district stream.
@@ -1182,6 +1286,24 @@ for (const m of [ECHO_MONUMENT, { tx: ECHO_MONUMENT.tx + 1, ty: ECHO_MONUMENT.ty
   if (g === 'water' || g === 'mire_water' || g === 'cliff') ground[m.ty][m.tx] = 'sand';
 }
 
+// ---- ADR-0017 rung 3: carve the Verdant Warden's arena into the SE frontier, the
+// same LATE + RNG-FREE discipline as the Mire and Echo arenas: a cliff wall ring, a
+// stone floor court, the south Ward gap. Ground writes only — footprint decor is
+// dropped from decorGid below the tile-variant picks (picks still made, count
+// preserved), and footprint nodes are evicted by id via keptNodes.
+for (let y = VERDANT_ARENA.y - 1; y <= VERDANT_ARENA.y + VERDANT_ARENA.h; y++) {
+  for (let x = VERDANT_ARENA.x - 1; x <= VERDANT_ARENA.x + VERDANT_ARENA.w; x++) {
+    if (!inBounds(x, y)) continue;
+    const isWall = x === VERDANT_ARENA.x - 1 || x === VERDANT_ARENA.x + VERDANT_ARENA.w || y === VERDANT_ARENA.y - 1 || y === VERDANT_ARENA.y + VERDANT_ARENA.h;
+    ground[y][x] = isWall ? 'cliff' : 'stone_floor';
+  }
+}
+for (const g of VERDANT_SEAL_GATE) ground[g.ty][g.tx] = 'stone_floor'; // the entrance gap the Ward blocks
+for (const m of [VERDANT_MONUMENT, { tx: VERDANT_MONUMENT.tx + 1, ty: VERDANT_MONUMENT.ty }]) {
+  const g = ground[m.ty][m.tx];
+  if (g === 'water' || g === 'mire_water' || g === 'cliff') ground[m.ty][m.tx] = 'sand';
+}
+
 // ---------------------------------------------------------------- secrets
 // Placed AFTER node generation on purpose: nodes standing on these tiles are
 // evicted (already-assigned node ids stay stable for existing saves).
@@ -1196,6 +1318,7 @@ const tablets = [
   { id: 't7', tx: 155, ty: 304 }, // ADR-0017 rung 1: Tablet of the Tide, on the Sunken Mire's gate landing
   { id: 't8', tx: 48, ty: 306 }, // ADR-0017 rung 2: Tablet of the Hushdark, inside the Hushdark district
   { id: 't9', tx: 38, ty: 350 }, // ADR-0017 rung 2: by the memorial, south of the Reverberant's court
+  { id: 't10', tx: 270, ty: 306 }, // ADR-0017 rung 3: Tablet of the Season, on the Green Terraces' north band
 ];
 const altar = { tx: 35, ty: 75 }; // watches the hidden grove entrance
 const gate = [73, 74, 75, 76, 77].map((y) => ({ tx: 32, ty: y }));
@@ -1241,7 +1364,9 @@ const keptNodes = nodes.filter(
     !inMireArenaOuter(n.tx, n.ty) &&
     !isMireMonument(n.tx, n.ty) &&
     !inEchoArenaOuter(n.tx, n.ty) &&
-    !isEchoMonument(n.tx, n.ty),
+    !isEchoMonument(n.tx, n.ty) &&
+    !inVerdantArenaOuter(n.tx, n.ty) &&
+    !isVerdantMonument(n.tx, n.ty),
 );
 
 // ---------------------------------------------------------------- outputs
@@ -1268,6 +1393,12 @@ for (let dy = 0; dy < 3; dy++) {
 for (let dy = 0; dy < 3; dy++) {
   for (let dx = 0; dx < 3; dx++) {
     blocked[(ECHO_HOME.ty + dy) * W + (ECHO_HOME.tx + dx)] = 2;
+  }
+}
+// the Verdant Warden's 3x3 resting place, likewise solid (ADR-0017 rung 3)
+for (let dy = 0; dy < 3; dy++) {
+  for (let dx = 0; dx < 3; dx++) {
+    blocked[(VERDANT_HOME.ty + dy) * W + (VERDANT_HOME.tx + dx)] = 2;
   }
 }
 
@@ -1303,6 +1434,12 @@ for (let y = MIRE_ARENA.y - 1; y <= MIRE_ARENA.y + MIRE_ARENA.h; y++) {
 // ADR-0017 rung 2: same discard for the Echo arena footprint
 for (let y = ECHO_ARENA.y - 1; y <= ECHO_ARENA.y + ECHO_ARENA.h; y++) {
   for (let x = ECHO_ARENA.x - 1; x <= ECHO_ARENA.x + ECHO_ARENA.w; x++) {
+    if (inBounds(x, y)) decorGid[y][x] = 0;
+  }
+}
+// ADR-0017 rung 3: same discard for the Verdant arena footprint
+for (let y = VERDANT_ARENA.y - 1; y <= VERDANT_ARENA.y + VERDANT_ARENA.h; y++) {
+  for (let x = VERDANT_ARENA.x - 1; x <= VERDANT_ARENA.x + VERDANT_ARENA.w; x++) {
     if (inBounds(x, y)) decorGid[y][x] = 0;
   }
 }
@@ -1391,6 +1528,13 @@ const worldData = {
       altar: ECHO_ALTAR,
       monument: ECHO_MONUMENT,
       sealGate: ECHO_SEAL_GATE,
+    },
+    verdant: {
+      arena: VERDANT_ARENA,
+      home: VERDANT_HOME,
+      altar: VERDANT_ALTAR,
+      monument: VERDANT_MONUMENT,
+      sealGate: VERDANT_SEAL_GATE,
     },
     // the Reverberant (ADR-0017 rung 2): summoned by SOLVING the pedestal puzzle,
     // not an altar — so no altar/monument/Ward. Its arena is the open puzzle court.

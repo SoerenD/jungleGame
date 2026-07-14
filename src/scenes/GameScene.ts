@@ -37,6 +37,7 @@ import type {
 } from '../backend/types';
 import { hintRetired, journeyComplete, type HintId } from '../content/journey';
 import { tideExposedWithin, tideFloods, tideHeight } from '../content/tide';
+import { msToNextRipe, wildgrainRipeWithin, wildgrainStage, type WildgrainStage } from '../content/cultivation';
 import {
   DAY_CYCLE_MS,
   DEV_DEEP,
@@ -74,6 +75,9 @@ import {
   TIDE_PERIOD_MS,
   WADE_SLOW_FACTOR,
   TIDE_EXPOSURE_SLACK_MS,
+  VERDANT_LOOM,
+  CULTIVATION_PERIOD_MS,
+  CULTIVATION_SLACK_MS,
   ECHO_PERIOD_MS,
   ECHO_PEDESTAL_RADIUS,
   ECHO_MIN_MOVE_TILES,
@@ -148,6 +152,7 @@ import {
   FORGE_ART,
   KILN_ART,
   CHIME_KILN_ART,
+  VERDANT_LOOM_ART,
   RELIQUARY_ART,
   inventoryCapacity,
   inVillageZone,
@@ -420,6 +425,22 @@ const KIT_ART: Record<string, KitArt> = {
   echo: { spriteKey: 'echo_warden', idle: 'echo-idle', eye: 'echo-eye', glowBase: 0x5a6b85, fury: [0x5a6b85, 0x7d8fb0, 0x93a8c9], danger: 0x4a6a9a, slam: 0x6f8fd0, lunge: 0x93a8c9, ring: 0x8fb0e0, eyeTint: 0xbcd0ee, ward: 0xb1c6ea },
   // the Reverberant (the puzzle-summoned deeper foe): the echo sheet, violet echo-light
   reverb: { spriteKey: 'echo_warden', idle: 'echo-idle', eye: 'echo-eye', glowBase: 0x9a7bd0, fury: [0x9a7bd0, 0xb6a0e8, 0xdcccff], danger: 0x7a5ad0, slam: 0x9f7fe0, lunge: 0xc9b0ff, ring: 0xb090f0, eyeTint: 0xecdcff, ward: 0xc9b8ff },
+  // the Verdant Warden's terraced court (ADR-0017 rung 3): warm gold-green telegraphs,
+  // a sunlit-gold eye + Ward — the Green Terraces' ripe-wildgrain signal color
+  verdant: { spriteKey: 'verdant_warden', idle: 'verdant-idle', eye: 'verdant-eye', glowBase: 0x7cc96f, fury: [0x7cc96f, 0xb6d24a, 0xffd24a], danger: 0x6aa83e, slam: 0xd8a83e, lunge: 0xf0c95e, ring: 0x9dc85a, eyeTint: 0xffe89a, ward: 0xcfe8a0 },
+};
+
+/**
+ * ADR-0017 rung 3: a wildgrain bed's clock-derived growth stage → a multiplicative
+ * tint over the golden ripe sprite, so ripeness reads across the field at a glance.
+ * The bed art is drawn RIPE-golden (tools/compose-wildgrain.ts), so `ripe` passes it
+ * through untinted; the growing stages push it green then dim brown.
+ */
+const WILDGRAIN_STAGE_TINT: Record<WildgrainStage, number> = {
+  bare: 0x6b5a3a, // dim, barely-sprouted soil brown
+  sprout: 0x7f9a52, // young olive-green
+  green: 0xa8c46a, // lush unripe green
+  ripe: 0xffffff, // full sunlit gold as drawn — reads harvestable
 };
 
 /** deterministic per-id variance so the forest looks grown, not stamped */
@@ -483,6 +504,7 @@ const CHIP_TINTS: Record<NodeTypeId, number[]> = {
   fishing_spot: [0x66b8e0, 0x9ad4ee, 0x3f86b8],
   salt_reed_bed: [0xb3a76e, 0x8f855a, 0xd8dcd2],
   echo_crystal_seam: [0x93a8c9, 0x5a6b85, 0xd6e4f5],
+  wildgrain_bed: [0xd8a83e, 0xb5882e, 0x86a048],
 };
 /** damage pips: 2px cells above a damaged node — shown only while it was hit
  *  recently, then faded out (the mob HP bar's idea, smaller and quieter) */
@@ -677,6 +699,21 @@ export class GameScene extends Phaser.Scene {
   private echoMonumentPos = { x: 0, y: 0 };
   private echoBroken = false;
   private nearEchoAltar = false;
+  // ---- ADR-0017 rung 3: the Verdant Warden's parallel arena in the Green Terraces
+  // (same dormant-sprite pattern as the Mire/Echo, MP-correct).
+  private verdantSprite?: Phaser.GameObjects.Sprite;
+  private verdantShadow?: Phaser.GameObjects.Image;
+  private verdantGlow?: Phaser.GameObjects.Image;
+  private verdantEyeGlow?: Phaser.GameObjects.Image;
+  private verdantBlockers: Phaser.GameObjects.Rectangle[] = [];
+  private verdantHomeSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private verdantEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
+  private verdantArenaRect: { x: number; y: number; w: number; h: number } | null = null;
+  private verdantSealGate: { tx: number; ty: number }[] = [];
+  private verdantAltarPos = { x: 0, y: 0 };
+  private verdantMonumentPos = { x: 0, y: 0 };
+  private verdantBroken = false;
+  private nearVerdantAltar = false;
   // ---- ADR-0017 rung 2: the Reverberant — a puzzle-SUMMONED boss (NOT dormant-
   // visible). Its sprite is pre-built hidden and revealed on summon; it rises in
   // the pedestal court (wardenArenas.reverb) when the 3-pedestal puzzle is solved.
@@ -803,6 +840,8 @@ export class GameScene extends Phaser.Scene {
   private packFullToastAt = 0;
   /** throttle for the tide-submerged reed refusal toast (ADR-0017 rung 1) */
   private tideToastAt = 0;
+  /** throttle for the unripe-wildgrain harvest refusal toast (ADR-0017 rung 3) */
+  private cultivationToastAt = 0;
   private welcomeStonePos = { x: 0, y: 0 };
   private glows: { img: Phaser.GameObjects.Image; base: number; x: number; y: number }[] = [];
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
@@ -821,6 +860,9 @@ export class GameScene extends Phaser.Scene {
   /** ADR-0017 rung 2: the Hushdark's cold, muffled dark — a blue-black veil, 0..1 blend */
   private hushVeil!: Phaser.GameObjects.Rectangle;
   private hushAmbience = 0;
+  /** ADR-0017 rung 3: the Green Terraces' warm daylit gold-green wash, 0..1 blend */
+  private verdantVeil!: Phaser.GameObjects.Rectangle;
+  private verdantAmbience = 0;
   private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leavesActive = false;
@@ -1160,6 +1202,71 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    // ---- ADR-0017 rung 3: the Verdant Warden's court in the Green Terraces — a
+    // FOURTH authored arena, its own dormant sprite/altar/monument (MP-correct),
+    // fought through activeBoss() by fight.warden. Byte-for-byte the Echo block, verdant* fields.
+    const wv = this.world.wardenArenas?.verdant;
+    if (wv) {
+      this.verdantArenaRect = wv.arena;
+      this.verdantSealGate = wv.sealGate;
+      {
+        const a = wv.altar;
+        const x = (a.tx + 1) * TILE;
+        const y = (a.ty + 1) * TILE;
+        this.objImage(x, y, 'guardian_altar');
+        this.addBlockerBody(a.tx, a.ty);
+        this.addBlockerBody(a.tx + 1, a.ty);
+        this.addShadow(x, y - 1, 24);
+        this.verdantAltarPos = { x, y };
+      }
+      {
+        const m = wv.monument;
+        const x = (m.tx + 1) * TILE;
+        const y = (m.ty + 1) * TILE;
+        this.objImage(x, y, 'seal_monument');
+        this.addBlockerBody(m.tx, m.ty);
+        this.addBlockerBody(m.tx + 1, m.ty);
+        this.addShadow(x, y - 1, 22);
+        this.verdantMonumentPos = { x, y };
+      }
+      {
+        const g = wv.home;
+        const arena = wv.arena;
+        const art = KIT_ART.verdant;
+        const x = (g.tx + 1.5) * TILE;
+        const y = (g.ty + 3) * TILE;
+        this.verdantHomeSpot = { ax: g.tx + 1 - arena.x, ay: g.ty + 1 - arena.y };
+        const gate = wv.sealGate;
+        const mid = gate[Math.floor(gate.length / 2)] ?? { tx: arena.x + Math.floor(arena.w / 2), ty: arena.y + arena.h - 1 };
+        this.verdantEntranceSpot = {
+          ax: Math.max(0, Math.min(arena.w - 1, mid.tx - arena.x)),
+          ay: Math.max(0, Math.min(arena.h - 1, mid.ty - arena.y)),
+        };
+        this.verdantSprite = this.add.sprite(x, y, art.spriteKey, 0);
+        this.verdantSprite.setOrigin(0.5, 1);
+        this.verdantSprite.setDepth(y);
+        this.verdantShadow = this.addShadow(x, y - 2, 60);
+        for (let dy = 0; dy < 3; dy++) {
+          for (let dx = 0; dx < 3; dx++) this.verdantBlockers.push(this.addBlockerBody(g.tx + dx, g.ty + dy));
+        }
+        this.verdantGlow = this.add
+          .image(x, y - 45, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(art.glowBase)
+          .setScale(2.6)
+          .setAlpha(0)
+          .setDepth(890_001);
+        this.glows.push({ img: this.verdantGlow, base: 0.5, x, y });
+        this.verdantEyeGlow = this.add
+          .image(x, y - 61, 'glow')
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(art.eyeTint)
+          .setScale(1.5)
+          .setAlpha(0)
+          .setDepth(890_002);
+      }
+    }
+
     // ---- ADR-0017 rung 2: the Reverberant — pre-built HIDDEN (no altar/monument;
     // summoned by the puzzle). The sprite/glow/blockers exist so activeBoss('reverb')
     // routes correctly, but stay invisible + disabled until it RISES on summon
@@ -1350,7 +1457,7 @@ export class GameScene extends Phaser.Scene {
 
     // zone tracking + lazy regrowth visuals — both timestamp-derived, no game tick
     this.time.addEvent({ delay: 300, loop: true, callback: () => this.checkZone() });
-    this.time.addEvent({ delay: 600, loop: true, callback: () => this.checkRegrowthVisuals() });
+    this.time.addEvent({ delay: 600, loop: true, callback: () => { this.checkRegrowthVisuals(); this.refreshWildgrainStages(); } });
 
     const startAmbient = () => {
       if (this.cache.audio.exists('ambient')) {
@@ -1382,6 +1489,9 @@ export class GameScene extends Phaser.Scene {
     // the Hushdark's cold, muffled dark (ADR-0017 rung 2): a deep blue-black veil
     // over the district, faded in on gate crossing exactly like the Mire's veil.
     this.hushVeil = this.add.rectangle(0, 0, 10, 10, 0x0a1020).setAlpha(0).setDepth(899_985);
+    // the Green Terraces' warm daylit wash (ADR-0017 rung 3): a soft gold-green tint
+    // over the district — the opposite of the Hushdark's dark, faded in on gate crossing.
+    this.verdantVeil = this.add.rectangle(0, 0, 10, 10, 0x9ac46a).setAlpha(0).setDepth(899_985);
     for (let i = 0; i < 7; i++) {
       this.mirePuffs.push(
         this.add
@@ -1639,7 +1749,7 @@ export class GameScene extends Phaser.Scene {
 
   /** bake a sprite for every Village Building + Wildlife decor from its art spec — no PNGs */
   private bakeVillageTextures(): void {
-    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART, ...KILN_ART, ...CHIME_KILN_ART, ...RELIQUARY_ART })) {
+    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART, ...KILN_ART, ...CHIME_KILN_ART, ...VERDANT_LOOM_ART, ...RELIQUARY_ART })) {
       if (!art) continue;
       const key = `st_${id}`;
       if (this.textures.exists(key)) continue;
@@ -1885,6 +1995,20 @@ export class GameScene extends Phaser.Scene {
         art: KIT_ART.reverb,
       };
     }
+    if (this.activeWarden === 'verdant' && this.verdantSprite && this.verdantArenaRect) {
+      return {
+        sprite: this.verdantSprite,
+        shadow: this.verdantShadow!,
+        glow: this.verdantGlow!,
+        eyeGlow: this.verdantEyeGlow!,
+        blockers: this.verdantBlockers,
+        arena: this.verdantArenaRect,
+        homeSpot: this.verdantHomeSpot,
+        entranceSpot: this.verdantEntranceSpot,
+        sealGate: this.verdantSealGate,
+        art: KIT_ART.verdant,
+      };
+    }
     return {
       sprite: this.guardianSprite,
       shadow: this.guardianShadow,
@@ -1904,6 +2028,7 @@ export class GameScene extends Phaser.Scene {
     if (this.activeWarden === 'mire') this.mireBroken = v;
     else if (this.activeWarden === 'echo') this.echoBroken = v;
     else if (this.activeWarden === 'reverb') this.reverbBroken = v;
+    else if (this.activeWarden === 'verdant') this.verdantBroken = v;
     else this.guardianBroken = v;
   }
 
@@ -2514,6 +2639,15 @@ export class GameScene extends Phaser.Scene {
     return this.wardenAltarAction('echo');
   }
 
+  /** E at the Verdant Warden's altar in the Green Terraces (ADR-0017 rung 3) — same
+   *  generic arc as the Mire's/Echo's, keyed 'verdant'. */
+  private verdantAltarAction(): EAction | null {
+    if (!this.world.wardenArenas?.verdant) return null;
+    const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.verdantAltarPos.x, this.verdantAltarPos.y - 8);
+    if (d > INTERACT_RANGE + 8) return null;
+    return this.wardenAltarAction('verdant');
+  }
+
   private summonAction(): EAction | null {
     const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.guardianAltarPos.x, this.guardianAltarPos.y - 8);
     if (d > INTERACT_RANGE + 8) return null;
@@ -2552,7 +2686,7 @@ export class GameScene extends Phaser.Scene {
     const def = WARDENS[id];
     // float text pops at THIS Warden's altar (the Mire's real altar, not the
     // Guardian's) — ?wardenfight is gone, every Warden has its own altar position
-    const altarPos = id === 'mire' ? this.mireAltarPos : id === 'echo' ? this.echoAltarPos : this.guardianAltarPos;
+    const altarPos = id === 'mire' ? this.mireAltarPos : id === 'echo' ? this.echoAltarPos : id === 'verdant' ? this.verdantAltarPos : this.guardianAltarPos;
     if (this.fight) {
       return { swing: false, run: () => bus.emit('toast', t.toast.fightAlreadyRaging, 'info') };
     }
@@ -3636,8 +3770,14 @@ export class GameScene extends Phaser.Scene {
       });
     });
     bus.on('eat', (id?: ItemId) => {
-      // cooked meat and cooked fish grant the SAME move buff (ADR-0012 — one-buff rule)
-      const eat = id === 'cooked_meat' ? this.backend.eatCookedMeat() : this.backend.eatCookedFish();
+      // cooked meat, cooked fish and the Grasweave Ration grant the SAME move buff
+      // (ADR-0012 — a new ingredient, NOT a new buff; ADR-0017 rung 3 wildgrain sink)
+      const eat =
+        id === 'cooked_meat'
+          ? this.backend.eatCookedMeat()
+          : id === 'grasweave_ration'
+            ? this.backend.eatGrasweaveRation()
+            : this.backend.eatCookedFish();
       void eat.then((res) => {
         if (!res.ok) return;
         this.inventory = res.inventory;
@@ -3788,6 +3928,10 @@ export class GameScene extends Phaser.Scene {
       this.addShadow(x, y - 1, 22);
     } else if (state.type === 'rock') {
       this.addShadow(x, y - 2, 16);
+    } else if (state.type === 'wildgrain_bed' && alive) {
+      // ADR-0017 rung 3: tint the fresh bed to its current growth stage so ripeness
+      // reads immediately on load (the 600ms refresh keeps it current thereafter)
+      sprite.setTint(WILDGRAIN_STAGE_TINT[wildgrainStage(Date.now(), idHash(state.id), CULTIVATION_PERIOD_MS)]);
     }
     let body: Phaser.GameObjects.Rectangle | null = null;
     if (NODE_TYPES[state.type].blocks) {
@@ -3859,6 +4003,25 @@ export class GameScene extends Phaser.Scene {
         const rest = nodeRestScale(view.state);
         this.tweens.add({ targets: view.sprite, scaleX: { from: rest * 0.6, to: rest }, scaleY: { from: rest * 0.6, to: rest }, duration: 250 });
       }
+    }
+  }
+
+  /**
+   * ADR-0017 rung 3: retint every wildgrain bed by its clock-derived growth stage
+   * (bare → sprout → green → ripe golden) so ripeness sweeps the field as a spatial
+   * gradient. A pure f(clock, idHash) — every client reads the identical stage. The
+   * tint is reapplied each tick so it survives the depleted↔alive texture swaps; a
+   * depleted (harvested) bed shows its own stubble sprite untinted.
+   */
+  private refreshWildgrainStages(): void {
+    const now = Date.now();
+    for (const view of this.nodes.values()) {
+      if (view.state.type !== 'wildgrain_bed') continue;
+      if (view.depletedShown) {
+        view.sprite.clearTint();
+        continue;
+      }
+      view.sprite.setTint(WILDGRAIN_STAGE_TINT[wildgrainStage(now, idHash(view.state.id), CULTIVATION_PERIOD_MS)]);
     }
   }
 
@@ -4064,7 +4227,7 @@ export class GameScene extends Phaser.Scene {
         };
       }
     }
-    const special = this.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.echoAltarAction() ?? this.guardianAction();
+    const special = this.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.echoAltarAction() ?? this.verdantAltarAction() ?? this.guardianAction();
     if (special) return special;
     if (Phaser.Math.Distance.Between(px, py, this.altarPos.x, this.altarPos.y - 8) < INTERACT_RANGE + 8) {
       return {
@@ -4154,6 +4317,9 @@ export class GameScene extends Phaser.Scene {
     // ADR-0017 rung 2: the Chime Kiln — the same generic Refiner, echo crystal → hushsteel
     const chime = this.nearbyStructure(['chime_kiln']);
     if (chime) return { swing: false, run: () => this.openRefiner(chime.id, CHIME_KILN, ITEMS.chime_kiln.name) };
+    // ADR-0017 rung 3: the Verdant Loom — the same generic Refiner, wildgrain → verdant fibre
+    const loom = this.nearbyStructure(['verdant_loom']);
+    if (loom) return { swing: false, run: () => this.openRefiner(loom.id, VERDANT_LOOM, ITEMS.verdant_loom.name) };
     // ADR-0017 rung 2: the Echoes — arm a recording at a pedestal / claim an open vault
     const echoE = this.echoAction();
     if (echoE) return echoE;
@@ -4208,6 +4374,12 @@ export class GameScene extends Phaser.Scene {
     if (this.reedSubmerged(view)) {
       return { swing: false, run: () => this.tideSubmergedToast() };
     }
+    // ADR-0017 rung 3: Cultivation gates the wildgrain beds — a bed is reapable
+    // only in its ripe window (validated within ±slack of the clock, the same
+    // reed-exposure idiom). A still-growing bed refuses the swing (swing:false).
+    if (this.wildgrainUnripe(view)) {
+      return { swing: false, run: () => this.wildgrainGrowingToast(view) };
+    }
     // ADR-0013 pack cap, resolved BEFORE the verb: a client-refused swing must
     // not read as one — swing:false skips the cadence stamp, the pose/arc AND
     // the peers' swing echo, so a full pack never mimes chopping to friends.
@@ -4229,6 +4401,25 @@ export class GameScene extends Phaser.Scene {
     if (now - this.tideToastAt > 1500) {
       bus.emit('toast', t.toast.reedSubmerged, 'info');
       this.tideToastAt = now;
+    }
+  }
+
+  /** true when a Cultivation-gated wildgrain bed is still growing (not yet ripe).
+   *  The bed's phase seed is a deterministic hash of its node id (idHash), stable
+   *  per node, so every client derives the identical ripeness (ADR-0001/0002). */
+  private wildgrainUnripe(view: NodeView): boolean {
+    if (view.state.type !== 'wildgrain_bed') return false;
+    return !wildgrainRipeWithin(Date.now(), idHash(view.state.id), CULTIVATION_PERIOD_MS, CULTIVATION_SLACK_MS);
+  }
+
+  /** the still-growing wildgrain refusal toast, throttled so repeats don't spam it;
+   *  shows the "ripens in Ns" countdown when known, else the plain growing hint */
+  private wildgrainGrowingToast(view: NodeView): void {
+    const now = Date.now();
+    if (now - this.cultivationToastAt > 1500) {
+      const ms = msToNextRipe(now, idHash(view.state.id), CULTIVATION_PERIOD_MS);
+      bus.emit('toast', ms > 0 ? t.cultivation.ripensIn(Math.ceil(ms / 1000)) : t.cultivation.bedGrowing, 'info');
+      this.cultivationToastAt = now;
     }
   }
 
@@ -4265,6 +4456,12 @@ export class GameScene extends Phaser.Scene {
     // so keep the net here too — a submerged reed never reaches hitNode
     if (this.reedSubmerged(view)) {
       this.tideSubmergedToast();
+      return;
+    }
+    // cultivation backstop (ADR-0017 rung 3): the ripeness gate is client-side too,
+    // so keep the net here — a still-growing wildgrain bed never reaches hitNode
+    if (this.wildgrainUnripe(view)) {
+      this.wildgrainGrowingToast(view);
       return;
     }
     this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
@@ -5132,6 +5329,14 @@ export class GameScene extends Phaser.Scene {
     if (nearEcho !== this.nearEchoAltar) {
       this.nearEchoAltar = nearEcho;
       bus.emit('warden-altar-near', nearEcho ? 'echo' : null);
+    }
+    // ADR-0017 rung 3: the Verdant Warden's altar Offering-bars panel in the Green Terraces
+    const nearVerdant =
+      !!this.world.wardenArenas?.verdant &&
+      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.verdantAltarPos.x, this.verdantAltarPos.y) < TILE * 6;
+    if (nearVerdant !== this.nearVerdantAltar) {
+      this.nearVerdantAltar = nearVerdant;
+      bus.emit('warden-altar-near', nearVerdant ? 'verdant' : null);
     }
     // the Village Hall shows the tier/pool panel on approach (ADR-0010)
     const hall = this.village.hall;
@@ -6260,6 +6465,7 @@ export class GameScene extends Phaser.Scene {
     this.mireVeil.setAlpha(0);
     this.tideVeil.setAlpha(0);
     this.hushVeil.setAlpha(0);
+    this.verdantVeil.setAlpha(0);
     for (const p of this.mirePuffs) p.setAlpha(0);
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
@@ -7292,6 +7498,14 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(this.hushAmbience * 0.34 * (1 - Math.pow(night, 1.6) * 0.6));
     // the Echoes mechanic runs only inside the Hushdark (recording + shade replay + vaults)
     if (hushTarget || this.hushAmbience > 0.01) this.updateEchoes(time, delta);
+    // ADR-0017 rung 3: the Green Terraces' warm daylit gold-green wash — fades in over
+    // ~a second on gate crossing like the other veils, gentle by day and yielding to night
+    const verdantTarget = this.activeDistrict?.id === 'green_terraces' ? 1 : 0;
+    this.verdantAmbience += (verdantTarget - this.verdantAmbience) * Math.min(1, delta / 450);
+    this.verdantVeil
+      .setPosition(cam.midPoint.x, cam.midPoint.y)
+      .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
+      .setAlpha(this.verdantAmbience * 0.14 * (1 - Math.pow(night, 1.6) * 0.8));
     // v4: light follows only a held Hand Torch (warm orange, dim like a flame)
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)

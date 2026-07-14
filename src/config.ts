@@ -84,6 +84,15 @@ export const CHIME_KILN: RefinerConfig = {
   msPerUnit: FAST_REGROW ? 5_000 : 120_000,
   cap: 10,
 };
+// The Verdant Loom (ADR-0017 rung 3): the Green Terraces' Refiner — wildgrain →
+// verdant-fibre over real time, on the SAME generic kernel (no new RPC). Same
+// duration/cap as the Brine/Chime kilns so the whole rung chain feels of a piece.
+export const VERDANT_LOOM: RefinerConfig = {
+  inputItem: 'wildgrain',
+  outputItem: 'verdant_fibre',
+  msPerUnit: FAST_REGROW ? 5_000 : 120_000,
+  cap: 10,
+};
 
 // ---------------------------------------------------------------- fog of war
 /** exploration is tracked in chunks of this many tiles per side */
@@ -256,6 +265,27 @@ export const ECHO_PEDESTAL_RADIUS = 0.9;
  *  a motionless shade cannot be captured, so it can never trivially hold a pedestal) */
 export const ECHO_MIN_MOVE_TILES = 1.5;
 
+// ---------------------------------------------------------------- Cultivation (ADR-0017 rung 3)
+// The Green Terraces' signature mechanic. Like the Tide it is a pure function of
+// the real clock (no server, no tick — ADR-0001/0002), scoped to the
+// green_terraces district — but where the Tide is one global phase, each
+// wildgrain_bed carries its OWN phase offset (derived from its node id) and runs
+// a bare → sprout → green → ripe growth cycle over CULTIVATION_PERIOD_MS, so
+// ripeness sweeps the field as a spatial gradient. The whole schedule rotates
+// each real week via cultivationWeek(now) — the echoes.ts vaultWeek monotone-
+// integer idiom (floor(now / 7d)), NOT a `now % 24h` divisor phase (the trap
+// tide.ts warns about) — which is T7's renewable return hook (weekly reseed).
+// Wildgrain is takeable only in a bed's ripe window, validated client-side
+// within ±CULTIVATION_SLACK_MS (the same eyeOpenWithin / reed-exposure latency
+// grace + trust model as the Tide). ?cultivationtest shortens the period hard so
+// beds ripen and reset in seconds when testing the loop solo.
+export const DEV_CULTIVATION = params.has('cultivationtest');
+/** one full bed growth cycle (bare → ripe → reset); dev-scaled like TIDE_PERIOD_MS */
+export const CULTIVATION_PERIOD_MS = DEV_CULTIVATION ? 40_000 : import.meta.env.DEV ? 180_000 : 2_400_000;
+/** slack window for ripe-harvest validation (the ±slack clock pattern); dev-scaled
+ *  so it never swallows a whole shortened test cycle */
+export const CULTIVATION_SLACK_MS = DEV_CULTIVATION ? 2_500 : import.meta.env.DEV ? 8_000 : 60_000;
+
 // ---------------------------------------------------------------- v2: the Seal
 // In dev the Seal asks for tiny per-head quotas so the whole arc is testable
 // solo; add ?slowseal to use the real numbers.
@@ -289,10 +319,12 @@ export const WARDEN_ALTAR_PER_HEAD: Record<string, Record<string, number>> = FAS
   ? {
       mire: { hardwood: 2, obsidian: 1, cooked_fish: 1 },
       echo: { saltreed: 2, tideglass: 1, cooked_fish: 1 },
+      verdant: { echo_crystal: 2, hushsteel: 1, cooked_fish: 1 },
     }
   : {
       mire: { hardwood: 6, obsidian: 4, cooked_fish: 3 },
       echo: { saltreed: 6, tideglass: 4, cooked_fish: 3 },
+      verdant: { echo_crystal: 6, hushsteel: 4, cooked_fish: 3 },
     };
 
 /** the live altar target of one Warden: per-head × online heads (floored at 1) */
@@ -339,6 +371,14 @@ export const DEV_ARMOR = params.has('armor');
 // the full Offering → summon → fight → gate-key loop runs solo before the
 // authored Mangrove Coast altar/arena land with T5.
 export const DEV_WARDEN_FIGHT = params.has('wardenfight');
+// ?verdantfight = T7 dev arc (rung 3): joining grants the Verdant Warden's totem
+// + the altar goods and its arena altar stands broken, so the full Offering →
+// summon → fight → terrace-key → open-gate loop runs solo before the authored
+// Green Terraces land. Mirrors ?fight / ?wardenfight; it shortens the awake
+// window below (weak+brief warden). The free-totem / broken-altar grant lives in
+// MockBackend (T7.8) and the reduced fight HP in the backends' maxHp gate (T7.7),
+// which must also honor this flag alongside DEV_FIGHT / DEV_WARDEN_FIGHT.
+export const DEV_VERDANT_FIGHT = params.has('verdantfight');
 /**
  * v5: Guardian HP scales per head, fixed at the FIRST STRIKE to
  * `HP_PER_HEAD × roster size` (the party sealed inside the Ward). v6 (ADR-0006
@@ -355,7 +395,7 @@ export const HP_PER_HEAD = 373;
 /** ?fight: a tiny fixed Guardian pool so a summon can be won or lost solo, fast */
 export const DEV_FIGHT_HP = 30;
 /** awake window: how long the Guardian stays dangerous AFTER the first strike (engagedAt) */
-export const GUARDIAN_AWAKE_MS = DEV_FIGHT || DEV_WARDEN_FIGHT ? 90_000 : 300_000;
+export const GUARDIAN_AWAKE_MS = DEV_FIGHT || DEV_WARDEN_FIGHT || DEV_VERDANT_FIGHT ? 90_000 : 300_000;
 /**
  * Dormant grace: a summoned-but-unstruck Guardian roams harmlessly for this
  * long so the party can gather; strike within it or it re-slumbers, totem spent

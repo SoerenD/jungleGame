@@ -216,6 +216,21 @@ export class BootScene extends Phaser.Scene {
         repeat: -1,
       });
     }
+    // ADR-0017 rung 3: the Verdant Warden shares the same 8-frame boss-sheet contract
+    if (this.textures.exists('verdant_warden')) {
+      this.anims.create({
+        key: 'verdant-idle',
+        frames: this.anims.generateFrameNumbers('verdant_warden', { start: 1, end: 2 }),
+        frameRate: 2,
+        repeat: -1,
+      });
+      this.anims.create({
+        key: 'verdant-eye',
+        frames: this.anims.generateFrameNumbers('verdant_warden', { start: 3, end: 4 }),
+        frameRate: 4,
+        repeat: -1,
+      });
+    }
     this.game.events.emit('assets-ready');
   }
 }

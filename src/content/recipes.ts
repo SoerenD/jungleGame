@@ -57,6 +57,10 @@ export const RECIPES: Recipe[] = [
   // ADR-0017 rung 2 — the Echo Warden Totem: forged from the previous (Mire) tier's
   // goods, repeatable like every totem.
   { id: 'echo_totem', output: 'echo_totem', count: 1, cost: { saltreed: 2, tideglass: 2, fiber: 3 }, requiresForge: true, kind: 'consumable' },
+  // ADR-0017 rung 3 — the Verdant Warden Totem: forged from the previous (Hushdark)
+  // tier's goods (echo-crystal + refined hushsteel), repeatable like every totem —
+  // it sinks the rung-2 economy exactly as echo_totem sinks the Mire's tideglass.
+  { id: 'verdant_totem', output: 'verdant_totem', count: 1, cost: { echo_crystal: 2, hushsteel: 2, fiber: 3 }, requiresForge: true, kind: 'consumable' },
   // ADR-0017 rung 1 — the Tideglass Boots: the Sunken Mire's Armor, assembled from
   // Brine-Kiln tideglass. kind:'tool' so it lands in the Tools & Weapons tab (no
   // armor tab yet); it auto-equips once in inventory (the HUD keys off armorDef).
@@ -64,6 +68,10 @@ export const RECIPES: Recipe[] = [
   // ADR-0017 rung 2 — the Hushsteel Helm: the Hushdark's Armor, rung out of
   // Chime-Kiln hushsteel. Item + ARMOR_BUFFS already exist (T3) — only the recipe.
   { id: 'hushsteel_helm', output: 'hushsteel_helm', count: 1, cost: { hushsteel: 6, plank: 2, fiber: 2 }, kind: 'tool' },
+  // ADR-0017 rung 3 — the Verdant-woven Cuirass: the Green Terraces' Armor, woven
+  // from Loom-retted verdant fibre. kind:'tool' so it lands in the Tools & Weapons
+  // tab and auto-equips (the HUD keys off armorDef), mirroring the boots/helm.
+  { id: 'verdant_cuirass', output: 'verdant_cuirass', count: 1, cost: { verdant_fibre: 6, plank: 2, fiber: 2 }, kind: 'tool' },
   // ADR-0017 rung 2 §7 — the Chime Charm: the renewable hushsteel sink. Spent at a
   // Hushdark pedestal to arm an echo recording (repeatable demand, never a one-shot).
   { id: 'chime_charm', output: 'chime_charm', count: 1, cost: { hushsteel: 1, fiber: 2 }, kind: 'consumable' },
@@ -73,6 +81,10 @@ export const RECIPES: Recipe[] = [
   // fish — no new buff). Surfaced at the campfire like fish cooking; also here so
   // it lists under Consumables. Uses the generic jw_craft path (no new RPC).
   { id: 'cooked_meat', output: 'cooked_meat', count: 1, cost: { meat: 2 }, kind: 'consumable' },
+  // ADR-0017 rung 3 §7 — the Grasweave Ration: the repeatable verdant-fibre sink.
+  // Pressed from wildgrain + verdant fibre; it eats identically to a cooked fish
+  // (the item is kind:'food', reusing the EXISTING +20% move-speed buff — no new buff).
+  { id: 'grasweave_ration', output: 'grasweave_ration', count: 1, cost: { wildgrain: 2, verdant_fibre: 1 }, kind: 'consumable' },
 
   { id: 'campfire', output: 'campfire', count: 1, cost: { wood: 3, stone: 2 }, kind: 'structure' },
   { id: 'torch', output: 'torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'structure' },
@@ -92,6 +104,10 @@ export const RECIPES: Recipe[] = [
   // ADR-0017 rung 2 — the Chime Kiln: the Hushdark's Refiner (echo-crystal →
   // hushsteel on the generic kernel). A 2×2 Building; its cost ties to the Mire tier.
   { id: 'chime_kiln', output: 'chime_kiln', count: 1, cost: { plank: 4, stone: 6, tideglass: 2 }, requiresTool: 'hammer', kind: 'structure' },
+  // ADR-0017 rung 3 — the Verdant Loom: the Green Terraces' Refiner (wildgrain →
+  // verdant fibre on the generic kernel). A 2×2 Building; its cost ties to the
+  // Hushdark tier (hushsteel), as the Chime Kiln's ties to the Mire's tideglass.
+  { id: 'verdant_loom', output: 'verdant_loom', count: 1, cost: { plank: 4, stone: 6, hushsteel: 2 }, requiresTool: 'hammer', kind: 'structure' },
   // ...and the new functional Structures + decor consume its planks
   { id: 'hammock', output: 'hammock', count: 1, cost: { plank: 2, fiber: 3 }, kind: 'structure' },
   { id: 'signpost', output: 'signpost', count: 1, cost: { plank: 1, fiber: 1 }, kind: 'structure' },

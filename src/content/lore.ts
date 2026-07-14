@@ -58,6 +58,11 @@ const TABLETS_EN: Record<string, Tablet> = {
     title: 'Tablet of the Deep Vault',
     text: 'Deeper still the Hushdark keeps what the first vault only hinted: that a shade, once laid, outlasts the one who cast it. The old masters did not hoard this place — they left themselves in it, so no traveller after them would walk it alone. Open the deep court, and the stone offers you the same. Leave your shade upon the memorial, named, and walk on: those who come after will find you waiting, and know the way is passable.',
   },
+  t10: {
+    id: 't10',
+    title: 'Tablet of the Season',
+    text: 'High on the terraced hillsides the jungle turns to field, and the field keeps its own season. The Verdant Warden watches the ripening; wake it at the altar on the terraced hillside, and its fall opens the Green Terraces forever. Learn the cultivation: wildgrain ripens by no hand but the sun’s, each bed golden in its own turn — walk the field, and reap only where the grain stands ripe. Ret it into verdant fibre at the Verdant Loom, and weave the cuirass that lets every strike flow like wind through grass. The season keeps no clock but its own — come back when the field has turned again.',
+  },
 };
 
 const TABLETS_DE: Record<string, Tablet> = {
@@ -99,17 +104,22 @@ const TABLETS_DE: Record<string, Tablet> = {
   t7: {
     id: 't7',
     title: 'Steintafel der Gezeiten',
-    text: 'Als die Küste ertrank, nahm das Meer die Riede nicht — es verbarg sie nur und gibt sie bei jeder Wende zweimal zurück. Der Moorwächter hütet das niedrige Wasser; weck ihn am Megalithen an der Mangrovenküste, und sein Fall öffnet dieses ertrunkene Reich für immer. Lerne die Gezeit: wate, wenn das Wasser ebbt, und schneide das freiliegende Salzried, härte es im Sole-Ofen, und das Gezeitenglas trägt das Meer in deinem Schritt. Die Gezeit kennt keine Uhr als ihre eigene — komm für sie wieder.',
+    text: 'Als die Küste ertrank, nahm das Meer die Riede nicht — es verbarg sie nur und gibt sie bei jeder Wende zweimal zurück. Der Moorwächter hütet das niedrige Wasser; weck ihn am Megalithen an der Mangrovenküste, und sein Fall öffnet dieses ertrunkene Land für immer. Lerne die Gezeit: wate, wenn das Wasser ebbt, und schneide das freiliegende Salzried, härte es im Sole-Ofen, und das Gezeitenglas trägt das Meer in deinem Schritt. Die Gezeit kennt keine Uhr als ihre eigene — komm für sie wieder.',
   },
   t8: {
     id: 't8',
-    title: 'Steintafel des Stilldunkels',
-    text: 'Unter dem Höhlenschlund verstummt die Welt, und die Stille hat hier ein Gedächtnis. Der Echowächter hütet sie; weck ihn am Schlund, und sein Fall öffnet das Stilldunkel für immer. In dieser Dunkelheit verweilen deine eigenen Schritte — geh, und ein Schatten deiner selbst geht denselben Pfad wieder und wieder, zwanzig Atemzüge ohne Ende. Die alten Gewölbe antworten keinem einzelnen Wanderer: lege die Schatten deiner abwesenden Gefährten gemeinsam auf die Podeste, und wenn sie alle wie einer stehen, erinnert sich der Stein genug, um sich zu öffnen. Schneide den Echokristall, läutere ihn im Klang-Ofen, und Stillstahl beruhigt das Getöse um deine Stirn.',
+    title: 'Steintafel der Grabesstille',
+    text: 'Unter dem Höhlenschlund verstummt die Welt, und die Stille hat hier ein Gedächtnis. Der Echowächter hütet sie; weck ihn am Schlund, und sein Fall öffnet die Grabesstille für immer. In dieser Dunkelheit verweilen deine eigenen Schritte — geh, und ein Schatten deiner selbst geht denselben Pfad wieder und wieder, zwanzig Atemzüge ohne Ende. Die alten Gewölbe antworten keinem einzelnen Wanderer: lege die Schatten deiner abwesenden Gefährten gemeinsam auf die Podeste, und wenn sie alle wie einer stehen, erinnert sich der Stein genug, um sich zu öffnen. Schneide den Echokristall, läutere ihn im Klang-Ofen, und Klangstahl beruhigt das Getöse um deine Stirn.',
   },
   t9: {
     id: 't9',
     title: 'Steintafel des Tiefen Gewölbes',
-    text: 'Tiefer noch hütet das Stilldunkel, was das erste Gewölbe nur andeutete: dass ein Schatten, einmal gelegt, den überdauert, der ihn warf. Die alten Meister horteten diesen Ort nicht — sie ließen sich selbst darin zurück, damit kein Wanderer nach ihnen ihn allein ginge. Öffne den tiefen Hof, und der Stein bietet dir dasselbe. Lege deinen Schatten, benannt, auf das Mahnmal und geh weiter: die nach dir kommen, werden dich wartend finden und wissen, dass der Weg begehbar ist.',
+    text: 'Tiefer noch hütet die Grabesstille, was das erste Gewölbe nur andeutete: dass ein Schatten, einmal gelegt, den überdauert, der ihn warf. Die alten Meister horteten diesen Ort nicht — sie ließen sich selbst darin zurück, damit kein Wanderer nach ihnen ihn allein ginge. Öffne den tiefen Hof, und der Stein bietet dir dasselbe. Lege deinen Schatten, benannt, auf das Mahnmal und geh weiter: die nach dir kommen, werden dich wartend finden und wissen, dass der Weg begehbar ist.',
+  },
+  t10: {
+    id: 't10',
+    title: 'Steintafel der Ernte',
+    text: 'Hoch auf den terrassierten Hängen wird der Dschungel zum Feld, und das Feld hält seine eigene Jahreszeit. Der Grünwächter wacht über das Reifen; weck ihn am Altar am terrassierten Hang, und sein Fall öffnet die Grünen Terrassen für immer. Lerne den Anbau: Wildkorn reift durch keine Hand als die der Sonne, jede Bank golden zu ihrer eigenen Wende — geh das Feld ab und ernte nur, wo das Korn reif steht. Röste es am Grünwebstuhl zu Grünfaser und webe den Kürass, der jeden Schlag wie Wind durch Gras fließen lässt. Die Jahreszeit kennt keine Uhr als ihre eigene — komm wieder, wenn das Feld sich erneut gewendet hat.',
   },
 };
 

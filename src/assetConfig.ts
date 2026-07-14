@@ -56,6 +56,9 @@ export const OBJECTS: Record<string, ObjectDef> = {
   // the Hushdark's Node (tools/compose-echo-crystal.ts)
   echo_crystal_seam: { url: '/assets/objects/echo-crystal-seam.png' },
   echo_crystal_seam_depleted: { url: '/assets/objects/echo-crystal-seam-depleted.png' },
+  // the Green Terraces' Node (tools/compose-wildgrain.ts)
+  wildgrain_bed: { url: '/assets/objects/wildgrain-bed.png' },
+  wildgrain_bed_depleted: { url: '/assets/objects/wildgrain-bed-depleted.png' },
 
   st_campfire: { url: '/assets/objects/campfire.png' },
   st_torch: { url: '/assets/objects/torch.png' },
@@ -112,6 +115,9 @@ export const OBJECTS: Record<string, ObjectDef> = {
   // the Echo Warden (ADR-0017 rung 2): same 8-frame 96x96 boss-sheet contract as
   // the Guardian (0 slumber, 1..2 idle, 3..4 eye open, 5 windup, 6 airborne, 7 land)
   echo_warden: { url: '/assets/objects/echo-warden.png', frameWidth: 96, frameHeight: 96, frame: 0 },
+  // the Verdant Warden (ADR-0017 rung 3): same 8-frame 96x96 boss-sheet contract as
+  // the Guardian (0 slumber, 1..2 idle, 3..4 eye open, 5 windup, 6 airborne, 7 land)
+  verdant_warden: { url: '/assets/objects/verdant-warden.png', frameWidth: 96, frameHeight: 96, frame: 0 },
 };
 
 export const AUDIO: Record<string, string> = {

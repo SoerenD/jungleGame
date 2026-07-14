@@ -83,6 +83,7 @@ const ZONE_DE: Record<string, string> = {
   'The Cavern Mouth': 'Der Höhlenschlund',
   // Realm districts (ADR-0017)
   'The Sunken Mire': 'Das Versunkene Moor',
+  'The Green Terraces': 'Die Grünen Terrassen',
 };
 
 /** translate a zone id for display; internal comparisons keep the English id */
@@ -224,8 +225,8 @@ const en = {
 
   // ADR-0017 — the Warden ladder's display names (ids stay english-internal)
   warden: {
-    name: (id: string) => (({ mire: 'the Mire Warden', echo: 'the Echo Warden', reverb: 'the Reverberant' }) as Record<string, string>)[id] ?? id,
-    realmName: (id: string) => (({ mire: 'the Sunken Mire', echo: 'the Hushdark' }) as Record<string, string>)[id] ?? id,
+    name: (id: string) => (({ mire: 'the Mire Warden', echo: 'the Echo Warden', reverb: 'the Reverberant', verdant: 'the Verdant Warden' }) as Record<string, string>)[id] ?? id,
+    realmName: (id: string) => (({ mire: 'the Sunken Mire', echo: 'the Hushdark', verdant: 'the Green Terraces' }) as Record<string, string>)[id] ?? id,
   },
 
   // ADR-0017 — a Warden altar's Offering-bars panel (the Seal panel, per rung)
@@ -570,7 +571,7 @@ const en = {
     reverbEpicHelm: '👑 You take the Reverberant Helm — your Hushsteel Helm, transfigured. Same weight, epic style.',
     reverbWeekly: 'The Reverberant yields this week: an Echo Sigil, echo crystal and hushsteel.',
     greetingLeft: 'Your greeting shade will walk the Hushdark forever, for all who come after.',
-    greetingLocked: 'Master the deep vault first — then the memorial will take your mark.',
+    greetingLocked: 'Best the Reverberant first — then the memorial will take your mark.',
   },
 
   delve: {
@@ -594,6 +595,14 @@ const en = {
     recording: (s: number) => `Recording your echo… ${s}s`,
     memorial: 'Memorial plinth · press E to leave your greeting shade',
     memorialLocked: 'Memorial plinth · master the deep vault to leave your mark',
+  },
+
+  // ADR-0017 rung 3 — Cultivation (the Green Terraces) bed hints
+  cultivation: {
+    bedRipe: 'The wildgrain is golden — reap it now.',
+    bedGrowing: 'This bed is still growing — come back when it ripens.',
+    ripensIn: (s: number) => `This bed ripens in ${s}s`,
+    harvested: 'Reaped — the bed will seed again in time.',
   },
 
   // ADR-0015 — the generated Depths' naming word lists. Names are COMPOSED from
@@ -726,9 +735,9 @@ const de: Strings = {
   village: {
     title: '🏛 Das Dorf',
     hint: 'Stell dich zur Halle und drücke E, um Ressourcen & Beute in den Vorrat zu geben.',
-    unfounded: 'Errichte irgendwo eine Dorfhalle (Reiter Gebäude), um das Dorf zu gründen.',
+    unfounded: 'Errichte irgendwo eine Dorfhalle (Reiter „Gebäude“), um das Dorf zu gründen.',
     tierName: (tier: number) => ['Wildnis', 'Lager', 'Weiler', 'Dorf', 'Stadt', 'Hauptstadt'][tier] ?? 'Dorf',
-    tierTitle: (tier: number) => ['Wanderer', 'Siedler', 'Gehöftler', 'Dörfler', 'Städter', 'Bürger der Hauptstadt'][tier] ?? '',
+    tierTitle: (tier: number) => ['Wanderer', 'Siedler', 'Hofleute', 'Dörfler', 'Städter', 'Bürger der Hauptstadt'][tier] ?? '',
     poolLabel: 'Vorrat',
     milestoneDone: (name: string) => `✓ ${name} errichtet`,
     milestoneTodo: (name: string) => `○ Errichte ${name} in der Zone`,
@@ -807,8 +816,8 @@ const de: Strings = {
   },
 
   warden: {
-    name: (id) => (({ mire: 'Der Moorwächter', echo: 'Der Echowächter', reverb: 'Der Nachhall' }) as Record<string, string>)[id] ?? id,
-    realmName: (id) => (({ mire: 'das Versunkene Moor', echo: 'das Stilldunkel' }) as Record<string, string>)[id] ?? id,
+    name: (id) => (({ mire: 'Der Moorwächter', echo: 'Der Echowächter', reverb: 'Der Nachhall', verdant: 'Der Grünwächter' }) as Record<string, string>)[id] ?? id,
+    realmName: (id) => (({ mire: 'das Versunkene Moor', echo: 'die Grabesstille', verdant: 'die Grünen Terrassen' }) as Record<string, string>)[id] ?? id,
   },
 
   wardenAltar: {
@@ -1129,22 +1138,22 @@ const de: Strings = {
     knockedInWild: (n, max) => `Ein Raubtier schlägt dich nieder! (${n}/${max} — der dritte bedeutet Erschöpfung)`,
     wildExhaustionHammock: 'Erschöpfung übermannt dich in der Wildnis — du erwachst in deiner Hängematte, Rucksack unversehrt.',
     wildExhaustionSpawn: 'Erschöpfung übermannt dich in der Wildnis — du erwachst am Startpunkt, Rucksack unversehrt.',
-    // ADR-0017 — Reichstore (T2-Stummel; die Wächter-Schlüssel-Freischaltung kommt mit T4/T5)
+    // ADR-0017 — Portale (T2-Stummel; die Wächter-Schlüssel-Freischaltung kommt mit T4/T5)
     realmGateDormant: 'Das Tor ruht — was dahinter liegt, schlummert noch.',
     realmEntered: (name) => `Du trittst durch das Tor — ${name}.`,
     realmLeft: 'Du trittst durch das Tor zurück in die Welt.',
     // ADR-0017 rung 1 — die Gezeit versperrt die Salzried-Bänke
     reedSubmerged: 'Die Flut hat die Riede ertränkt — warte auf die Ebbe, um sie zu schneiden.',
-    // ADR-0017 rung 2 — die Echoes: aufgezeichnete Schatten öffnen die Stilldunkel-Gewölbe
+    // ADR-0017 rung 2 — die Echoes: aufgezeichnete Schatten öffnen die Gewölbe der Grabesstille
     echoArmed: '🔊 Dein Echo wird aufgezeichnet — geh deinen Pfad, und ein Schatten deiner selbst läuft ihn für immer.',
     echoCaptured: 'Dein Echo steht — es läuft diese Schleife nun für immer.',
-    echoNeedsCharm: 'Du brauchst ein Klang-Amulett, um eine Aufnahme scharf zu stellen — läutere eins aus Stillstahl.',
+    echoNeedsCharm: 'Du brauchst ein Klang-Amulett, um eine Aufnahme scharf zu stellen — läutere eins aus Klangstahl.',
     echoTooStill: 'Dieses Echo hat sich kaum bewegt — ein stiller Schatten hält nichts. Geh einen echten Pfad.',
     reliquaryEarned: '🏆 Eine Echo-Reliquie ist dein — richte sie auf, wo alle sehen, dass der Nachhall fiel!',
-    reverbEpicHelm: '👑 Du nimmst den Nachhall-Helm — dein Stillstahl-Helm, verklärt. Gleiches Gewicht, epischer Stil.',
-    reverbWeekly: 'Der Nachhall gibt diese Woche her: ein Echo-Sigel, Echokristall und Stillstahl.',
-    greetingLeft: 'Dein Begrüßungs-Schatten wird das Stilldunkel für immer durchwandern, für alle, die nach dir kommen.',
-    greetingLocked: 'Meistere erst das tiefe Gewölbe — dann nimmt das Mahnmal dein Zeichen an.',
+    reverbEpicHelm: '👑 Du nimmst den Nachhall-Helm — dein Klangstahl-Helm, verklärt. Gleiches Gewicht, episches Aussehen.',
+    reverbWeekly: 'Der Nachhall gibt diese Woche her: ein Echo-Siegel, Echokristall und Klangstahl.',
+    greetingLeft: 'Dein Begrüßungs-Schatten wird die Grabesstille für immer durchwandern, für alle, die nach dir kommen.',
+    greetingLocked: 'Bezwinge erst den Nachhall — dann nimmt das Mahnmal dein Zeichen an.',
   },
 
   delve: {
@@ -1155,19 +1164,27 @@ const de: Strings = {
     descendDepth: (zone) => `Eine Tür abwärts · drücke E, um in ${zone} hinabzusteigen`,
   },
 
-  // ADR-0017 — die schwebenden Beschriftungen der Reichstore
+  // ADR-0017 — die schwebenden Beschriftungen der Portale
   realm: {
-    gateTo: (name) => `Reichstor · drücke E, um ${name} zu betreten`,
-    dormant: 'Ein ruhendes Reichstor',
-    return: 'Reichstor · drücke E zur Rückkehr in die Welt',
+    gateTo: (name) => `Portal · drücke E, um ${name} zu betreten`,
+    dormant: 'Ein ruhendes Portal',
+    return: 'Portal · drücke E zur Rückkehr in die Welt',
   },
 
-  // ADR-0017 rung 2 — die Echoes des Stilldunkels: Podest- und Gewölbe-Beschriftungen
+  // ADR-0017 rung 2 — die Echoes der Grabesstille: Podest- und Gewölbe-Beschriftungen
   echo: {
     pedestal: 'Echo-Podest · drücke E, um eine Aufnahme scharf zu stellen (kostet ein Klang-Amulett)',
     recording: (s) => `Dein Echo wird aufgezeichnet… ${s}s`,
     memorial: 'Mahnmal · drücke E, um deinen Begrüßungs-Schatten zu hinterlassen',
     memorialLocked: 'Mahnmal · meistere das tiefe Gewölbe, um dein Zeichen zu hinterlassen',
+  },
+
+  // ADR-0017 rung 3 — Anbau (die Grünen Terrassen) Bank-Hinweise
+  cultivation: {
+    bedRipe: 'Das Wildkorn steht golden — ernte es jetzt.',
+    bedGrowing: 'Diese Bank wächst noch — komm wieder, wenn sie reift.',
+    ripensIn: (s) => `Diese Bank reift in ${s}s`,
+    harvested: 'Geerntet — die Bank sät mit der Zeit neu aus.',
   },
 
   // ADR-0015 — Wortlisten der erzeugten Tiefen. Namen werden pro Tiefenzahl aus

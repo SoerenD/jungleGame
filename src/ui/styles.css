@@ -819,6 +819,19 @@ button.ui-btn:disabled {
 #seal-panel.open {
   display: block;
 }
+/* ADR-0017: the Warden altar Offering panel reuses the Seal-bar rendering, so it
+   takes the Seal panel's exact frame (compact, top-left, hidden until near an
+   altar). Without this it fell back to a static, full-viewport-width block. */
+#warden-panel {
+  position: absolute;
+  top: 150px;
+  left: 12px;
+  width: 300px;
+  display: none;
+}
+#warden-panel.open {
+  display: block;
+}
 .seal-row {
   display: grid;
   grid-template-columns: 58px 1fr 74px;
