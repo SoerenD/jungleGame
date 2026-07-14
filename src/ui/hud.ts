@@ -94,6 +94,32 @@ let fogLayer: HTMLCanvasElement | null = null;
  *  pre-baked terrain + fog + landmarks); null until the minimap has initialized */
 let drawWorldMap: (() => void) | null = null;
 
+/**
+ * Trace a closed, gently-wavy ("curly") outline around a rect — a hand-drawn map
+ * region instead of a hard box. The perpendicular wobble is a sine that returns
+ * to zero at every corner (integer wave counts), so adjacent edges meet cleanly.
+ */
+function curlyRegionPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, amp: number): void {
+  const pts: [number, number][] = [];
+  const edge = (x0: number, y0: number, x1: number, y1: number, nx: number, ny: number) => {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const waves = Math.max(2, Math.round(len / 46)); // ~a wave every 46px
+    const segs = Math.max(6, Math.round(len / 5));
+    for (let i = 0; i < segs; i++) {
+      const t = i / segs;
+      const wob = Math.sin(t * Math.PI * waves) * amp; // 0 at t=0 and t=1
+      pts.push([x0 + (x1 - x0) * t + nx * wob, y0 + (y1 - y0) * t + ny * wob]);
+    }
+  };
+  edge(x, y, x + w, y, 0, -1); // top (wobble outward = up)
+  edge(x + w, y, x + w, y + h, 1, 0); // right
+  edge(x + w, y + h, x, y + h, 0, 1); // bottom
+  edge(x, y + h, x, y, -1, 0); // left
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+}
+
 /** open/close the full-screen world map (M / Escape / backdrop click) */
 function setWorldMapOpen(open: boolean): void {
   const ov = document.getElementById('worldmap-overlay');
@@ -1394,29 +1420,59 @@ async function initMinimap(): Promise<void> {
       bctx2.fillStyle = '#ffe9c9';
       bctx2.fillRect(toX((village.hall.tx + 1) * 16) - 3, toY((village.hall.ty + 1) * 16) - 3, 6, 6);
     }
-    // which Zone is the Player standing in? (highlight it)
+    // Regions as soft, wavy, translucent areas (not hard boxes — the zone rects
+    // overlap, so crossing lines were unreadable). Which Zone is the Player in?
     const ptx = lastPos ? lastPos.x / 16 : -1;
     const pty = lastPos ? lastPos.y / 16 : -1;
-    const font = Math.max(9, Math.round(side / 46));
-    bctx2.font = `${font}px sans-serif`;
-    bctx2.textAlign = 'center';
-    bctx2.textBaseline = 'top';
+    const font = Math.max(9, Math.round(side / 50));
+    const amp = Math.max(2.5, scale * 2.4);
+    // pass 1 — faint curly region fills + soft outlines (current zone brighter)
     for (const z of worldData.zones) {
       const here = ptx >= z.x && ptx < z.x + z.w && pty >= z.y && pty < z.y + z.h;
       const rx = toX(z.x * 16);
       const ry = toY(z.y * 16);
       const rw = z.w * 16 * scale;
       const rh = z.h * 16 * scale;
-      bctx2.lineWidth = here ? 3 : 1.5;
-      bctx2.strokeStyle = here ? '#ffe066' : z.dangerous ? '#d1795f' : '#e9d8b0';
-      bctx2.strokeRect(rx, ry, rw, rh);
+      bctx2.beginPath();
+      curlyRegionPath(bctx2, rx, ry, rw, rh, amp);
+      bctx2.fillStyle = here
+        ? 'rgba(255,224,102,0.16)'
+        : z.dangerous ? 'rgba(206,80,58,0.10)' : 'rgba(120,150,90,0.07)';
+      bctx2.fill();
+      bctx2.lineWidth = here ? 2.5 : 1.25;
+      bctx2.strokeStyle = here
+        ? 'rgba(255,224,102,0.95)'
+        : z.dangerous ? 'rgba(224,140,110,0.5)' : 'rgba(224,214,180,0.42)';
+      bctx2.stroke();
+    }
+    // pass 2 — labels last, on a dark pill so they read over any terrain/overlap.
+    // Overlapping zones share space, so nudge a colliding label down until clear.
+    bctx2.font = `600 ${font}px sans-serif`;
+    bctx2.textAlign = 'center';
+    bctx2.textBaseline = 'middle';
+    const px = 5;
+    const py = 3;
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const overlaps = (r: { x0: number; y0: number; x1: number; y1: number }) =>
+      placed.some((p) => r.x0 < p.x1 && r.x1 > p.x0 && r.y0 < p.y1 && r.y1 > p.y0);
+    for (const z of worldData.zones) {
+      const here = ptx >= z.x && ptx < z.x + z.w && pty >= z.y && pty < z.y + z.h;
       const label = zoneName(z.name);
-      const lx = rx + rw / 2;
-      const ly = ry + 3;
-      bctx2.lineWidth = 3;
-      bctx2.strokeStyle = 'rgba(6,14,9,0.9)';
-      bctx2.strokeText(label, lx, ly);
-      bctx2.fillStyle = here ? '#fff4c2' : z.dangerous ? '#f0c4b6' : '#f4ecd6';
+      const tw = bctx2.measureText(label).width;
+      const halfW = tw / 2 + px + 2;
+      const halfH = font / 2 + py;
+      const lx = Math.max(halfW, Math.min(side - halfW, toX((z.x + z.w / 2) * 16)));
+      let ly = Math.max(halfH + 2, toY(z.y * 16) + font * 0.9);
+      // slide down past already-placed pills (bounded so it never marches off-map)
+      const rect = () => ({ x0: lx - halfW, y0: ly - halfH, x1: lx + halfW, y1: ly + halfH });
+      for (let tries = 0; tries < 6 && overlaps(rect()); tries++) ly += font + 5;
+      ly = Math.min(ly, side - halfH - 2);
+      placed.push(rect());
+      bctx2.fillStyle = here ? 'rgba(74,60,12,0.88)' : 'rgba(9,15,10,0.74)';
+      bctx2.beginPath();
+      bctx2.roundRect(lx - tw / 2 - px, ly - font / 2 - py, tw + px * 2, font + py * 2, 4);
+      bctx2.fill();
+      bctx2.fillStyle = here ? '#ffe89a' : z.dangerous ? '#f2cabd' : '#f4ecd6';
       bctx2.fillText(label, lx, ly);
     }
     // the treasure ✕ (if a dig spot is revealed), then the player + teammates

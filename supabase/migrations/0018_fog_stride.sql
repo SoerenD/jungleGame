@@ -7,45 +7,28 @@
 -- bands (the stripes players saw only after a relog, when the SAVED old-stride
 -- data was restored).
 --
--- Fix: remap every legacy row's indices ONCE from the last pre-Realm stride (75,
--- ceil(300/4)) to the current stride (96, ceil(384/4)) — pinned growth keeps each
--- chunk's (cx,cy), so the remap is lossless — then STAMP fog_stride so the client's
--- load-time remap becomes a no-op and future growth can remap cleanly instead of
--- scrambling. jw_join returns the stamp as `exploredStride`.
+-- Fix: legacy fog is an unrecoverable MIX of strides (no per-index marker across
+-- the 200→300→384 growths), so RESET it once to a blank slate and STAMP the current
+-- stride. From then on every row is a single known stride and jw_join returns it as
+-- `exploredStride`; a future growth remaps losslessly (pinned growth keeps each
+-- chunk's (cx,cy)) — GameScene.initFog does that remap, now always on homogeneous data.
 --
--- Deploy order: safe any time. A pre-0018 client ignores 'exploredStride' and its
--- own load-time remap (assuming the legacy 75 stride) already un-stripes the
--- display; deploying this makes the stored data consistent so it never re-stripes.
+-- Deploy order: safe any time. jw_join gains one field pre-0018 clients ignore; the
+-- reset costs only re-exploration (fog re-reveals as you walk; landmarks always show).
 
 -- ============================================================ 1. the stamp column
 alter table public.players add column if not exists fog_stride int;
 
--- ============================================================ 2. one-time remap
--- Legacy rows (fog_stride IS NULL) hold indices under the 300-era stride 75; remap
--- them onto the current 384-era stride 96 and stamp. Rows already stamped are left
--- alone. (A tiny slice explored in the brief 384-era window before this ships is
--- remapped as if 75 and may shift once — it re-reveals on the next walk; there is
--- no per-index marker to distinguish it, and this is still strictly better than the
--- all-old-data stripes the players see today.)
-do $$
-declare
-  r record; v_new jsonb; e_txt text; idx int; cx int; cy int;
-  old_stride constant int := 75;   -- ceil(WORLD_VIEW_W=300 / FOG_CHUNK=4)
-  new_stride constant int := 96;   -- ceil(MAP_W=384 / FOG_CHUNK=4)
-begin
-  for r in select world_id, name, explored from public.players where fog_stride is null loop
-    v_new := '[]'::jsonb;
-    for e_txt in select value from jsonb_array_elements_text(coalesce(r.explored, '[]'::jsonb)) loop
-      idx := e_txt::int;
-      if idx < 0 then continue; end if;
-      cx := idx % old_stride;
-      cy := idx / old_stride;             -- integer division
-      v_new := v_new || to_jsonb(cy * new_stride + cx);
-    end loop;
-    update public.players set explored = v_new, fog_stride = new_stride
-      where world_id = r.world_id and name = r.name;
-  end loop;
-end $$;
+-- ============================================================ 2. one-time reset
+-- Legacy fog (fog_stride IS NULL) is UNRECOVERABLE: `explored` accumulated indices
+-- under DIFFERENT strides across the 200→300→384 growths with no per-index marker,
+-- so it is a MIX of stride-50/75/96 values that cannot be told apart. A blanket
+-- remap (an earlier attempt) fixes one stride and scrambles the others — bigger
+-- stripes, not fewer. The only clean state reachable from mixed data is empty, so
+-- we RESET legacy fog to a blank slate and stamp the current stride; it re-reveals
+-- as the Player walks. Rows already stamped (fog_stride set) are untouched. From
+-- here on every row is a SINGLE known stride, so a future growth can remap losslessly.
+update public.players set explored = '[]'::jsonb, fog_stride = 96 where fog_stride is null;
 
 -- ============================================================ 3. default for new rows
 -- New players start empty and save fresh chunks under the current stride, so their
