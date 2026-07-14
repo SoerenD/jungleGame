@@ -57,7 +57,7 @@ import {
   type VillageTier,
 } from '../content/village';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
-import { armorBuff, ARMOR_BUFFS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { armorBuff, ARMOR_BUFFS, ARMOR_SLOTS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
 import { kitOf, wardenDef } from '../content/wardens';
 import { asset } from '../paths';
 import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
@@ -170,7 +170,9 @@ interface DbPlayer {
   wakePoint?: { tx: number; ty: number };
   /** fog-of-war chunk indices this Player has explored (persisted like journey) */
   explored?: number[];
-  /** worn Armor (ADR-0017 §4) — persisted like wakePoint, ownership re-checked on load */
+  /** the row-stride the `explored` indices were saved under (fog-of-war remap) */
+  exploredStride?: number;
+  /** worn Armor (ADR-0017 §4) — persisted like wakePoint, moved out of the bag when worn */
   equipped?: EquippedArmor;
 }
 
@@ -561,8 +563,18 @@ export class MockBackend implements Backend {
       }
       this.saveNow();
     }
-    // worn Armor never survives losing the piece — re-validate against the pack
-    p.equipped = sanitizeEquipped(p.equipped, p.inventory);
+    // Armor is worn by MOVING the piece out of the bag. Keep every shape-valid
+    // worn slot (it is its own proof of ownership); and transition a LEGACY save
+    // where a piece is worn AND still sitting in the bag by removing the bag copy
+    // once (idempotent — after the first load the piece is gone from the pack).
+    p.equipped = sanitizeEquipped(p.equipped);
+    for (const slot of ARMOR_SLOTS) {
+      const it = p.equipped[slot];
+      if (it && (p.inventory[it] ?? 0) > 0) {
+        p.inventory[it] = (p.inventory[it] ?? 0) - 1;
+        if ((p.inventory[it] ?? 0) <= 0) delete p.inventory[it];
+      }
+    }
     if (DEV_VILLAGE) {
       // ?village — keep a stock of tradeables so the Trade Post has surplus to swap
       const stock: Partial<Record<ItemId, number>> = { wood: 40, stone: 40, fiber: 40, fruit: 40, fish: 8 };
@@ -594,26 +606,67 @@ export class MockBackend implements Backend {
       introSeen: !!p.introSeen,
       journey: this.journeyState(p),
       explored: [...(p.explored ?? [])],
+      exploredStride: p.exploredStride,
       equipped: { ...p.equipped },
     };
   }
 
-  /** wear/unwear Armor (ADR-0017 §4): keep only owned, slot-matching pieces */
+  /**
+   * wear/unwear Armor (ADR-0017 §4): MOVE the piece between the bag and the slot.
+   * A slot the client wants filled is honoured when the piece is already worn OR
+   * available in the pack; then every changed slot transacts the inventory (a
+   * newly worn piece is decremented out, a newly bared one returned).
+   */
   async equip(equipped: EquippedArmor): Promise<EquipResult> {
     await this.lag();
     const p = this.me ? this.db.players[this.me] : null;
-    if (!p) return { equipped: {} };
-    p.equipped = sanitizeEquipped(equipped, p.inventory);
+    if (!p) return { equipped: {}, inventory: {} };
+    const prev = p.equipped ?? {};
+    const want = sanitizeEquipped(equipped); // shape only
+    const next: EquippedArmor = {};
+    for (const slot of ARMOR_SLOTS) {
+      const item = want[slot];
+      if (!item) continue;
+      // already worn there, or a copy is sitting in the bag to take
+      if (prev[slot] === item || (p.inventory[item] ?? 0) > 0) next[slot] = item;
+    }
+    for (const slot of ARMOR_SLOTS) {
+      const before = prev[slot];
+      const after = next[slot];
+      if (before === after) continue;
+      if (before) p.inventory[before] = (p.inventory[before] ?? 0) + 1; // unequip → bag
+      if (after) {
+        p.inventory[after] = (p.inventory[after] ?? 0) - 1; // equip → out of bag
+        if ((p.inventory[after] ?? 0) <= 0) delete p.inventory[after];
+      }
+    }
+    p.equipped = next;
     this.saveNow();
-    return { equipped: { ...p.equipped } };
+    return { equipped: { ...p.equipped }, inventory: { ...p.inventory } };
   }
 
-  async markExplored(chunks: number[]): Promise<void> {
+  async markExplored(chunks: number[], stride: number): Promise<void> {
     const p = this.me ? this.db.players[this.me] : null;
     if (!p) return;
-    const seen = new Set(p.explored ?? []);
+    // Self-heal on a stride change (map growth): remap the stored indices from
+    // their old row-width to the new one so pinned chunks keep their (cx,cy),
+    // then stamp the new stride. Union the fresh chunks (already under `stride`).
+    const old = p.exploredStride;
+    let base = p.explored ?? [];
+    if (typeof old === 'number' && old !== stride && base.length) {
+      const remapped: number[] = [];
+      for (const idx of base) {
+        if (idx < 0) continue;
+        const cx = idx % old;
+        const cy = Math.floor(idx / old);
+        remapped.push(cy * stride + cx);
+      }
+      base = remapped;
+    }
+    const seen = new Set(base);
     for (const c of chunks) seen.add(c);
     p.explored = [...seen];
+    p.exploredStride = stride;
     this.saveSoon();
   }
 

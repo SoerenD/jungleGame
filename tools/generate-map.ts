@@ -406,12 +406,16 @@ const inMireArenaOuter = (x: number, y: number) =>
 const isMireMonument = (x: number, y: number) =>
   (x === MIRE_MONUMENT.tx || x === MIRE_MONUMENT.tx + 1) && y === MIRE_MONUMENT.ty;
 
-// ---- ADR-0017 rung 2: the Echo Warden's arena in The Cavern Mouth. Same anatomy
-// and same LATE, RNG-FREE carve discipline as the Mire arena, sited in the clear
-// NW quadrant of the Cavern Mouth — well away from the Delve shaft (56,260), its
-// approach column (x≈56–60) and the obsidian veins (x≥38 / y≥252). A stone-floored
-// court walled in cliff, its cold blue-steel look supplied scene-side by KIT_ART.
-const ECHO_ARENA = { x: 20, y: 224, w: ARENA_W, h: ARENA_H };
+// ---- ADR-0017 rung 2: the Echo Warden's arena in the open frontier band just
+// NORTH of The Cavern Mouth. Same anatomy and same LATE, RNG-FREE carve discipline
+// as the Mire arena. MOVED off the Delve's doorstep (was {20,224}, ~30 tiles from
+// the shaft in the SAME zone — it crowded the mine entrance): the shaft sits near
+// the CENTRE of the 80×74 Cavern Mouth, so no spot inside that zone is far from it.
+// Here the boss-home is ~64 tiles from the shaft (56,260), a full zone clear of its
+// approach column (x≈56–60) and the obsidian veins (x≥38 / y≥252); every footprint
+// tile stays y≥201 so nothing writes into the pinned CORE (x<200 AND y<200). A
+// stone-floored court walled in cliff, cold blue-steel look supplied by KIT_ART.
+const ECHO_ARENA = { x: 18, y: 202, w: ARENA_W, h: ARENA_H };
 const ECHO_HOME = { tx: ECHO_ARENA.x + Math.floor(ARENA_W / 2) - 1, ty: ECHO_ARENA.y + 1 }; // 3x3, top-center
 const ECHO_SEAL_GATE = [ECHO_ARENA.x + 7, ECHO_ARENA.x + 8, ECHO_ARENA.x + 9].map((tx) => ({ tx, ty: ECHO_ARENA.y + ECHO_ARENA.h })); // south Ward gap
 const ECHO_ALTAR = { tx: ECHO_ARENA.x + 7, ty: ECHO_ARENA.y + 10 }; // inside near the gate

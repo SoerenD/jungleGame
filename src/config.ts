@@ -10,11 +10,12 @@ export const TILE = 16;
 // 300×300 World is pinned byte-for-byte; the space beyond is void cliff plus
 // district rects entered by gate teleport only. Camera and minimap keep
 // clamping to WORLD_VIEW_* while the Player is not inside a district.
-// NOTE fog: explored-chunk indices encode the stride ceil(MAP_W / FOG_CHUNK);
-// growing MAP_W re-strides them exactly like the 200 → 300 growth did — old
-// indices decode to shifted chunks, a cosmetic scramble of the revealed map
-// that is accepted per the ADR-0009 growth discipline (no version marker, no
-// migration — see GameScene.initFog).
+// NOTE fog: explored-chunk indices encode the stride ceil(MAP_W / FOG_CHUNK).
+// Growing MAP_W used to re-stride them (200→300→384), decoding old indices to
+// shifted chunks — the "venetian-blind" stripes on relog. FIXED: the save-time
+// stride is now persisted (JoinResult.exploredStride) and remapped on load
+// (GameScene.initFog + LEGACY_FOG_STRIDE below), so pinned-growth chunks keep
+// their (cx,cy) and the reveal is lossless across any future growth.
 export const MAP_W = 384;
 export const MAP_H = 384;
 /** the pinned pre-Realm World rect — camera + minimap clamp to it in the World */
@@ -99,6 +100,14 @@ export const VERDANT_LOOM: RefinerConfig = {
 export const FOG_CHUNK = 4;
 /** chunks within this radius of the Player reveal permanently */
 export const FOG_REVEAL_RADIUS = 2;
+/**
+ * The stride a legacy fog save (no `exploredStride` stamp) is assumed to be
+ * under: `ceil(WORLD_VIEW_W / FOG_CHUNK)` = 75, the last pre-Realm stride the
+ * 300×300 World used. Nearly all currently-stored explored indices were written
+ * under it; the load-time remap re-encodes them to the current stride so the
+ * pinned chunks land back where they belong instead of striping.
+ */
+export const LEGACY_FOG_STRIDE = Math.ceil(WORLD_VIEW_W / FOG_CHUNK);
 
 export const STORAGE_KEY = 'jungle-world:v1';
 export const SESSION_KEY = 'jungle-world:session';

@@ -95,7 +95,7 @@ export function zoneName(en: string): string {
 
 const en = {
   controlsHelp:
-    'WASD/arrows move · E interact / left-click attack (hold to keep swinging) · X dismantle · C craft · I inventory · T chat · M mute · wheel zoom',
+    'WASD/arrows move · E interact / left-click attack (hold to keep swinging) · X dismantle · C craft · I inventory · T chat · M map · wheel zoom',
   online: (n: number) => `Online (${n})`,
   youSuffix: ' (you)',
   builtBy: (who: string, item: string) => `${who} built a ${item}`,
@@ -331,7 +331,9 @@ const en = {
     loadoutBarTitle: 'Your Loadout — drag Tools here; press 1–3 to pick the one in your hand',
     slotHold: (name: string, i: number) => `${name} — press ${i} to hold it`,
     slotEmpty: (i: number) => `Loadout slot ${i} — drag a Tool here, press ${i} to select`,
-    minimapTitle: 'Minimap — white: you, yellow: others',
+    minimapTitle: 'Minimap — white: you, yellow: others · press M for the world map',
+    worldmapTitle: 'World Map',
+    worldmapHint: 'M or Esc to close · yellow border: where you are',
     // kind subtitle on the hover popup for non-weapon items
     kind: { resource: 'Resource', tool: 'Tool', structure: 'Structure', consumable: 'Consumable', food: 'Food', armor: 'Armor' },
     equip: 'Equip',
@@ -515,7 +517,8 @@ const en = {
     climbOut: 'You climb back out of the Delve.',
     delveClearedNoHit: 'The Delve is cleared — but you landed no hit, so no loot.',
     deepGuardianFalls: (parts: string) => `The Deep Guardian falls! ${parts}`,
-    exhaustionDelveHost: 'Exhaustion takes the host — the Delve collapses. (No host migration in v1.)',
+    exhaustionDelveHost: 'Exhaustion takes the host — the Delve collapses and the party is sent back up.',
+    exhaustionDelveSolo: 'Exhaustion overtakes you — you wake safe back home, your pack intact. Rest, then delve again.',
     exhaustionDelveYou:
       'Exhaustion takes you — out of the Delve. Any hits you landed still count if the party wins.',
     knockedInDelve: (n: number, max: number) => `Knocked down in the Delve! (${n}/${max})`,
@@ -531,7 +534,8 @@ const en = {
     deepClearedNoHit: 'The Deep is cleared — but you landed no hit, so no loot.',
     deepHostLeftCollapse: 'The host left — the Deep collapses around you. No Deep loot (your Stage-1 haul is safe).',
     deepPartyOverwhelmed: 'The party is overwhelmed — the Deep resets. No Deep loot (your Stage-1 haul is safe).',
-    exhaustionDeepHost: 'Exhaustion takes the host — the Deep collapses. (No host migration in v1.)',
+    exhaustionDeepHost: 'Exhaustion takes the host — the Deep collapses and the party is sent back up.',
+    exhaustionDeepSolo: 'Exhaustion overtakes you — you wake safe back home, your Stage-1 haul intact.',
     exhaustionDeepYou:
       'Exhaustion takes you — out of the Deep. Any hits you landed still count if the party wins.',
     knockedInDeep: (n: number, max: number) => `Knocked down in the Deep! (${n}/${max})`,
@@ -546,7 +550,8 @@ const en = {
     knockedInDepth: (n: number, max: number) => `Knocked down in the Depths! (${n}/${max})`,
     depthHostLeftCollapse: 'The host left — the Depth collapses around you. Everything already banked is safe.',
     depthPartyOverwhelmed: 'The party is overwhelmed — the Descent ends here. Everything already banked is safe.',
-    exhaustionDepthHost: 'Exhaustion takes the host — the Descent collapses. (No host migration in v1.)',
+    exhaustionDepthHost: 'Exhaustion takes the host — the Descent collapses and the party is sent back up.',
+    exhaustionDepthSolo: 'Exhaustion overtakes you — you wake safe back home. Everything already banked is safe.',
     exhaustionDepthYou:
       'Exhaustion takes you — out of the Descent. Any hits you landed still count if the party wins.',
     // ADR-0012 — open-world Wildlife
@@ -689,7 +694,7 @@ type Strings = typeof en;
 
 const de: Strings = {
   controlsHelp:
-    'WASD/Pfeile bewegen · E interagieren / Linksklick angreifen (halten zum Weiterschlagen) · X abbauen · C herstellen · I Inventar · T Chat · M stumm · Rad zoomen',
+    'WASD/Pfeile bewegen · E interagieren / Linksklick angreifen (halten zum Weiterschlagen) · X abbauen · C herstellen · I Inventar · T Chat · M Karte · Rad zoomen',
   online: (n) => `Online (${n})`,
   youSuffix: ' (du)',
   builtBy: (who, item) => `${who} hat ${item} gebaut`,
@@ -918,7 +923,9 @@ const de: Strings = {
     loadoutBarTitle: 'Deine Ausrüstung — zieh Werkzeuge hierher; drücke 1–3, um eines in die Hand zu nehmen',
     slotHold: (name, i) => `${name} — drücke ${i}, um es in die Hand zu nehmen`,
     slotEmpty: (i) => `Ausrüstungsplatz ${i} — zieh ein Werkzeug hierher, drücke ${i} zum Auswählen`,
-    minimapTitle: 'Minikarte — weiß: du, gelb: andere',
+    minimapTitle: 'Minikarte — weiß: du, gelb: andere · M für die Weltkarte',
+    worldmapTitle: 'Weltkarte',
+    worldmapHint: 'M oder Esc zum Schließen · gelber Rand: dein Standort',
     // kind subtitle on the hover popup for non-weapon items
     kind: { resource: 'Ressource', tool: 'Werkzeug', structure: 'Bauwerk', consumable: 'Verbrauchsgut', food: 'Nahrung', armor: 'Rüstung' },
     equip: 'Anlegen',
@@ -1097,7 +1104,8 @@ const de: Strings = {
     climbOut: 'Du kletterst wieder aus dem Schacht heraus.',
     delveClearedNoHit: 'Der Schacht ist bezwungen — doch du hast keinen Treffer gelandet, also keine Beute.',
     deepGuardianFalls: (parts) => `Der Tiefenwächter fällt! ${parts}`,
-    exhaustionDelveHost: 'Erschöpfung übermannt den Host — der Schacht stürzt ein. (Kein Host-Wechsel in v1.)',
+    exhaustionDelveHost: 'Erschöpfung übermannt den Host — der Schacht stürzt ein und die Gruppe wird nach oben geschickt.',
+    exhaustionDelveSolo: 'Erschöpfung übermannt dich — du erwachst sicher zu Hause, dein Rucksack unversehrt. Ruh dich aus und steig erneut hinab.',
     exhaustionDelveYou:
       'Erschöpfung übermannt dich — raus aus dem Schacht. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
     knockedInDelve: (n, max) => `Im Schacht niedergeschlagen! (${n}/${max})`,
@@ -1113,7 +1121,8 @@ const de: Strings = {
     deepClearedNoHit: 'Die Tiefe ist bezwungen — doch du hast keinen Treffer gelandet, also keine Beute.',
     deepHostLeftCollapse: 'Der Host ist gegangen — die Tiefe stürzt um dich herum ein. Keine Tiefen-Beute (deine Stufe-1-Ausbeute ist sicher).',
     deepPartyOverwhelmed: 'Die Gruppe ist überwältigt — die Tiefe setzt sich zurück. Keine Tiefen-Beute (deine Stufe-1-Ausbeute ist sicher).',
-    exhaustionDeepHost: 'Erschöpfung übermannt den Host — die Tiefe stürzt ein. (Kein Host-Wechsel in v1.)',
+    exhaustionDeepHost: 'Erschöpfung übermannt den Host — die Tiefe stürzt ein und die Gruppe wird nach oben geschickt.',
+    exhaustionDeepSolo: 'Erschöpfung übermannt dich — du erwachst sicher zu Hause, deine Stufe-1-Ausbeute unversehrt.',
     exhaustionDeepYou:
       'Erschöpfung übermannt dich — raus aus der Tiefe. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
     knockedInDeep: (n, max) => `In der Tiefe niedergeschlagen! (${n}/${max})`,
@@ -1128,7 +1137,8 @@ const de: Strings = {
     knockedInDepth: (n, max) => `In den Tiefen niedergeschlagen! (${n}/${max})`,
     depthHostLeftCollapse: 'Der Host ist gegangen — die Tiefe stürzt um dich herum ein. Alles bereits Gesicherte ist sicher.',
     depthPartyOverwhelmed: 'Die Gruppe ist überwältigt — der Abstieg endet hier. Alles bereits Gesicherte ist sicher.',
-    exhaustionDepthHost: 'Erschöpfung übermannt den Host — der Abstieg stürzt ein. (Kein Host-Wechsel in v1.)',
+    exhaustionDepthHost: 'Erschöpfung übermannt den Host — der Abstieg stürzt ein und die Gruppe wird nach oben geschickt.',
+    exhaustionDepthSolo: 'Erschöpfung übermannt dich — du erwachst sicher zu Hause. Alles bereits Gesicherte ist sicher.',
     exhaustionDepthYou:
       'Erschöpfung übermannt dich — raus aus dem Abstieg. Deine gelandeten Treffer zählen weiter, wenn die Gruppe gewinnt.',
     // ADR-0012 — Wildnis

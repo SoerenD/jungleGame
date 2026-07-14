@@ -30,6 +30,7 @@ import type {
   ProjSnap,
   QuestState,
   RefinerConfig,
+  SawmillState,
   SealState,
   Structure,
   WardenAltarState,
@@ -48,6 +49,7 @@ import {
   EXHAUSTION_KNOCKDOWNS,
   FOG_CHUNK,
   FOG_REVEAL_RADIUS,
+  LEGACY_FOG_STRIDE,
   FORCE_NIGHT,
   GUARDIAN_AWAKE_MS,
   GUARDIAN_SCALE_DROP,
@@ -67,6 +69,7 @@ import {
   loadVolumes,
   type AudioChannel,
   PLAYER_SPEED,
+  SAWMILL_PLANK_MS,
   SPEED_BUFF_FACTOR,
   SWING_CADENCE_MS,
   TEST_REFINER,
@@ -581,6 +584,10 @@ export class GameScene extends Phaser.Scene {
   private structureIds = new Set<string>();
   /** per-structure display + collision objects, kept so a dismantle can tear them down */
   private structureViews = new Map<string, { objects: Phaser.GameObjects.GameObject[]; bodies: Phaser.GameObjects.Rectangle[]; glowImg: Phaser.GameObjects.Image | null }>();
+  /** Sawmill blade sprites (v3): spun + puffing while the mill is working */
+  private sawmillBlades = new Map<string, { blade: Phaser.GameObjects.Image; x: number; y: number; baseY: number; nextPuff: number }>();
+  /** per-Sawmill "milling until" timestamp — derived from its last observed state */
+  private sawmillMillingUntil = new Map<string, number>();
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   private remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
@@ -1302,8 +1309,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // player — the Avatar texture is composed from this Player's palette picks
-    // (+ the worn Armor overlays, restored from the join and re-baked on equip)
-    this.equipped = sanitizeEquipped(this.me.equipped, this.me.inventory);
+    // (+ the worn Armor overlays, restored from the join and re-baked on equip).
+    // Armor is worn by moving it out of the bag, so keep the worn set as-is (the
+    // backend already normalized any legacy worn-AND-in-bag save on join).
+    this.equipped = sanitizeEquipped(this.me.equipped);
     const myTexture = `avatar-${this.me.name}`;
     ensureAvatarTexture(this, myTexture, this.me.appearance, this.equipped);
     this.playerShadow = this.addShadow(this.me.x, this.me.y, 14);
@@ -1451,6 +1460,7 @@ export class GameScene extends Phaser.Scene {
       // ADR-0015: seed the Hall panel's Depth Record teaser (records accrue from
       // the first Descent even while the Grand Monument is unbuilt)
       this.refreshDepthRecords();
+      this.emitSawmillBuilt(); // Into-the-Delve step: a Sawmill stands in the World
     });
     bus.emit('inventory', this.inventory);
     bus.emit('equipped', this.equipped);
@@ -1669,8 +1679,12 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('structurePlaced', (s: Structure) => {
       this.addStructure(s);
       if (s.placedBy !== this.me.name) bus.emit('toast', t.builtBy(s.placedBy, ITEMS[s.type].name), 'info');
+      if (s.type === 'sawmill') this.emitSawmillBuilt();
     });
-    this.backend.on('structureRemoved', (id: string) => this.removeStructure(id));
+    this.backend.on('structureRemoved', (id: string) => {
+      this.removeStructure(id);
+      this.emitSawmillBuilt(); // the last Sawmill may have just come down
+    });
     this.backend.on('crateChanged', (crateId: string, contents: Inventory) => {
       bus.emit('crate-changed', crateId, contents);
     });
@@ -3185,14 +3199,19 @@ export class GameScene extends Phaser.Scene {
     this.fogRT.fill(0x06120a, 0.96);
     this.fogRT.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
     // Explored-chunk indices encode the fog stride (fogChunksW = ceil(MAP_W/4)).
-    // Map growth re-strides them — 200→300 did, and the 300→384 Realm growth
-    // (ADR-0017) does again: indices saved under the old stride decode to
-    // shifted chunks, a cosmetic scramble of the revealed map that is ACCEPTED
-    // per the ADR-0009 growth discipline (no version marker exists, so no
-    // remap is possible; no DB migration). The range guard below drops nothing
-    // on growth — every old index stays in range under the larger grid.
+    // Map growth re-strides them (200→300→384): an index saved under the old
+    // row-width decodes to a shifted chunk under the new one — the "venetian-
+    // blind" stripes on relog. FIX: remap each stored index from its SAVE stride
+    // (persisted as exploredStride; a legacy save has none → assume the last
+    // pre-Realm stride) to the CURRENT stride. Pinned growth keeps every chunk's
+    // (cx,cy), so the remap is lossless — the reveal lands exactly where it was.
+    const savedStride = this.me.exploredStride ?? LEGACY_FOG_STRIDE;
     for (const c of this.me.explored) {
-      if (c >= 0 && c < this.fogChunksW * this.fogChunksH) this.explored.add(c);
+      if (c < 0) continue;
+      const cx = c % savedStride;
+      const cy = Math.floor(c / savedStride);
+      if (cx >= this.fogChunksW || cy >= this.fogChunksH) continue; // per-axis guard
+      this.explored.add(cy * this.fogChunksW + cx); // re-encode at the current stride
     }
     for (const c of this.explored) this.eraseFogChunk(c);
     bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
@@ -3227,7 +3246,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     if (fresh.length) {
-      void this.backend.markExplored(fresh);
+      void this.backend.markExplored(fresh, this.fogChunksW);
       bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
     }
   }
@@ -3406,7 +3425,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     if (fresh.length) {
-      void this.backend.markExplored(fresh);
+      void this.backend.markExplored(fresh, this.fogChunksW);
       bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
     }
   }
@@ -3494,8 +3513,12 @@ export class GameScene extends Phaser.Scene {
       this.desiredEquip = null;
       const res = await this.backend.equip(want);
       this.equipped = res.equipped;
+      // equip MOVES the piece: adopt the mutated bag so the equipped piece leaves
+      // the inventory grid (and a bared one returns) live.
+      this.inventory = res.inventory;
       this.rebuildOwnAvatar();
       bus.emit('equipped', this.equipped);
+      bus.emit('inventory', this.inventory);
       this.sfx('craft', 0.4);
     });
   }
@@ -3723,6 +3746,7 @@ export class GameScene extends Phaser.Scene {
         }
         this.inventory = res.inventory;
         bus.emit('inventory', this.inventory);
+        this.noteSawmillState(sawmillId, res.state);
         bus.emit('sawmill-open', sawmillId, res.state);
         this.sfx('place', 0.5);
       });
@@ -3736,6 +3760,7 @@ export class GameScene extends Phaser.Scene {
         }
         this.inventory = res.inventory;
         bus.emit('inventory', this.inventory);
+        this.noteSawmillState(sawmillId, res.state);
         bus.emit('sawmill-open', sawmillId, res.state);
         bus.emit('toast', t.toast.collectPlanks, 'good');
         this.sfx('harvest', 0.6);
@@ -4530,9 +4555,62 @@ export class GameScene extends Phaser.Scene {
       if (!res.ok) return;
       this.inventory = res.inventory;
       bus.emit('inventory', this.inventory);
+      this.noteSawmillState(sawmillId, res.state);
       bus.emit('sawmill-open', sawmillId, res.state);
       this.sfx('blip', 0.4);
     });
+  }
+
+  /** record when a Sawmill will finish milling everything it holds, from its last
+   *  observed state (wood still milling × plank time + the current plank's remainder).
+   *  updateSawmills spins the blade + puffs sawdust while `now` is before it. */
+  private noteSawmillState(id: string, state: SawmillState): void {
+    if (state.wood > 0 && state.nextPlankMs != null) {
+      this.sawmillMillingUntil.set(id, Date.now() + state.nextPlankMs + (state.wood - 1) * SAWMILL_PLANK_MS);
+    } else {
+      this.sawmillMillingUntil.set(id, 0);
+    }
+  }
+
+  /** the Into-the-Delve "Build a Sawmill" step: does any Sawmill stand in the World? */
+  private emitSawmillBuilt(): void {
+    let built = false;
+    for (const s of this.structuresByTile.values()) {
+      if (s.type === 'sawmill') { built = true; break; }
+    }
+    bus.emit('sawmill-built', built);
+  }
+
+  /** v3 (#3): a working Sawmill spins its blade and coughs sawdust. "Working" is the
+   *  client's last-known milling window; a mill we've never opened simply sits idle. */
+  private updateSawmills(time: number, dt: number): void {
+    if (this.sawmillBlades.size === 0) return;
+    const now = Date.now();
+    for (const [id, v] of this.sawmillBlades) {
+      const working = now < (this.sawmillMillingUntil.get(id) ?? 0);
+      if (!working) {
+        if (v.blade.visible) v.blade.setVisible(false);
+        continue;
+      }
+      if (!v.blade.visible) v.blade.setVisible(true);
+      v.blade.rotation += dt * 9; // a brisk spin reads as cutting
+      // a small sawdust puff drifts off the blade every ~0.35 s
+      if (time >= v.nextPuff) {
+        v.nextPuff = time + 320 + Math.random() * 120;
+        const puff = this.add
+          .rectangle(v.x + (Math.random() - 0.5) * 8, v.y + 4, 2, 2, 0xd9b98a)
+          .setDepth(v.baseY + 2);
+        this.tweens.add({
+          targets: puff,
+          x: puff.x + (Math.random() - 0.5) * 10,
+          y: puff.y + 8 + Math.random() * 6,
+          alpha: 0,
+          duration: 620,
+          ease: 'quad.out',
+          onComplete: () => puff.destroy(),
+        });
+      }
+    }
   }
 
   /** open the generic Refiner panel on a station, run on the passed tuning (ADR-0017 §6) */
@@ -4629,6 +4707,14 @@ export class GameScene extends Phaser.Scene {
       this.glows.push({ img: glowImg, base: glowDef.base, x, y: baseY });
     }
     this.structureViews.set(s.id, { objects, bodies, glowImg });
+    // v3: a working Sawmill spins a saw blade. Seat it near the top-centre of the
+    // mill sprite, above it in depth, hidden until the mill is milling (updateSawmills).
+    if (s.type === 'sawmill') {
+      const by = baseY - TILE * 1.15;
+      const blade = this.add.image(x, by, 'sawblade').setDepth(baseY + 1).setVisible(false);
+      objects.push(blade);
+      this.sawmillBlades.set(s.id, { blade, x, y: by, baseY, nextPuff: 0 });
+    }
   }
 
   /**
@@ -4650,6 +4736,9 @@ export class GameScene extends Phaser.Scene {
       if (view.glowImg) this.glows = this.glows.filter((g) => g.img !== view.glowImg);
       this.structureViews.delete(id);
     }
+    // the blade sprite is destroyed with view.objects above; drop its bookkeeping
+    this.sawmillBlades.delete(id);
+    this.sawmillMillingUntil.delete(id);
     if (s) {
       const { w, h } = footprint(s.type);
       for (let dy = 0; dy < h; dy++) {
@@ -5625,7 +5714,13 @@ export class GameScene extends Phaser.Scene {
     this.player.setPosition((S.entry.tx + 0.5) * TILE, (S.entry.ty + 0.5) * TILE);
     this.player.setVelocity(0, 0);
     const cam = this.cameras.main;
-    cam.setBounds(0, 0, S.w * TILE, S.h * TILE);
+    // Follow the player freely inside the Delve. Clamping the camera to the small
+    // Stage rect (60×22 for Stage 1) let a tall viewport center the whole interior
+    // so the camera never moved — you fought pinned to the screen edge. The Delve
+    // backdrop tracks the camera and fills the viewport (updateDelve), so with no
+    // bounds the void beyond the walls reads as solid dark rock. Bounds are
+    // restored on exit by applyCameraRegion (leaveDelve).
+    cam.removeBounds();
     // the Deep flashes hot-orange on descent; the mine flashes cool
     if (S.palette === 'magma') cam.flash(500, 60, 18, 6);
     else cam.flash(400, 3, 5, 9);
@@ -5829,7 +5924,18 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** tear down the instance and return to the World entrance (broadcasts are at call sites) */
-  private leaveDelve(): void {
+  /** where an involuntary Delve exit drops you: the founded Village Hall, else the
+   *  World spawn — a known, safe home, never the far-off shaft (issue: Exhaustion
+   *  used to strand you at the Cavern Mouth) */
+  private delveWakeTile(): { tx: number; ty: number } {
+    const hall = this.village?.hall;
+    if (hall) return { tx: hall.tx, ty: hall.ty + footprint('village_hall').h };
+    return { tx: this.world.spawn.tx, ty: this.world.spawn.ty };
+  }
+
+  /** leave the Delve. `wake` overrides the exit tile (Exhaustion/collapse wake you
+   *  home); the default is the mine-shaft mouth you climbed out of. */
+  private leaveDelve(wake?: { tx: number; ty: number }): void {
     if (!this.inDelve) return;
     this.inDelve = false;
     this.delveRunId = null;
@@ -5840,7 +5946,8 @@ export class GameScene extends Phaser.Scene {
     for (const c of this.worldColliders) c.active = true;
     const cam = this.cameras.main;
     cam.flash(300, 6, 8, 12);
-    this.player.setPosition((this.delveEntrance.tx + 0.5) * TILE, (this.delveEntrance.ty + 1.5) * TILE);
+    const at = wake ?? { tx: this.delveEntrance.tx, ty: this.delveEntrance.ty + 1 };
+    this.player.setPosition((at.tx + 0.5) * TILE, (at.ty + 0.5) * TILE);
     this.player.setVelocity(0, 0);
     // back to the positional region clamp (the shaft is never inside a district)
     this.applyCameraRegion(true);
@@ -6144,15 +6251,21 @@ export class GameScene extends Phaser.Scene {
     this.onStageBossFelled();
   }
 
-  /** my 3rd knockdown: Exhaustion — out of the run; a host leaving ends it for all (v1) */
+  /** my 3rd knockdown: Exhaustion — out of the run. You wake safe at home (the
+   *  Village Hall or spawn), pack intact — never stranded at the far shaft. A SOLO
+   *  player is always the host, so their calm wake reads as a normal defeat, not
+   *  the alarming "no host migration" collapse (which only a real party ever sees). */
   private exitDelveExhausted(): void {
     this.delveExhausted = true;
     const stage = this.delveStage;
+    const solo = this.delveHeadcount <= 1;
     if (this.isDelveHost) {
-      const msg = stage >= 3 ? t.toast.exhaustionDepthHost : stage === 2 ? t.toast.exhaustionDeepHost : t.toast.exhaustionDelveHost;
-      bus.emit('toast', msg, 'bad');
+      const msg = solo
+        ? (stage >= 3 ? t.toast.exhaustionDepthSolo : stage === 2 ? t.toast.exhaustionDeepSolo : t.toast.exhaustionDelveSolo)
+        : (stage >= 3 ? t.toast.exhaustionDepthHost : stage === 2 ? t.toast.exhaustionDeepHost : t.toast.exhaustionDelveHost);
+      bus.emit('toast', msg, solo ? 'info' : 'bad');
       if (this.delveRunId) this.backend.sendDungeon({ t: 'end', runId: this.delveRunId, reason: 'hostleft' });
-      this.leaveDelve();
+      this.leaveDelve(this.delveWakeTile());
     } else {
       const msg = stage >= 3 ? t.toast.exhaustionDepthYou : stage === 2 ? t.toast.exhaustionDeepYou : t.toast.exhaustionDelveYou;
       bus.emit('toast', msg, 'bad');
@@ -6160,7 +6273,7 @@ export class GameScene extends Phaser.Scene {
         this.backend.sendDungeon({ t: 'down', runId: this.delveRunId, name: this.me.name, out: true });
         if (this.delveHitLanded) this.delveExhaustedRun = this.delveRunId;
       }
-      this.leaveDelve();
+      this.leaveDelve(this.delveWakeTile());
     }
   }
 
@@ -7444,6 +7557,9 @@ export class GameScene extends Phaser.Scene {
       this.updateDelve(time, delta);
       return;
     }
+
+    // v3 (#3): spin the blade + puff sawdust on any Sawmill currently milling
+    this.updateSawmills(time, dt);
 
     // atmosphere: day/night tint, light glows, fireflies, leaves
     const cam = this.cameras.main;

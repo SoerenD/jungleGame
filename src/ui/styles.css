@@ -608,6 +608,45 @@ button.ui-btn:disabled {
   opacity: 0.92;
 }
 
+/* the full-screen world map (M) — hidden until toggled */
+#worldmap-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 10, 5, 0.92);
+  pointer-events: auto;
+}
+#worldmap-overlay.open {
+  display: flex;
+}
+#worldmap-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+#worldmap-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent, #ffe9c9);
+  letter-spacing: 0.04em;
+}
+#worldmap-canvas {
+  image-rendering: pixelated;
+  border: 2px solid var(--panel-border);
+  border-radius: 8px;
+  background: #0b130d;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 110px);
+}
+#worldmap-hint {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
 /* bottom-right bar */
 #bottom-bar {
   position: absolute;

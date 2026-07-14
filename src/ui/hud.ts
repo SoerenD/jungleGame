@@ -54,6 +54,8 @@ let invReady = false;
 let treasureLoc: { tx: number; ty: number } | null = null;
 let quest: QuestState | null = null;
 let seal: SealState | null = null;
+/** does a Sawmill stand in the World? (Into-the-Delve step, from GameScene) */
+let sawmillBuilt = false;
 /** the communal Village record (ADR-0010) — drives the tier panel + recipe gating */
 let village: VillageRecord | null = null;
 let villageTier = 0;
@@ -88,6 +90,17 @@ let depthRecords: DepthRecords | null = null;
 let recordsTab: 'descents' | 'players' = 'descents';
 /** fog-of-war layer for the minimap: 1px per chunk, rebuilt on fog events */
 let fogLayer: HTMLCanvasElement | null = null;
+/** the full-screen world-map renderer (set by initMinimap so it can reuse the
+ *  pre-baked terrain + fog + landmarks); null until the minimap has initialized */
+let drawWorldMap: (() => void) | null = null;
+
+/** open/close the full-screen world map (M / Escape / backdrop click) */
+function setWorldMapOpen(open: boolean): void {
+  const ov = document.getElementById('worldmap-overlay');
+  if (!ov) return;
+  ov.classList.toggle('open', open);
+  if (open) drawWorldMap?.();
+}
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -347,6 +360,13 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
       <input id="chat-input" data-testid="chat-input" placeholder="${t.chat.placeholder}" maxlength="200" autocomplete="off" />
     </div>
     <canvas id="minimap" width="150" height="150" data-testid="minimap" title="${t.inv.minimapTitle}"></canvas>
+    <div id="worldmap-overlay" data-testid="worldmap-overlay">
+      <div id="worldmap-box">
+        <div id="worldmap-title">${t.inv.worldmapTitle}</div>
+        <canvas id="worldmap-canvas" data-testid="worldmap-canvas"></canvas>
+        <div id="worldmap-hint">${t.inv.worldmapHint}</div>
+      </div>
+    </div>
     <div id="loadout-bar" data-testid="loadout-bar" title="${t.inv.loadoutBarTitle}"></div>
     <div id="settings-panel" class="panel" data-testid="settings-panel">
       <h3>${t.settings.title}</h3>
@@ -446,6 +466,10 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     const typing = document.activeElement instanceof HTMLInputElement;
     if (typing) return;
     const k = e.key.toLowerCase();
+    if (k === 'escape' && el('worldmap-overlay').classList.contains('open')) {
+      setWorldMapOpen(false);
+      return;
+    }
     if (k === 't') {
       e.preventDefault();
       input.focus();
@@ -454,10 +478,16 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     } else if (k === 'i') {
       togglePanel('inventory-panel');
     } else if (k === 'm') {
-      bus.emit('toggle-mute');
+      // M opens the full-screen world map (find "The Cavern Mouth" & every region).
+      // Mute lives on the bottom-bar button + the settings checkbox.
+      setWorldMapOpen(!el('worldmap-overlay').classList.contains('open'));
     } else if (k === '1' || k === '2' || k === '3') {
       selectLoadout(Number(k) - 1);
     }
+  });
+  // dim backdrop click closes the world map
+  el('worldmap-overlay').addEventListener('click', (e) => {
+    if (e.target === el('worldmap-overlay')) setWorldMapOpen(false);
   });
 
   bus.on('inventory', (next: Inventory) => {
@@ -509,6 +539,10 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     renderQuestLabel();
     renderJourney(); // the 'shaft cleared' step ticks off quest.delveOpen
   });
+  bus.on('sawmill-built', (built: boolean) => {
+    sawmillBuilt = built;
+    renderJourney(); // the 'Build a Sawmill' step ticks off
+  });
   bus.on('seal', (s: SealState) => {
     seal = s;
     renderQuestLabel();
@@ -535,6 +569,7 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     renderVillagePanel();
     renderRecipes(); // tier-locked Buildings unlock as the Village grows (villageMin)
     renderCharacter(); // the Village's collective buffs feed the attributes block
+    renderJourney(); // the Into-the-Delve 'Found a Village' step ticks off hall!==null
   });
   bus.on('village-near', (near: boolean) => {
     el('village-panel').classList.toggle('open', near);
@@ -1222,10 +1257,13 @@ async function initMinimap(): Promise<void> {
   const canvas = el<HTMLCanvasElement>('minimap');
   const ctx = canvas.getContext('2d')!;
   const mapJson = await (await fetch(asset('/map/jungle-map.json'))).json();
-  // v2 landmarks (Seal monument, Guardian) are marked on the minimap
+  // v2 landmarks (Seal monument, Guardian) are marked on the minimap; the full
+  // world map (M) also draws every Zone's border + name so a Player can locate a
+  // named region like "The Cavern Mouth".
   const worldData = (await (await fetch(asset('/map/world-data.json'))).json()) as {
     sealMonument: { tx: number; ty: number };
     guardianHome: { tx: number; ty: number };
+    zones: { name: string; x: number; y: number; w: number; h: number; dangerous?: boolean }[];
   };
   const ground = (mapJson.layers as { name: string; data: number[] }[]).find((l) => l.name === 'ground')!.data;
   const W = mapJson.width as number;
@@ -1251,8 +1289,11 @@ async function initMinimap(): Promise<void> {
   // (inside a Realm) the district's own rect alone, so each Realm reads as its
   // own small map. GameScene ships the active district rect on the 'pos' event.
   type MiniView = { x: number; y: number; w: number; h: number };
+  type MiniPos = { x: number; y: number; others: { x: number; y: number }[]; view?: MiniView };
   const worldView: MiniView = { x: 0, y: 0, w: Math.min(W, WORLD_VIEW_W), h: Math.min(H, WORLD_VIEW_H) };
-  const draw = (pos?: { x: number; y: number; others: { x: number; y: number }[]; view?: MiniView }) => {
+  let lastPos: MiniPos | undefined;
+  const draw = (pos?: MiniPos) => {
+    if (pos) lastPos = pos;
     const view = pos?.view ?? worldView;
     // letterbox the view into the canvas (district rects are rarely square)
     const scale = Math.min(canvas.width / view.w, canvas.height / view.h); // canvas px per tile
@@ -1321,6 +1362,85 @@ async function initMinimap(): Promise<void> {
   };
   draw();
   bus.on('pos', draw);
+
+  // ---- the full-screen world map (M): the whole grid with every Zone's border
+  // + name drawn OVER the fog, so a Player can find where a named region like
+  // "The Cavern Mouth" lies even before discovering it.
+  const big = el<HTMLCanvasElement>('worldmap-canvas');
+  const bctx2 = big.getContext('2d')!;
+  const drawLarge = (): void => {
+    const side = Math.max(240, Math.min(window.innerWidth - 64, window.innerHeight - 140));
+    big.width = side;
+    big.height = side;
+    const view: MiniView = { x: 0, y: 0, w: W, h: H }; // the whole grid (incl. Realm districts)
+    const scale = Math.min(side / view.w, side / view.h);
+    const offX = (side - view.w * scale) / 2;
+    const offY = (side - view.h * scale) / 2;
+    const toX = (wx: number) => offX + (wx / 16 - view.x) * scale;
+    const toY = (wy: number) => offY + (wy / 16 - view.y) * scale;
+    bctx2.imageSmoothingEnabled = false;
+    bctx2.fillStyle = '#0b130d';
+    bctx2.fillRect(0, 0, side, side);
+    bctx2.drawImage(bg, view.x, view.y, view.w, view.h, offX, offY, view.w * scale, view.h * scale);
+    if (fogLayer) {
+      bctx2.drawImage(fogLayer, 0, 0, fogLayer.width, fogLayer.height, offX, offY, view.w * scale, view.h * scale);
+    }
+    // static landmarks (drawn under the labels): Seal (violet), Guardian (red)
+    bctx2.fillStyle = '#b478ff';
+    bctx2.fillRect(toX(worldData.sealMonument.tx * 16) - 3, toY(worldData.sealMonument.ty * 16) - 3, 6, 6);
+    bctx2.fillStyle = '#c03a2b';
+    bctx2.fillRect(toX((worldData.guardianHome.tx + 1.5) * 16) - 3, toY((worldData.guardianHome.ty + 1.5) * 16) - 3, 6, 6);
+    if (village?.hall) {
+      bctx2.fillStyle = '#ffe9c9';
+      bctx2.fillRect(toX((village.hall.tx + 1) * 16) - 3, toY((village.hall.ty + 1) * 16) - 3, 6, 6);
+    }
+    // which Zone is the Player standing in? (highlight it)
+    const ptx = lastPos ? lastPos.x / 16 : -1;
+    const pty = lastPos ? lastPos.y / 16 : -1;
+    const font = Math.max(9, Math.round(side / 46));
+    bctx2.font = `${font}px sans-serif`;
+    bctx2.textAlign = 'center';
+    bctx2.textBaseline = 'top';
+    for (const z of worldData.zones) {
+      const here = ptx >= z.x && ptx < z.x + z.w && pty >= z.y && pty < z.y + z.h;
+      const rx = toX(z.x * 16);
+      const ry = toY(z.y * 16);
+      const rw = z.w * 16 * scale;
+      const rh = z.h * 16 * scale;
+      bctx2.lineWidth = here ? 3 : 1.5;
+      bctx2.strokeStyle = here ? '#ffe066' : z.dangerous ? '#d1795f' : '#e9d8b0';
+      bctx2.strokeRect(rx, ry, rw, rh);
+      const label = zoneName(z.name);
+      const lx = rx + rw / 2;
+      const ly = ry + 3;
+      bctx2.lineWidth = 3;
+      bctx2.strokeStyle = 'rgba(6,14,9,0.9)';
+      bctx2.strokeText(label, lx, ly);
+      bctx2.fillStyle = here ? '#fff4c2' : z.dangerous ? '#f0c4b6' : '#f4ecd6';
+      bctx2.fillText(label, lx, ly);
+    }
+    // the treasure ✕ (if a dig spot is revealed), then the player + teammates
+    if (treasureLoc) {
+      const cx = toX(treasureLoc.tx * 16);
+      const cy = toY(treasureLoc.ty * 16);
+      bctx2.strokeStyle = '#ff5544';
+      bctx2.lineWidth = 2.5;
+      bctx2.beginPath();
+      bctx2.moveTo(cx - 5, cy - 5); bctx2.lineTo(cx + 5, cy + 5);
+      bctx2.moveTo(cx + 5, cy - 5); bctx2.lineTo(cx - 5, cy + 5);
+      bctx2.stroke();
+    }
+    if (lastPos) {
+      bctx2.fillStyle = '#ffd166';
+      for (const o of lastPos.others) bctx2.fillRect(toX(o.x) - 2, toY(o.y) - 2, 4, 4);
+      bctx2.fillStyle = '#ffffff';
+      bctx2.fillRect(toX(lastPos.x) - 3, toY(lastPos.y) - 3, 6, 6);
+    }
+  };
+  drawWorldMap = drawLarge;
+  window.addEventListener('resize', () => {
+    if (el('worldmap-overlay').classList.contains('open')) drawLarge();
+  });
 }
 
 function togglePanel(id: string): void {
@@ -1397,7 +1517,7 @@ function renderJourney(): void {
     return;
   }
   // Phase 2 — the road to the Delve, once The Journey is done
-  const prog = { seal, inventory: inv, quest };
+  const prog = { seal, inventory: inv, quest, sawmillBuilt, village };
   if (journey && !delveQuestComplete(prog)) {
     panel.classList.add('open');
     title.textContent = t.panels.intoDelve;

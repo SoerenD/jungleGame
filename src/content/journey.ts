@@ -6,6 +6,7 @@
  */
 import { pick } from '../i18n';
 import type { Inventory, JourneyState, JourneyStepId, QuestState, SealState, WardenWorldState } from '../backend/types';
+import type { VillageRecord } from './village';
 
 export const JOURNEY_STEPS: { id: JourneyStepId; label: string }[] = [
   { id: 'gather_wood', label: pick('Gather wood', 'Holz sammeln') },
@@ -37,9 +38,17 @@ export interface DelveProgress {
   seal: SealState | null;
   inventory: Inventory;
   quest: QuestState | null;
+  /** does at least one Sawmill stand in the World? (a world-flag proxy, like the Seal) */
+  sawmillBuilt: boolean;
+  /** the communal Village record — `hall !== null` means it has been founded */
+  village: VillageRecord | null;
 }
 
 export const DELVE_QUEST_STEPS: { id: string; label: string; done: (p: DelveProgress) => boolean }[] = [
+  // the two groundwork steps first: a Sawmill (planks for tier-2 gear) and a
+  // founded Village (your anchor — where Exhaustion in the Delve wakes you).
+  { id: 'build_sawmill', label: pick('Build a Sawmill', 'Ein Sägewerk bauen'), done: (p) => p.sawmillBuilt },
+  { id: 'found_village', label: pick('Found a Village — raise the Hall', 'Ein Dorf gründen — die Halle errichten'), done: (p) => !!p.village?.hall },
   { id: 'break_seal', label: pick('Break the Seal at the Ruins', 'Das Siegel bei den Ruinen brechen'), done: (p) => !!p.seal?.broken },
   { id: 'best_guardian', label: pick('Defeat the Guardian — earn Guardian Scales', 'Den Wächter bezwingen — Wächterschuppen verdienen'), done: (p) => (p.inventory.guardian_scale ?? 0) > 0 },
   { id: 'forge_pickaxe', label: pick('Forge an Ancient Pickaxe', 'Eine Uralte Spitzhacke schmieden'), done: (p) => (p.inventory.ancient_pickaxe ?? 0) > 0 },

@@ -97,14 +97,17 @@ export function armorBuff(eq: EquippedArmor | undefined | null): ArmorBuff {
 }
 
 /**
- * Drop unknown slots, slot-mismatched pieces and — when an inventory is given
- * (the backends' ownership check) — anything not actually owned. The wire and
- * the DB both pass through here, so junk never reaches a texture or a roll.
+ * Drop unknown slots and slot-mismatched pieces — pure SHAPE validation only.
+ *
+ * Ownership is NO LONGER checked here. Armor is now WORN by moving the piece OUT
+ * of the inventory (equip decrements the bag, unequip returns it), so a worn
+ * piece is its OWN proof of ownership and is expected to be ABSENT from the bag.
+ * The old inventory coupling (drop-if-not-in-bag) would wrongly strip every worn
+ * piece on join; the equip/join transactions in each backend own the ownership
+ * math now. The wire and the DB still pass through here so junk never reaches a
+ * texture or a roll.
  */
-export function sanitizeEquipped(
-  eq: unknown,
-  inv?: Partial<Record<string, number>>,
-): EquippedArmor {
+export function sanitizeEquipped(eq: unknown): EquippedArmor {
   const out: EquippedArmor = {};
   if (!eq || typeof eq !== 'object') return out;
   for (const slot of ARMOR_SLOTS) {
@@ -112,7 +115,6 @@ export function sanitizeEquipped(
     if (typeof item !== 'string') continue;
     const def = armorDef(item);
     if (!def || def.slot !== slot) continue;
-    if (inv && (inv[item] ?? 0) <= 0) continue;
     out[slot] = item as ItemId;
   }
   return out;

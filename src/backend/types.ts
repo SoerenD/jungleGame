@@ -117,9 +117,18 @@ export type JoinResult =
        */
       explored: number[];
       /**
+       * the row-stride (`ceil(MAP_W / FOG_CHUNK)`) the `explored` indices were
+       * last saved under. Absent on a legacy save (written before the stride was
+       * tracked) — the client then assumes the last pre-Realm stride and remaps.
+       * Persisting it lets map growth remap old indices instead of scrambling
+       * them into stripes (the fog-of-war fix).
+       */
+      exploredStride?: number;
+      /**
        * the Armor worn last session (ADR-0017 §4), persisted like `wake_point`
-       * (a jsonb column on the player row) and re-validated against the
-       * inventory on load — equipment never survives losing the piece
+       * (a jsonb column on the player row). Armor is WORN by moving the piece out
+       * of the inventory, so a worn slot is kept regardless of bag count; a legacy
+       * worn-AND-in-bag save has the bag copy removed once on load.
        */
       equipped: EquippedArmor;
     }
@@ -386,11 +395,13 @@ export type CookResult =
 
 /**
  * Equipping Armor (ADR-0017 §4): the client sends the full desired slot→item
- * mapping; the backend keeps only owned, slot-matching pieces and returns what
- * actually stuck (the server-sanitized record). Never fails outright — an
- * unowned piece simply drops out.
+ * mapping; the backend MOVES pieces between the bag and the worn slots — a newly
+ * worn piece is decremented out of `inventory`, a newly bared one is returned to
+ * it — and returns both the server-sanitized worn record AND the mutated
+ * inventory so the bag re-renders. Never fails outright: a piece that is neither
+ * already worn nor available in the bag simply drops out.
  */
-export type EquipResult = { equipped: EquippedArmor };
+export type EquipResult = { equipped: EquippedArmor; inventory: Inventory };
 
 export type EatResult =
   | { ok: false; reason: 'NOTHING_TO_EAT' }
@@ -723,8 +734,10 @@ export interface Backend {
   reportKnockdown(tx: number, ty: number): Promise<KnockdownResult>;
   /**
    * wear/unwear Armor (ADR-0017 §4): persists as `players.equipped` and rides
-   * the position/presence payload from then on. The backend re-validates
-   * ownership; the returned record is the truth the client adopts.
+   * the position/presence payload from then on. The backend MOVES the piece
+   * between the bag and the slot (equip decrements `inventory`, unequip returns
+   * it); the returned record (worn set + mutated inventory) is the truth the
+   * client adopts.
    */
   equip(equipped: EquippedArmor): Promise<EquipResult>;
   /** turn one carried fish into a cooked fish (client checks campfire proximity) */
@@ -746,8 +759,12 @@ export interface Backend {
   markIntroSeen(): Promise<void>;
   /** tick one Journey objective for this Player (idempotent) */
   completeJourneyStep(step: JourneyStepId): Promise<JourneyState>;
-  /** fog-of-war: persist newly explored chunk indices for this Player (idempotent) */
-  markExplored(chunks: number[]): Promise<void>;
+  /**
+   * fog-of-war: persist newly explored chunk indices for this Player (idempotent).
+   * `stride` is the row-stride (`ceil(MAP_W / FOG_CHUNK)`) the indices are encoded
+   * under, so the store can be stamped/remapped instead of scrambled on map growth.
+   */
+  markExplored(chunks: number[], stride: number): Promise<void>;
   /** count one successful use of a contextual key hint (hints retire after a few) */
   bumpHint(hintId: string): Promise<JourneyState>;
   on<K extends keyof BackendEvents>(event: K, cb: BackendEvents[K]): void;

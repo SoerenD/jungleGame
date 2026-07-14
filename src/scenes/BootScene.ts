@@ -59,6 +59,30 @@ export class BootScene extends Phaser.Scene {
     gctx.fillStyle = grad;
     gctx.fillRect(0, 0, 64, 64);
     glow.refresh();
+    // a small circular saw blade (16×16) — spun on a working Sawmill (v3) so the
+    // mill reads as actively milling; a steel disc, dark teeth around the rim, hub
+    const blade = this.textures.createCanvas('sawblade', 16, 16)!;
+    const bctx = blade.context;
+    const cx = 8;
+    const cy = 8;
+    bctx.fillStyle = '#c7ccd4';
+    bctx.beginPath();
+    bctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    bctx.fill();
+    bctx.fillStyle = '#5a616e';
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      bctx.fillRect(cx + Math.cos(a) * 6 - 1, cy + Math.sin(a) * 6 - 1, 2, 2);
+    }
+    bctx.fillStyle = '#8b94a3';
+    bctx.beginPath();
+    bctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    bctx.fill();
+    bctx.fillStyle = '#3a3f49';
+    bctx.beginPath();
+    bctx.arc(cx, cy, 1.2, 0, Math.PI * 2);
+    bctx.fill();
+    blade.refresh();
     // puffy parallax clouds: three shape variants, sunlit top, blue underside
     const cloudTex = (key: string, w: number, h: number, blobs: [number, number, number][]) => {
       const tex = this.textures.createCanvas(key, w, h)!;

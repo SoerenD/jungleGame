@@ -169,6 +169,9 @@ export class SupabaseBackend implements Backend {
   private gateOpen = false;
   private delveOpen = false;
   private treasureIndex = 0;
+  /** set after a dig whose rotated spot we can't yet know (pre-0016) — suppresses
+   *  the stale ✕ until the next join re-reads world.treasure_index */
+  private treasureDugPending = false;
   private fightState: FightState | null = null;
   /** local mirror of the communal Village (ADR-0010), kept fresh from RPCs + events */
   private village: VillageRecord = emptyVillage();
@@ -354,9 +357,12 @@ export class SupabaseBackend implements Backend {
         if (granted?.inventory) this.inv = granted.inventory as Inventory;
       }
     }
-    // worn Armor never survives losing the piece — re-validate against the pack.
+    // Armor is worn by MOVING the piece out of the bag; keep every shape-valid
+    // worn slot (its own proof of ownership). A legacy save with the piece worn
+    // AND still in the pack is normalized server-side by migration 0016's one-time
+    // UPDATE; here the client only keeps the worn set.
     // (res.equipped is absent until migration 0013 is live; that degrades to bare.)
-    this.equipped = sanitizeEquipped(res.equipped, this.inv);
+    this.equipped = sanitizeEquipped(res.equipped);
 
     this.village = this.villageFromJson(res.village);
     // appear point (ADR-0010 §4): Hammock > Village Hall > server-returned spot.
@@ -380,6 +386,9 @@ export class SupabaseBackend implements Backend {
       introSeen: !!res.introSeen,
       journey: (res.journey ?? { steps: {}, hintUses: {} }) as JourneyState,
       explored: (res.explored ?? []) as number[],
+      // absent until migration 0017 (fog stride) is live — the client then assumes
+      // the legacy pre-Realm stride and remaps for a stripe-free restore.
+      exploredStride: typeof res.exploredStride === 'number' ? res.exploredStride : undefined,
       equipped: { ...this.equipped },
     };
   }
@@ -604,6 +613,7 @@ export class SupabaseBackend implements Backend {
     this.gateOpen = !!world?.gate_open;
     this.delveOpen = !!world?.delve_open;
     this.treasureIndex = world?.treasure_index ?? 0;
+    this.treasureDugPending = false; // the fresh world row is authoritative again
     this.fightState = this.fightPublic(world?.fight);
     this.village = this.villageFromJson(world?.village);
     this.wardensFromJson(world?.wardens);
@@ -683,7 +693,10 @@ export class SupabaseBackend implements Backend {
       tabletsTotal: this.wd.tablets.length,
       mapPieces: pieces,
       gateOpen: this.gateOpen,
-      treasureLocation: pieces >= 3 ? { ...this.wd.treasureSpots[this.treasureIndex] } : null,
+      // hide the ✕ after a dig whose new spot we can't yet know (pre-0016 jw_dig
+      // did not return the rotated index); it re-reveals from the world row on
+      // the next join. With 0016 live, `treasureIndex` updates and this stays false.
+      treasureLocation: pieces >= 3 && !this.treasureDugPending ? { ...this.wd.treasureSpots[this.treasureIndex] } : null,
       delveOpen: this.delveOpen,
     };
   }
@@ -1000,7 +1013,15 @@ export class SupabaseBackend implements Backend {
     const res = await this.rpc<any>('jw_dig', { p_who: this.me, p_ptx: ptx, p_pty: pty, p_spots: this.wd.treasureSpots });
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NO_MAP' };
     this.inv = res.inventory as Inventory;
-    // the dig spot rotates server-side; refresh from the world row next loadWorld
+    // the dig spot rotates server-side. With migration 0016 live, jw_dig returns
+    // the new index and we relocate the ✕ correctly; without it, we can't know the
+    // new spot, so hide the ✕ until the next join re-reads world.treasure_index.
+    if (typeof res.treasure_index === 'number') {
+      this.treasureIndex = res.treasure_index;
+      this.treasureDugPending = false;
+    } else {
+      this.treasureDugPending = true;
+    }
     this.pushChat(t.system.sender, t.system.treasureUnearthed(this.me ?? ''));
     const q = this.questState();
     this.emit('quest', q);
@@ -1532,16 +1553,18 @@ export class SupabaseBackend implements Backend {
   }
 
   /**
-   * Wear/unwear Armor (ADR-0017 §4, migration 0013). jw_equip re-validates
-   * ownership server-side and returns what stuck; the new look then rides the
-   * position stream + a fresh presence snapshot so peers recompose at once.
-   * Pre-migration the RPC returns null — degrade to a local (non-persisted)
-   * equip so the session still works.
+   * Wear/unwear Armor (ADR-0017 §4, migration 0013 → 0016). jw_equip now MOVES
+   * the piece between the bag and the slot server-side (0016) and returns the
+   * mutated inventory; the new look then rides the position stream + a fresh
+   * presence snapshot so peers recompose at once. Until 0016 is live the RPC
+   * returns no `inventory` — we keep the old bag (equip still copies) so nothing
+   * breaks; pre-0013 it returns null — degrade to a local (non-persisted) equip.
    */
   async equip(equipped: EquippedArmor): Promise<EquipResult> {
-    const wanted = sanitizeEquipped(equipped, this.inv);
+    const wanted = sanitizeEquipped(equipped);
     const res = await this.rpc<any>('jw_equip', { p_who: this.me, p_equipped: wanted });
-    this.equipped = res?.equipped ? sanitizeEquipped(res.equipped, this.inv) : wanted;
+    this.equipped = res?.equipped ? sanitizeEquipped(res.equipped) : wanted;
+    if (res?.inventory) this.inv = res.inventory as Inventory; // 0016: the bag moved
     if (this.lastLocal) {
       this.lastLocal = { ...this.lastLocal, armor: this.equipped };
       this.broadcastPos(true);
@@ -1552,7 +1575,7 @@ export class SupabaseBackend implements Backend {
         void this.channel!.track(this.lastLocal);
       }
     }
-    return { equipped: { ...this.equipped } };
+    return { equipped: { ...this.equipped }, inventory: { ...this.inv } };
   }
 
   async markIntroSeen(): Promise<void> {
@@ -1569,7 +1592,11 @@ export class SupabaseBackend implements Backend {
     return res ?? { steps: {}, hintUses: {} };
   }
 
-  async markExplored(chunks: number[]): Promise<void> {
+  async markExplored(chunks: number[], _stride: number): Promise<void> {
+    // The RPC stays 3-arg (p_chunks only) so the live world never breaks if the
+    // client ships before migration 0017. That migration does the one-time
+    // stride remap + stamps `players.fog_stride`, and jw_join returns it as
+    // `exploredStride`; from then on the store and fresh chunks share one stride.
     await this.rpc('jw_mark_explored', { p_who: this.me, p_chunks: chunks });
   }
 }
