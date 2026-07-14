@@ -608,7 +608,7 @@ button.ui-btn:disabled {
   opacity: 0.92;
 }
 
-/* the full-screen world map (M) — hidden until toggled */
+/* the full-screen world map (M) — a parchment atlas, hidden until toggled */
 #worldmap-overlay {
   position: fixed;
   inset: 0;
@@ -616,7 +616,7 @@ button.ui-btn:disabled {
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(4, 10, 5, 0.92);
+  background: radial-gradient(ellipse at center, rgba(10, 8, 4, 0.86), rgba(2, 3, 2, 0.95));
   pointer-events: auto;
 }
 #worldmap-overlay.open {
@@ -626,25 +626,37 @@ button.ui-btn:disabled {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 #worldmap-title {
-  font-size: 18px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 24px;
   font-weight: 700;
-  color: var(--accent, #ffe9c9);
-  letter-spacing: 0.04em;
+  font-variant: small-caps;
+  letter-spacing: 0.14em;
+  color: #e9cf92;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 #worldmap-canvas {
-  image-rendering: pixelated;
-  border: 2px solid var(--panel-border);
-  border-radius: 8px;
-  background: #0b130d;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 110px);
+  /* an ornate parchment frame: dark rim → gold band → dark rim, plus depth shadow */
+  border: 3px solid #5b4326;
+  border-radius: 4px;
+  background: #d8c6a0;
+  box-shadow:
+    0 0 0 5px #241708,
+    0 0 0 8px #8a6a3a,
+    0 0 0 10px #241708,
+    0 14px 46px rgba(0, 0, 0, 0.7);
+  max-width: calc(100vw - 56px);
+  max-height: calc(100vh - 120px);
 }
 #worldmap-hint {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
   font-size: 12px;
-  opacity: 0.75;
+  color: #cdb98c;
+  opacity: 0.85;
+  margin-top: 6px;
 }
 
 /* bottom-right bar */

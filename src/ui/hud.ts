@@ -94,32 +94,6 @@ let fogLayer: HTMLCanvasElement | null = null;
  *  pre-baked terrain + fog + landmarks); null until the minimap has initialized */
 let drawWorldMap: (() => void) | null = null;
 
-/**
- * Trace a closed, gently-wavy ("curly") outline around a rect — a hand-drawn map
- * region instead of a hard box. The perpendicular wobble is a sine that returns
- * to zero at every corner (integer wave counts), so adjacent edges meet cleanly.
- */
-function curlyRegionPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, amp: number): void {
-  const pts: [number, number][] = [];
-  const edge = (x0: number, y0: number, x1: number, y1: number, nx: number, ny: number) => {
-    const len = Math.hypot(x1 - x0, y1 - y0);
-    const waves = Math.max(2, Math.round(len / 46)); // ~a wave every 46px
-    const segs = Math.max(6, Math.round(len / 5));
-    for (let i = 0; i < segs; i++) {
-      const t = i / segs;
-      const wob = Math.sin(t * Math.PI * waves) * amp; // 0 at t=0 and t=1
-      pts.push([x0 + (x1 - x0) * t + nx * wob, y0 + (y1 - y0) * t + ny * wob]);
-    }
-  };
-  edge(x, y, x + w, y, 0, -1); // top (wobble outward = up)
-  edge(x + w, y, x + w, y + h, 1, 0); // right
-  edge(x + w, y + h, x, y + h, 0, 1); // bottom
-  edge(x, y + h, x, y, -1, 0); // left
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.closePath();
-}
-
 /** open/close the full-screen world map (M / Escape / backdrop click) */
 function setWorldMapOpen(open: boolean): void {
   const ov = document.getElementById('worldmap-overlay');
@@ -1311,6 +1285,34 @@ async function initMinimap(): Promise<void> {
       bctx.fillRect(x, y, 1, 1);
     }
   }
+  // A second bake in a PARCHMENT palette for the full-screen World Map (M): land in
+  // aged gold, water in muted ocean-tan, rock/mire in browns — a treasure-map look.
+  // Per-tile grain keeps it from reading flat.
+  const parchCol: Record<number, [number, number, number]> = {
+    1: [201, 168, 98], 5: [174, 142, 74], 8: [201, 168, 98], 9: [201, 168, 98], 10: [190, 158, 88], 11: [190, 158, 88],
+    2: [146, 170, 160], 15: [108, 134, 126], // water → ocean parchment
+    3: [196, 162, 110], 4: [178, 150, 100], 16: [150, 128, 84], // dirt/path
+    6: [176, 162, 138], 7: [190, 176, 150], 17: [156, 148, 126], // rock/stone
+    12: [140, 122, 78], 13: [140, 122, 78], 14: [140, 122, 78], // mire peat
+  };
+  const parch = document.createElement('canvas');
+  parch.width = W;
+  parch.height = H;
+  const parchImg = parch.getContext('2d')!.createImageData(W, H);
+  const pd0 = parchImg.data;
+  const cl0 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const c = parchCol[ground[y * W + x]] ?? [201, 168, 98];
+      const n = ((((x * 73856093) ^ (y * 19349663)) >>> 0) % 15) - 7; // deterministic ±7 grain
+      const i4 = (y * W + x) * 4;
+      pd0[i4] = cl0(c[0] + n);
+      pd0[i4 + 1] = cl0(c[1] + n);
+      pd0[i4 + 2] = cl0(c[2] + n * 0.6);
+      pd0[i4 + 3] = 255;
+    }
+  }
+  parch.getContext('2d')!.putImageData(parchImg, 0, 0);
   // ADR-0017: the minimap renders a VIEW rect — the pinned pre-Realm World, or
   // (inside a Realm) the district's own rect alone, so each Realm reads as its
   // own small map. GameScene ships the active district rect on the 'pos' event.
@@ -1404,93 +1406,118 @@ async function initMinimap(): Promise<void> {
     const offY = (side - view.h * scale) / 2;
     const toX = (wx: number) => offX + (wx / 16 - view.x) * scale;
     const toY = (wy: number) => offY + (wy / 16 - view.y) * scale;
-    bctx2.imageSmoothingEnabled = false;
-    bctx2.fillStyle = '#0b130d';
+    // 1) the parchment "ocean" base
+    bctx2.fillStyle = '#d8c6a0';
     bctx2.fillRect(0, 0, side, side);
-    bctx2.drawImage(bg, view.x, view.y, view.w, view.h, offX, offY, view.w * scale, view.h * scale);
-    if (fogLayer) {
-      bctx2.drawImage(fogLayer, 0, 0, fogLayer.width, fogLayer.height, offX, offY, view.w * scale, view.h * scale);
-    }
-    // static landmarks (drawn under the labels): Seal (violet), Guardian (red)
-    bctx2.fillStyle = '#b478ff';
-    bctx2.fillRect(toX(worldData.sealMonument.tx * 16) - 3, toY(worldData.sealMonument.ty * 16) - 3, 6, 6);
-    bctx2.fillStyle = '#c03a2b';
-    bctx2.fillRect(toX((worldData.guardianHome.tx + 1.5) * 16) - 3, toY((worldData.guardianHome.ty + 1.5) * 16) - 3, 6, 6);
-    if (village?.hall) {
-      bctx2.fillStyle = '#ffe9c9';
-      bctx2.fillRect(toX((village.hall.tx + 1) * 16) - 3, toY((village.hall.ty + 1) * 16) - 3, 6, 6);
-    }
-    // Regions as soft, wavy, translucent areas (not hard boxes — the zone rects
-    // overlap, so crossing lines were unreadable). Which Zone is the Player in?
-    const ptx = lastPos ? lastPos.x / 16 : -1;
-    const pty = lastPos ? lastPos.y / 16 : -1;
-    const font = Math.max(9, Math.round(side / 50));
-    const amp = Math.max(2.5, scale * 2.4);
-    // pass 1 — faint curly region fills + soft outlines (current zone brighter)
-    for (const z of worldData.zones) {
-      const here = ptx >= z.x && ptx < z.x + z.w && pty >= z.y && pty < z.y + z.h;
-      const rx = toX(z.x * 16);
-      const ry = toY(z.y * 16);
-      const rw = z.w * 16 * scale;
-      const rh = z.h * 16 * scale;
+    // 2) the land — the parchment terrain bake, shown in FULL (an atlas, not fogged)
+    bctx2.imageSmoothingEnabled = true;
+    bctx2.drawImage(parch, view.x, view.y, view.w, view.h, offX, offY, view.w * scale, view.h * scale);
+    // 3) faint horizontal striations — that aged-map paper grain
+    bctx2.strokeStyle = 'rgba(84,56,26,0.045)';
+    bctx2.lineWidth = 1;
+    for (let y = 2; y < side; y += 3) {
       bctx2.beginPath();
-      curlyRegionPath(bctx2, rx, ry, rw, rh, amp);
-      bctx2.fillStyle = here
-        ? 'rgba(255,224,102,0.16)'
-        : z.dangerous ? 'rgba(206,80,58,0.10)' : 'rgba(120,150,90,0.07)';
-      bctx2.fill();
-      bctx2.lineWidth = here ? 2.5 : 1.25;
-      bctx2.strokeStyle = here
-        ? 'rgba(255,224,102,0.95)'
-        : z.dangerous ? 'rgba(224,140,110,0.5)' : 'rgba(224,214,180,0.42)';
+      bctx2.moveTo(0, y + 0.5);
+      bctx2.lineTo(side, y + 0.5);
       bctx2.stroke();
     }
-    // pass 2 — labels last, on a dark pill so they read over any terrain/overlap.
-    // Overlapping zones share space, so nudge a colliding label down until clear.
-    bctx2.font = `600 ${font}px sans-serif`;
+    // 4) vignette — worn, darkened edges
+    const vg = bctx2.createRadialGradient(side / 2, side / 2, side * 0.34, side / 2, side / 2, side * 0.74);
+    vg.addColorStop(0, 'rgba(52,34,14,0)');
+    vg.addColorStop(1, 'rgba(44,28,10,0.5)');
+    bctx2.fillStyle = vg;
+    bctx2.fillRect(0, 0, side, side);
+    // 5) landmark pins — small sepia-ringed dots (Seal, Guardian, Hall)
+    const pin = (wx: number, wy: number, fill: string, rOuter = 4.5, rInner = 3) => {
+      const x = toX(wx);
+      const y = toY(wy);
+      bctx2.beginPath();
+      bctx2.arc(x, y, rOuter, 0, Math.PI * 2);
+      bctx2.fillStyle = 'rgba(58,38,18,0.92)';
+      bctx2.fill();
+      bctx2.beginPath();
+      bctx2.arc(x, y, rInner, 0, Math.PI * 2);
+      bctx2.fillStyle = fill;
+      bctx2.fill();
+    };
+    pin(worldData.sealMonument.tx * 16, worldData.sealMonument.ty * 16, '#8a5fc0');
+    pin((worldData.guardianHome.tx + 1.5) * 16, (worldData.guardianHome.ty + 1.5) * 16, '#b23a2b');
+    if (village?.hall) pin((village.hall.tx + 1) * 16, (village.hall.ty + 1) * 16, '#e6c063');
+    // 6) region names — elegant serif "small-caps" (uppercased) in sepia ink on a
+    //    cream halo, no boxes (a fantasy atlas). Long names wrap to two balanced
+    //    lines; colliding labels nudge down so every region stays legible.
+    const ptx = lastPos ? lastPos.x / 16 : -1;
+    const pty = lastPos ? lastPos.y / 16 : -1;
+    const font = Math.max(11, Math.round(side / 40));
+    const lineH = font * 1.04;
     bctx2.textAlign = 'center';
     bctx2.textBaseline = 'middle';
-    const px = 5;
-    const py = 3;
+    bctx2.font = `600 ${font}px Georgia, 'Times New Roman', serif`;
+    bctx2.lineJoin = 'round';
+    try {
+      (bctx2 as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${Math.max(1, Math.round(font * 0.1))}px`;
+    } catch {
+      /* letterSpacing unsupported on this canvas — harmless */
+    }
+    const maxW = side * 0.24;
+    const splitLabel = (txt: string): string[] => {
+      if (bctx2.measureText(txt).width <= maxW) return [txt];
+      const words = txt.split(' ');
+      if (words.length < 2) return [txt];
+      let best = 1;
+      let bestDiff = Infinity;
+      for (let i = 1; i < words.length; i++) {
+        const a = words.slice(0, i).join(' ');
+        const b = words.slice(i).join(' ');
+        const diff = Math.abs(bctx2.measureText(a).width - bctx2.measureText(b).width);
+        if (diff < bestDiff) { bestDiff = diff; best = i; }
+      }
+      return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
+    };
     const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
     const overlaps = (r: { x0: number; y0: number; x1: number; y1: number }) =>
       placed.some((p) => r.x0 < p.x1 && r.x1 > p.x0 && r.y0 < p.y1 && r.y1 > p.y0);
     for (const z of worldData.zones) {
       const here = ptx >= z.x && ptx < z.x + z.w && pty >= z.y && pty < z.y + z.h;
-      const label = zoneName(z.name);
-      const tw = bctx2.measureText(label).width;
-      const halfW = tw / 2 + px + 2;
-      const halfH = font / 2 + py;
-      const lx = Math.max(halfW, Math.min(side - halfW, toX((z.x + z.w / 2) * 16)));
-      let ly = Math.max(halfH + 2, toY(z.y * 16) + font * 0.9);
-      // slide down past already-placed pills (bounded so it never marches off-map)
+      const lines = splitLabel(zoneName(z.name).toUpperCase());
+      const tw = Math.max(...lines.map((l) => bctx2.measureText(l).width));
+      const th = lines.length * lineH;
+      const halfW = tw / 2 + 3;
+      const halfH = th / 2 + 2;
+      const lx = Math.max(halfW + 2, Math.min(side - halfW - 2, toX((z.x + z.w / 2) * 16)));
+      let ly = Math.max(halfH + 4, Math.min(side - halfH - 4, toY((z.y + z.h / 2) * 16)));
       const rect = () => ({ x0: lx - halfW, y0: ly - halfH, x1: lx + halfW, y1: ly + halfH });
-      for (let tries = 0; tries < 6 && overlaps(rect()); tries++) ly += font + 5;
-      ly = Math.min(ly, side - halfH - 2);
+      for (let tries = 0; tries < 7 && overlaps(rect()); tries++) ly += th + 4;
+      ly = Math.min(ly, side - halfH - 4);
       placed.push(rect());
-      bctx2.fillStyle = here ? 'rgba(74,60,12,0.88)' : 'rgba(9,15,10,0.74)';
-      bctx2.beginPath();
-      bctx2.roundRect(lx - tw / 2 - px, ly - font / 2 - py, tw + px * 2, font + py * 2, 4);
-      bctx2.fill();
-      bctx2.fillStyle = here ? '#ffe89a' : z.dangerous ? '#f2cabd' : '#f4ecd6';
-      bctx2.fillText(label, lx, ly);
+      lines.forEach((line, i) => {
+        const y = ly - th / 2 + lineH / 2 + i * lineH;
+        bctx2.strokeStyle = 'rgba(245,233,203,0.92)'; // cream halo
+        bctx2.lineWidth = 4;
+        bctx2.strokeText(line, lx, y);
+        bctx2.fillStyle = here ? '#7c3d12' : z.dangerous ? '#6b3018' : '#4a2f16'; // sepia ink
+        bctx2.fillText(line, lx, y);
+      });
     }
-    // the treasure ✕ (if a dig spot is revealed), then the player + teammates
+    try {
+      (bctx2 as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
+    } catch {
+      /* */
+    }
+    // 7) the treasure ✕, then teammates (gold pins) and you (a ringed white dot)
     if (treasureLoc) {
       const cx = toX(treasureLoc.tx * 16);
       const cy = toY(treasureLoc.ty * 16);
-      bctx2.strokeStyle = '#ff5544';
-      bctx2.lineWidth = 2.5;
+      bctx2.strokeStyle = '#a52a1a';
+      bctx2.lineWidth = 3;
       bctx2.beginPath();
-      bctx2.moveTo(cx - 5, cy - 5); bctx2.lineTo(cx + 5, cy + 5);
-      bctx2.moveTo(cx + 5, cy - 5); bctx2.lineTo(cx - 5, cy + 5);
+      bctx2.moveTo(cx - 6, cy - 6); bctx2.lineTo(cx + 6, cy + 6);
+      bctx2.moveTo(cx + 6, cy - 6); bctx2.lineTo(cx - 6, cy + 6);
       bctx2.stroke();
     }
     if (lastPos) {
-      bctx2.fillStyle = '#ffd166';
-      for (const o of lastPos.others) bctx2.fillRect(toX(o.x) - 2, toY(o.y) - 2, 4, 4);
-      bctx2.fillStyle = '#ffffff';
-      bctx2.fillRect(toX(lastPos.x) - 3, toY(lastPos.y) - 3, 6, 6);
+      for (const o of lastPos.others) pin(o.x, o.y, '#e0b64a', 4, 2.6);
+      pin(lastPos.x, lastPos.y, '#ffffff', 5, 3.3);
     }
   };
   drawWorldMap = drawLarge;
