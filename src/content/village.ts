@@ -248,11 +248,14 @@ export const VILLAGE_CONTRIB: Partial<Record<string, number>> = {
   plank: 4,
   hardwood: 5,
   obsidian: 6,
-  // ADR-0017 rung 3 — the Green Terraces' goods: the renewable wildgrain crop and
-  // its Loom-retted verdant fibre carry pool value like the other tiered materials
-  // (raw crop ~obsidian; the refined fibre a step above, ~map_piece).
-  wildgrain: 6,
-  verdant_fibre: 8,
+  // ADR-0017 Warden realms — each realm's raw crop carries pool value ~obsidian,
+  // its refiner-output a step above (~map_piece), uniformly across all three rungs.
+  saltreed: 6, // rung 1 (Sunken Mire) — raw reed
+  tideglass: 8, // rung 1 — Brine-Kiln refined
+  echo_crystal: 6, // rung 2 (Hushdark) — raw crystal
+  hushsteel: 8, // rung 2 — Chime-Kiln refined
+  wildgrain: 6, // rung 3 (Green Terraces) — raw crop
+  verdant_fibre: 8, // rung 3 — Loom-retted fibre
   map_piece: 8,
   husk_shard: 3,
   guardian_scale: 15,
