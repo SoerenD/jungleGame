@@ -515,7 +515,8 @@ export class GameScene extends Phaser.Scene {
    * pair funnels through here so pack state and the HUD can never diverge.
    */
   private setInv(inv: Inventory): void {
-    this.setInv(inv);
+    this.inventory = inv;
+    bus.emit('inventory', inv);
   }
 
   /** build the shared GameContext (create(), right after the world JSON loads) */
