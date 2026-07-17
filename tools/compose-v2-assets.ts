@@ -113,24 +113,9 @@ write('public/assets/objects/fishing-spot-calm.png', ripples(false));
 const tablet = obj('tablet.png');
 const pillar = obj('ruin-pillar.png');
 
-// seal-monument.png is composed by tools/compose-seal-monument.ts (3-frame sheet)
-
-// arena altar: a low stone table waiting for the Offering
-const gAltar = new Img(32, 24);
-const tableTop = cropScaled(tablet, 6, 8, 20, 10, 1);
-gAltar.blit(tableTop, 0, 0, 20, 10, 6, 6);
-const legs = cropScaled(pillar, 4, 24, 8, 7, 1);
-gAltar.blit(legs, 0, 0, 8, 7, 6, 16);
-gAltar.blit(legs, 0, 0, 8, 7, 18, 16);
-for (const [x, y] of [
-  [14, 9],
-  [17, 9],
-  [15, 11],
-  [16, 11],
-]) {
-  gAltar.px(x, y, 0xffa02fff); // amber summoning sigil
-}
-write('public/assets/objects/guardian-altar.png', gAltar);
+// seal-monument.png is composed by tools/compose-seal-monument.ts, and
+// guardian-altar.png (the Opferschale basin, since 2026-07-17) by
+// tools/compose-guardian-altar.ts — this script no longer owns either.
 
 // Welcome Stone: the lore tablet re-cut in weathered gray stone
 write(

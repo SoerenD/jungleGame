@@ -468,6 +468,8 @@ export interface MobSnap {
   erupt?: boolean;
   /** the Bulwark's guard is up (ADR-0016) — peers render the lit rune ring (hits bounce host-side) */
   guard?: boolean;
+  /** Wildlife enrage (ADR-0012): charging its shooter — peers tint the sprite red */
+  rage?: boolean;
 }
 export interface ProjSnap {
   id: string;

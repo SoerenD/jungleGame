@@ -134,6 +134,41 @@ export const WILD_PROFILES: Record<WildKind, MobProfile> = {
 // import; dungeon.ts is fully evaluated first (this module imports it).
 for (const kind of WILD_KINDS) registerMobProfile(kind, WILD_PROFILES[kind]);
 
+// ------------------------------------------------------------- enrage (2026-07-17)
+/** how long one surviving hit keeps a creature enraged (refreshed per hit) */
+export const WILD_RAGE_MS = 12_000;
+/** enraged chase / lunge speed — revenge pace, yet strictly below
+ *  PLAYER_TILES_PER_SEC (8.125): the §11 flee-always contract still holds */
+export const RAGE_SPEED = 7.0;
+export const RAGE_LUNGE_SPEED = 7.6;
+
+/**
+ * An enraged creature runs the MELEE brain at revenge pace: it never loses the
+ * scent (aggro 999 — the host passes ONLY its shooter as the target), charges
+ * near player speed and gores like a boar. Same engine, hotter profile handed
+ * in via MobCtx.profile — the "reskin, never a new brain" discipline again.
+ * hp/radius stay the base kind's (live HP is carried by the MobState anyway).
+ */
+export const RAGE_PROFILES: Record<WildKind, MobProfile> = Object.fromEntries(
+  WILD_KINDS.map((kind) => [
+    kind,
+    {
+      ...WILD_PROFILES[kind],
+      ai: 'melee',
+      speed: RAGE_SPEED,
+      aggro: 999,
+      reach: 1.35,
+      telegraphMs: 650, // stays above the humanly-reactable floor (600 ms)
+      strikeMs: 170,
+      lungeSpeed: RAGE_LUNGE_SPEED,
+      strikeR: 0.75,
+      cooldownMs: 1400,
+      kiteMin: 0,
+      fireRange: 0,
+    } satisfies MobProfile,
+  ]),
+) as Record<WildKind, MobProfile>;
+
 // a build-time guard: no registered creature may match/exceed a real MOB_PROFILE
 // kind, and every creature must obey the flee-always speed ceiling.
 void MOB_PROFILES; // referenced so the import can't be tree-shaken before registration

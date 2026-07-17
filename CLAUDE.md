@@ -10,9 +10,10 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
   regrow lazily after a real-time delay.
 - **Crafting** — Recipes turn Resources into Tools (carried) or Structures (placed); tier-2
   Recipes need Guardian Scales and planks.
-- **Loadout** — keys 1–3 pick a Tool quick-slot, keys 4–5 the two dedicated weapon slots
-  (slotting a weapon MOVES it out of the bag, like Armor); exactly one item is in-hand.
-  Bare hands still harvest the basic Nodes.
+- **Loadout** — five uniform quick-slots (keys 1–5); any Tool or weapon sits in any
+  slot as a bag reference, and the pack view hides slotted copies (drag a slot onto
+  the pack to return it); exactly one item is in-hand. Bare hands still harvest the
+  basic Nodes.
 - **Structures** — placed permanently, first claim on a tile wins; functional ones: campfire
   (cooking), crate (shared storage), signpost (player text), Hammock (personal wake point),
   Sawmill (wood → planks after a real-time delay).
@@ -25,7 +26,9 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
   in-hand weapon's band, ADR-0006; windows shorten each fury phase); everything else bounces off.
 - **Bow** — tier-1 ranged weapon (wood/fiber/stone, no Guardian drops, craftable before the
   first fight); looses arrows for 2 in an Eye Window on a slower cadence than melee — safe but
-  weaker than an axe swing.
+  weaker than an axe swing. Arrows fly mouse-aimed until off-screen (Delve walls stop them)
+  and hit any Wildlife on the ray; a survivor ENRAGES — red tint, charges its shooter ~12 s,
+  still outrunnable, never into the Village.
 - **Knockdown / Exhaustion** — danger tiles stun ~5 s; three knockdowns in one fight wake the
   Player at their Hammock or spawn, inventory intact.
 - **Participation loot** — every Player with ≥1 landed hit gets the full drop set (Guardian

@@ -172,7 +172,9 @@ import {
   isPredator,
   isWildKind,
   planWildSpawn,
+  RAGE_PROFILES,
   rollWildLoot,
+  WILD_RAGE_MS,
   WILDLIFE_ART,
   type WildKind,
 } from '../content/wildlife';
@@ -592,7 +594,8 @@ export class GameScene extends Phaser.Scene {
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   private remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
-  /** the worn gear (ADR-0017 §4 + weapon slots) — armor bakes into my sheet, weapons select via keys 4/5 */
+  /** the worn gear (ADR-0017 §4) — armor bakes into my sheet; the legacy weapon
+   *  slots only ever DRAIN now (the HUD migration returns them to the bag) */
   private equipped: EquippedGear = {};
   /** un-sent equip intent (rapid toggles coalesce here) + the send serializer */
   private desiredEquip: EquippedGear | null = null;
@@ -828,6 +831,9 @@ export class GameScene extends Phaser.Scene {
   private wildDeathFx = new Set<Phaser.GameObjects.GameObject[]>();
   /** host-side gentle-roam state for idle peaceful creatures (orchestration, not engine AI) */
   private wildWander = new Map<string, { ang: number; until: number }>();
+  /** host-side enrage ledger: a hit survivor charges the Player who shot it until
+   *  the timer runs dry (refreshed per hit) — orchestration, not engine AI */
+  private wildRage = new Map<string, { by: string; until: number }>();
   /** am I the elected creature host? (lowest-sorting online name — deterministic, zero negotiation) */
   private isWildHost = false;
   private wildHostName = '';
@@ -1464,8 +1470,11 @@ export class GameScene extends Phaser.Scene {
       this.refreshDepthRecords();
       this.emitSawmillBuilt(); // Into-the-Delve step: a Sawmill stands in the World
     });
-    bus.emit('inventory', this.inventory);
+    // 'equipped' BEFORE 'inventory': the HUD's loadout reconcile persists on the
+    // inventory event and checks ownership through the gear record too — the
+    // reverse order let it wipe gear-held legacy weapons before gear arrived
     bus.emit('equipped', this.equipped);
+    bus.emit('inventory', this.inventory);
 
     // zone tracking + lazy regrowth visuals — both timestamp-derived, no game tick
     this.time.addEvent({ delay: 300, loop: true, callback: () => this.checkZone() });
@@ -1641,6 +1650,7 @@ export class GameScene extends Phaser.Scene {
               predator: isWildKind(m.kind) && isPredator(m.kind as WildKind),
               x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10,
               danger: this.dangerAt(Math.floor(m.x), Math.floor(m.y)),
+              rage: !!m.rage, rageBy: this.wildRage.get(m.id)?.by ?? null,
             })),
           danger: (tx?: number, ty?: number) =>
             this.dangerAt(tx ?? Math.floor(this.player.x / TILE), ty ?? Math.floor((this.player.y - 4) / TILE)),
@@ -2633,20 +2643,52 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * How far an arrow flies (2026-07 batch: "out of the screen", not a fixed
+   * reach): half the camera view's diagonal + a margin — from the centered
+   * follow-camera that is always past the visible edge, at every zoom. In the
+   * Delve the first wall tile on the ray stops it instead (no through-wall
+   * sniping); the overworld ray stays unobstructed — arrows arc over the
+   * undergrowth like the swing echo always has.
+   */
+  private arrowRangePx(dirX: number, dirY: number): number {
+    const view = this.cameras.main.worldView;
+    const maxPx = Math.hypot(view.width, view.height) / 2 + TILE * 2;
+    if (!this.inDelve) return maxPx;
+    const S = this.stageDef();
+    // march from the FEET (the tile the body actually stands in — the chest row
+    // sits a full tile higher and overlaps the wall art when pressed against a
+    // wall from below, which would clamp every shot to a 4px fizzle), and never
+    // clamp inside the origin tile itself
+    const ox = this.player.x;
+    const oy = this.player.y - 4;
+    const otx = Math.floor(ox / TILE);
+    const oty = Math.floor(oy / TILE);
+    const step = TILE / 4;
+    for (let d = step; d <= maxPx; d += step) {
+      const tx = Math.floor((ox + dirX * d) / TILE);
+      const ty = Math.floor((oy + dirY * d) / TILE);
+      if (tx === otx && ty === oty) continue;
+      if (S.isBlocked(tx, ty)) return Math.max(step, d - step);
+    }
+    return maxPx;
+  }
+
+  /**
    * The one bow verb for every context (the 2026-07 batch): the arrow flies
    * toward the MOUSE, and the first body on the ray takes the hit when it lands
    * — the active boss (Eye-Window rule intact via fireGuardianHit), a Delve
-   * Husk, or a wild predator (peaceful creatures are never shot — foraging
-   * stays a melee-reach catch). Nothing on the ray → the arrow flies its full
-   * range and despawns: a miss, the cadence still spent. Damage attribution is
-   * unchanged — the same host-/server-authoritative messages as melee. Arrows
-   * stay a local cosmetic (peers see the swing echo), the status quo.
+   * Husk, or ANY wild creature, peaceful ones included (a survivor enrages and
+   * charges its shooter; melee-reach foraging still catches them unharmed).
+   * Nothing on the ray → the arrow flies clean off the screen and despawns: a
+   * miss, the cadence still spent. Damage attribution is unchanged — the same
+   * host-/server-authoritative messages as melee. Arrows stay a local cosmetic
+   * (peers see the swing echo), the status quo.
    */
   private fireBow(): void {
     const dir = this.aimDir();
     const ox = this.player.x;
     const oy = this.player.y - AVATAR_H / 2;
-    const maxPx = TILE * (this.inDelve ? 6 : 8); // matches the old per-context reaches
+    const maxPx = this.arrowRangePx(dir.x, dir.y); // off-screen, or the first Delve wall
     // re-face the shot so the pose matches the aim, not the last walk direction
     // (playSwingFx kill-restarts safely; markSwing already fired the first one)
     const d: Dir = Math.abs(dir.x) > Math.abs(dir.y) ? (dir.x > 0 ? 'right' : 'left') : dir.y > 0 ? 'down' : 'up';
@@ -2679,13 +2721,19 @@ export class GameScene extends Phaser.Scene {
     } else {
       if (this.fight) {
         const spr = this.activeBoss().sprite;
-        // the colossus body: a generous 3x3-tile circle at its lower mass
-        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, maxPx, spr.x, spr.y - TILE * 1.5, TILE * 1.8);
+        // the colossus body: a generous 3x3-tile circle at its lower mass. The
+        // BOSS hit keeps the authored 8-tile bow reach even though the arrow
+        // itself now flies off-screen — the fight's whole safety design is
+        // standing inside the arena (ADR-0002); a screen-length snipe from
+        // beyond the wall would collapse "safe but weaker" into "perfectly
+        // safe" and hand out participation loot for zero exposure.
+        const bossMax = Math.min(maxPx, TILE * 8);
+        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, bossMax, spr.x, spr.y - TILE * 1.5, TILE * 1.8);
         consider(t0, () => this.fireGuardianHit(tool, spr.x, spr.y - TILE * 3));
       }
       for (const m of this.wildMobs.values()) {
         if (m.st === 'dead') continue;
-        if (!isWildKind(m.kind) || !isPredator(m.kind as WildKind)) continue;
+        if (!isWildKind(m.kind)) continue; // every creature is fair game — peaceful too
         const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, maxPx, m.x * TILE, m.y * TILE, profileOf(m.kind).radius * TILE);
         consider(t0, () => {
           if (this.isWildHost) this.applyWildHit(m.id, tool, this.me.name);
@@ -3628,10 +3676,10 @@ export class GameScene extends Phaser.Scene {
     this.sendGear(next);
   }
 
-  /** seat/clear one weapon slot (keys 4/5's gear; same MOVE semantics as armor).
-   *  Seating clears the same item from the OTHER slot unless the bag holds a
-   *  second copy (the backend would refuse the double anyway — this keeps the
-   *  optimistic record honest). */
+  /** seat/clear one legacy gear weapon slot. Since the 2026-07-17 hotbar
+   *  unification only the CLEAR path runs (the HUD's one-shot migration drains
+   *  weapons an old client left equipped back into the bag); seating stays
+   *  supported so an in-flight emit from an old session can't corrupt gear. */
   private setWeaponSlot(slot: WeaponSlot, item: ItemId | null): void {
     if (item && !isWeapon(item)) return;
     const next: EquippedGear = { ...(this.desiredEquip ?? this.equipped) };
@@ -3657,8 +3705,10 @@ export class GameScene extends Phaser.Scene {
       // the inventory grid (and a bared one returns) live.
       this.inventory = res.inventory;
       this.rebuildOwnAvatar();
-      bus.emit('equipped', this.equipped);
+      // 'inventory' BEFORE 'equipped': a drained weapon must be back in the bag
+      // when the HUD reconciles on the equipped event, or its quick-slot flickers
       bus.emit('inventory', this.inventory);
+      bus.emit('equipped', this.equipped);
       this.sfx('craft', 0.4);
     });
   }
@@ -3786,7 +3836,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private wireBus(): void {
-    // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–3)
+    // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–5)
     bus.on('held', (id: ItemId | null) => {
       this.heldItem = id;
       this.applyHeldSprite();
@@ -3846,7 +3896,7 @@ export class GameScene extends Phaser.Scene {
     });
     // ADR-0017 §4: the inventory's Equip button toggles one Armor piece
     bus.on('equip-toggle', (item: ItemId) => this.toggleArmor(item));
-    // the two weapon slots (keys 4/5): seat/clear MOVES the weapon like armor
+    // the legacy gear weapon slots: only the HUD migration's CLEAR path fires now
     bus.on('weapon-slot-set', (slot: WeaponSlot, item: ItemId | null) => this.setWeaponSlot(slot, item));
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
     // the Village contribution panel's Give button: pour the chosen amounts in
@@ -7220,6 +7270,14 @@ export class GameScene extends Phaser.Scene {
     // stepping down from host, or the authority moved to someone else: my local
     // creatures are stale — clear them and rebuild from the new host's snapshots
     if (!this.isWildHost && (wasHost || hostChanged)) this.clearWildMobs();
+    // PROMOTED to host: the inherited snapshot mobs may carry rage=true, but the
+    // rage LEDGER (shooter + timer) was host-local and died with the old host —
+    // without an entry the rage branch never runs and calmWild could never clear
+    // the flag, leaving a permanently red, rage-telegraphing creature. Rage ends
+    // on handover (a rare 12s window) rather than sticking forever.
+    if (this.isWildHost && !wasHost) {
+      for (const m of this.wildMobs.values()) m.rage = undefined;
+    }
   }
 
   private clearWildMobs(): void {
@@ -7232,6 +7290,7 @@ export class GameScene extends Phaser.Scene {
     this.wildViews.clear();
     this.wildMobs.clear();
     this.wildWander.clear();
+    this.wildRage.clear();
     // J4: reap any death beat mid-animation — its objects are orphans (out of
     // wildViews) and a host handover must not strand them
     this.clearDeathFx(this.wildDeathFx);
@@ -7253,6 +7312,14 @@ export class GameScene extends Phaser.Scene {
 
   private wildPlayerAnchors(): { tx: number; ty: number }[] {
     return this.wildPlayerPositions().map((p) => ({ tx: Math.floor(p.x), ty: Math.floor(p.y) }));
+  }
+
+  /** ONE online Player's live position in TILE units (self or a rendered peer) —
+   *  the enraged creature's quarry lookup */
+  private wildPlayerPos(name: string): { x: number; y: number } | null {
+    if (name === this.me.name) return { x: this.player.x / TILE, y: (this.player.y - 4) / TILE };
+    const r = this.remotes.get(name);
+    return r ? { x: r.sprite.x / TILE, y: (r.sprite.y - 4) / TILE } : null;
   }
 
   /** can a creature stand on this World tile? (open ground — not water/cliff, in bounds) */
@@ -7312,6 +7379,7 @@ export class GameScene extends Phaser.Scene {
       if (!near) {
         this.wildMobs.delete(id);
         this.wildWander.delete(id);
+        this.wildRage.delete(id);
       }
     }
     const predatorChance = Math.min(0.9, CREATURE_PREDATOR_CHANCE * (night ? CREATURE_NIGHT_MULT : 1));
@@ -7346,10 +7414,36 @@ export class GameScene extends Phaser.Scene {
     // predators only "see" Players standing in the wilds — step onto the safe core
     // and they lose the scent (de-aggro); they also can't physically follow (below)
     const dangerTargets = allTargets.filter((p) => this.dangerAt(Math.floor(p.x), Math.floor(p.y)));
+    const now = Date.now();
     for (const m of this.wildMobs.values()) {
       if (m.st === 'dead') {
         this.wildMobs.delete(m.id);
         continue;
+      }
+      // ENRAGED: the creature hunts ITS SHOOTER with the rage profile — revenge
+      // follows onto safe ground (unlike a predator's usual leash), but the
+      // Village never has teeth: a shooter who reaches it calls the revenge off,
+      // and a creature outside never steps in (one already inside may move out —
+      // walling EVERY tile would freeze it into a statue). Timer dry, shooter
+      // gone or shooter in sanctuary → it calms down.
+      const rage = this.wildRage.get(m.id);
+      if (rage) {
+        const quarry = now < rage.until ? this.wildPlayerPos(rage.by) : null;
+        const quarrySafe = !quarry || inVillageZone(this.village, Math.floor(quarry.x), Math.floor(quarry.y));
+        if (quarry && !quarrySafe) {
+          const mobInVillage = inVillageZone(this.village, Math.floor(m.x), Math.floor(m.y));
+          const ev = stepMob(m, {
+            targets: [quarry],
+            isWall: (tx, ty) => !this.wildWalkable(tx, ty) || (!mobInVillage && inVillageZone(this.village, tx, ty)),
+            dt: delta,
+            rng: Math.random,
+            profile: RAGE_PROFILES[m.kind as WildKind],
+          });
+          if (ev.sfx === 'lunge') this.sfx('chop', 0.2);
+          continue;
+        }
+        this.calmWild(m);
+        if (!this.wildMobs.has(m.id)) continue; // a stranded predator despawned
       }
       const predator = isWildKind(m.kind) && isPredator(m.kind as WildKind);
       if (predator) {
@@ -7410,6 +7504,7 @@ export class GameScene extends Phaser.Scene {
         ax: +m.ax.toFixed(2),
         ay: +m.ay.toFixed(2),
         phase: 0,
+        rage: m.rage || undefined,
       });
     }
     this.backend.sendCreatures({ t: 'sync', host: this.me.name, mobs });
@@ -7422,7 +7517,7 @@ export class GameScene extends Phaser.Scene {
       alive.add(s.id);
       let m = this.wildMobs.get(s.id);
       if (!m) {
-        m = { id: s.id, kind: s.kind as MobKind, x: s.x, y: s.y, hp: s.hp, maxHp: s.maxHp, st: s.st as MobState['st'], t: 0, face: 0, ax: s.ax, ay: s.ay, phase: 0 };
+        m = { id: s.id, kind: s.kind as MobKind, x: s.x, y: s.y, hp: s.hp, maxHp: s.maxHp, st: s.st as MobState['st'], t: 0, face: 0, ax: s.ax, ay: s.ay, phase: 0, rage: s.rage };
         this.wildMobs.set(s.id, m);
       } else {
         m.x = s.x;
@@ -7432,6 +7527,7 @@ export class GameScene extends Phaser.Scene {
         m.st = s.st as MobState['st'];
         m.ax = s.ax;
         m.ay = s.ay;
+        m.rage = s.rage;
       }
     }
     for (const [id, m] of [...this.wildMobs]) {
@@ -7468,6 +7564,7 @@ export class GameScene extends Phaser.Scene {
         if (this.isWildHost) {
           this.wildMobs.delete(msg.id);
           this.wildWander.delete(msg.id);
+          this.wildRage.delete(msg.id);
         }
         break;
       case 'felled':
@@ -7513,6 +7610,9 @@ export class GameScene extends Phaser.Scene {
       const py = v.sprite.y;
       v.sprite.setDepth(py);
       if (Math.abs(px - prevX) > 0.05) v.sprite.setFlipX(px < prevX); // face travel direction
+      // enraged: the whole body flushes red until the revenge timer runs dry
+      if (m.rage) v.sprite.setTint(0xff7a66);
+      else v.sprite.clearTint();
       const idleKey = `${MOB_TEX[m.kind]}-idle`;
       if (m.st === 'windup' || m.st === 'aim') {
         if (v.sprite.anims.isPlaying) v.sprite.anims.stop();
@@ -7527,10 +7627,12 @@ export class GameScene extends Phaser.Scene {
       v.tele.setDepth(3); // a ground-level warning decal
       if (m.st === 'windup') {
         const warn = 0.35 + 0.25 * Math.sin(time / 55);
+        // an enraged creature telegraphs the rage profile's strike zone
+        const strikeR = (m.rage && isWildKind(m.kind) ? RAGE_PROFILES[m.kind as WildKind] : prof).strikeR;
         v.tele.lineStyle(3, 0xff3322, warn);
         v.tele.lineBetween(px, py, m.ax * TILE, m.ay * TILE);
         v.tele.fillStyle(0xff3322, warn * 0.5);
-        v.tele.fillCircle(m.ax * TILE, m.ay * TILE, prof.strikeR * TILE);
+        v.tele.fillCircle(m.ax * TILE, m.ay * TILE, strikeR * TILE);
       }
     }
     for (const [id, v] of this.wildViews) {
@@ -7543,13 +7645,16 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** each client checks its OWN player against live predator strike zones (peaceful never strike) */
+  /** each client checks its OWN player against live creature strike zones
+   *  (predators — and since the enrage batch, any ENRAGED creature — strike) */
   private checkWildHarm(): void {
     const ptx = this.player.x / TILE;
     const pty = (this.player.y - 4) / TILE;
     for (const m of this.wildMobs.values()) {
       if (m.st !== 'strike') continue;
-      const prof = profileOf(m.kind);
+      // an enraged creature strikes with the rage profile's zone (a peaceful
+      // kind's base strikeR is 0 — its gore would otherwise be a phantom)
+      const prof = m.rage && isWildKind(m.kind) ? RAGE_PROFILES[m.kind as WildKind] : profileOf(m.kind);
       if (Math.hypot(m.x - ptx, m.y - pty) <= prof.strikeR + 0.35) {
         this.wildKnockdown(m.x, m.y);
         return;
@@ -7603,7 +7708,8 @@ export class GameScene extends Phaser.Scene {
     return { tx: this.world.spawn.tx, ty: this.world.spawn.ty, atVillage: false };
   }
 
-  /** in the World, E on the nearest creature in reach: hunt a predator (swing) or forage a peaceful (catch) */
+  /** in the World, E on the nearest creature in reach: hunt anything hostile —
+   *  a predator or an ENRAGED survivor (swing) — or forage a calm peaceful (catch) */
   private wildlifeAction(): EAction | null {
     const bow = this.isBow();
     const ptx = this.player.x / TILE;
@@ -7612,10 +7718,10 @@ export class GameScene extends Phaser.Scene {
     let bd = Infinity;
     for (const m of this.wildMobs.values()) {
       if (m.st === 'dead') continue;
-      // the Bow hunts predators from range; foraging is ALWAYS an arm's-length
+      // the Bow hunts hostiles from range; foraging is ALWAYS an arm's-length
       // catch (the old 6-tile bow forage was a latent oddity)
-      const predator = isWildKind(m.kind) && isPredator(m.kind as WildKind);
-      const allowed = predator && bow ? 6 : 1.9;
+      const hostile = m.rage || (isWildKind(m.kind) && isPredator(m.kind as WildKind));
+      const allowed = hostile && bow ? 6 : 1.9;
       const d = Math.hypot(m.x - ptx, m.y - pty) - profileOf(m.kind).radius;
       if (d < allowed && d < bd) {
         bd = d;
@@ -7624,7 +7730,10 @@ export class GameScene extends Phaser.Scene {
     }
     if (!best) return null;
     const target = best;
-    if (isWildKind(target.kind) && isPredator(target.kind as WildKind)) {
+    // an enraged creature — even a peaceful kind — is a FIGHT, not a catch: the
+    // forage verb would delete the charging animal for free loot and, being
+    // swing:false, would also swallow the LMB while it stands adjacent
+    if (target.rage || (isWildKind(target.kind) && isPredator(target.kind as WildKind))) {
       // hunt: a repeatable weapon swing (the Bow fires mouse-aimed; melee must close)
       return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => (bow ? this.fireBow() : this.wildSwing(target)) };
     }
@@ -7651,6 +7760,41 @@ export class GameScene extends Phaser.Scene {
     if (roll.crit) this.floatText(fx, fy, `${shown}!`, '#ffd166', 13);
     else this.floatText(fx, fy, `${shown}`, '#ff9a66', 10);
     if (roll.dead) this.onWildFelled(m, by);
+    else this.enrageWild(m, by);
+  }
+
+  /** host: a surviving hit ENRAGES the creature — it drops flight, marks its
+   *  attacker and charges (stepWild swaps in the rage profile while the timer
+   *  runs; the flag rides the snapshot so every client sees it turn red) */
+  private enrageWild(m: MobState, by: string): void {
+    this.wildRage.set(m.id, { by, until: Date.now() + WILD_RAGE_MS });
+    if (!m.rage) {
+      m.rage = true;
+      this.floatText(m.x * TILE, m.y * TILE - profileOf(m.kind).radius * TILE - 14, '!', '#ff5544', 13);
+    }
+  }
+
+  /** host: rage over (timer dry / shooter gone) — peaceful kinds return to
+   *  flight; a predator stranded off danger ground despawns (its normal brain
+   *  treats safe tiles as walls — it would only stand there as a statue) */
+  private calmWild(m: MobState): void {
+    this.wildRage.delete(m.id);
+    m.rage = undefined;
+    const predator = isWildKind(m.kind) && isPredator(m.kind as WildKind);
+    m.st = predator ? 'chase' : 'kite';
+    m.t = 0;
+    if (predator && !this.dangerAt(Math.floor(m.x), Math.floor(m.y))) {
+      // it slinks off, it is not slain: guests read a wounded creature vanishing
+      // NEAR them as a kill (applyWildSnap's death-vs-cull heuristic) and would
+      // play a phantom death beat. Heal it, let one broadcast carry full HP so
+      // every client reads the removal as a silent despawn, THEN delete.
+      m.hp = m.maxHp;
+      this.time.delayedCall(WILD_BROADCAST_MS * 2 + 50, () => {
+        if (!this.isWildHost || this.wildRage.has(m.id)) return; // re-enraged/handover
+        this.wildMobs.delete(m.id);
+        this.wildWander.delete(m.id);
+      });
+    }
   }
 
   /** host: a predator fell — the hunter gets the hide/meat/trophy loot; the creature drops off the wire */
@@ -7662,6 +7806,7 @@ export class GameScene extends Phaser.Scene {
     this.wildDeathBeat(m.id);
     this.wildMobs.delete(m.id);
     this.wildWander.delete(m.id);
+    this.wildRage.delete(m.id);
     if (by === this.me.name) this.grantWildLoot(loot, 'hunted');
     else this.backend.sendCreatures({ t: 'felled', id: m.id, by, loot });
   }
@@ -7674,6 +7819,7 @@ export class GameScene extends Phaser.Scene {
     if (this.isWildHost) {
       this.wildMobs.delete(m.id);
       this.wildWander.delete(m.id);
+      this.wildRage.delete(m.id);
     } else {
       this.wildMobs.delete(m.id); // optimistic; the host removes it authoritatively
       this.backend.sendCreatures({ t: 'forage', id: m.id, by: this.me.name });

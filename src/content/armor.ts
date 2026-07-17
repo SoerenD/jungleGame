@@ -22,9 +22,10 @@ export type ArmorSlot = 'boots' | 'chest' | 'helm';
 export const ARMOR_SLOTS: ArmorSlot[] = ['boots', 'chest', 'helm'];
 
 /**
- * The two dedicated weapon slots (2026-07 playtest batch): a slotted weapon is
- * MOVED out of the bag exactly like a worn armor piece — same persisted record,
- * same RPC, same transaction. Keys 4/5 select them as the in-hand item.
+ * LEGACY (2026-07-17 unification): weapons no longer live in the gear record —
+ * all five hotbar quick-slots are bag references now. The two slots survive in
+ * the type/wire/DB shape only so the HUD's one-shot migration can SEE and drain
+ * weapons an older client left equipped (the equip RPC returns them to the bag).
  */
 export type WeaponSlot = 'weapon1' | 'weapon2';
 export const WEAPON_SLOTS: WeaponSlot[] = ['weapon1', 'weapon2'];

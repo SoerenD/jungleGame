@@ -42,7 +42,7 @@ A crafted item a Player equips and holds to act. Gathering Tools (axe, pickaxe, 
 _Avoid_: gear ("equip" and "equipment" are now first-class — see Loadout)
 
 **Loadout**:
-The hotbar of a Player's ready gear: three quick-slots for Tools (keys 1–3) plus two dedicated weapon slots (keys 4–5). Exactly one cell is in-hand at a time; only the in-hand item acts, and it renders in the Player's hand, synced so every Player sees what everyone is holding. Tools sit in quick-slots by reference; slotting a weapon MOVES it out of the pack into the persisted gear record (the Armor pattern) and unequipping returns it.
+The hotbar of a Player's ready gear: five uniform quick-slots (keys 1–5), each holding any Tool — weapons included — by reference (the pack still owns the item, but its view shows only unslotted copies; dragging a slot onto the pack returns it). Exactly one cell is in-hand at a time; only the in-hand item acts, and it renders in the Player's hand, synced so every Player sees what everyone is holding.
 _Avoid_: hotbar, belt, equipment slot (informal UI words for the same thing)
 
 **Hand Torch**:
@@ -50,7 +50,7 @@ A cheap tier-1 Tool a Player holds to cast a warm orange light around themselves
 _Avoid_: lantern, lamp, headlamp
 
 **Bow**:
-A tier-1 Tool (crafted from basic Resources — no Guardian drops) that strikes the Guardian from range, craftable before the first fight and able to help kill the first Guardian. Like a melee hit it lands only during an Eye Window; unlike melee it keeps the Player clear of the danger tiles, so it fires on a slower cadence and needs no ammo — the arrow is the shot's motion, never a carried Resource. Its per-shot damage is lower than tool-melee's (see the Guardian damage rule), so it is a safe-but-slower support weapon, not a strict upgrade. The World has no other target: nothing else can be shot.
+A tier-1 Tool (crafted from basic Resources — no Guardian drops) that strikes the Guardian from range, craftable before the first fight and able to help kill the first Guardian. Like a melee hit it lands only during an Eye Window; unlike melee it keeps the Player clear of the danger tiles, so it fires on a slower cadence and needs no ammo — the arrow is the shot's motion, never a carried Resource. Its per-shot damage is lower than tool-melee's (see the Guardian damage rule), so it is a safe-but-slower support weapon, not a strict upgrade. Arrows fly mouse-aimed until they leave the screen (Delve walls stop them) and strike the first body on the ray: the Guardian or a Warden (within the authored 8-tile bow reach), Delve Husks, and any Wildlife — peaceful kinds included; a surviving animal enrages and charges its shooter.
 _Avoid_: weapon (generic), gun, arrows-as-items
 
 **Structure**:

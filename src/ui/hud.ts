@@ -18,7 +18,7 @@ import {
   type AudioChannel,
 } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine, weaponStatParts } from '../content/guardian';
-import { armorDef, isWeapon, type ArmorSlot, type EquippedGear, type WeaponSlot } from '../content/armor';
+import { armorDef, gearOwns, isWeapon, type ArmorSlot, type EquippedGear, type WeaponSlot } from '../content/armor';
 import { characterSheet } from '../content/stats';
 import { drawBlockheadSheet, AVATAR_W, AVATAR_H } from '../avatars';
 import type { Appearance, WardenAltarState, WardenWorldState } from '../backend/types';
@@ -499,7 +499,7 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
       // Mute lives on the bottom-bar button + the settings checkbox.
       setWorldMapOpen(!el('worldmap-overlay').classList.contains('open'));
     } else if (k >= '1' && k <= '5') {
-      selectLoadout(Number(k) - 1); // 1–3 tool quick-slots, 4–5 the weapon slots
+      selectLoadout(Number(k) - 1); // the five uniform quick-slots
     }
   });
   // dim backdrop click closes the world map
@@ -516,6 +516,7 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     emitHeld();
     renderJourney(); // Delve-quest steps tick off inventory (Scales, pickaxe, drops)
     if (openCrateId) renderCrate();
+    migrateWeaponSlots(); // join emits 'equipped' first — invReady arrives HERE
   });
   // ADR-0017 §4: the worn gear changed (join restore or an equip round-trip)
   bus.on('equipped', (eq: EquippedGear) => {
@@ -523,9 +524,9 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     renderInventory(); // the ⛨ badge + the detail bar's Equip/Unequip label
     renderCharacter(); // re-dress the paperdoll + its slots + attributes
     renderJourney(); // the Legacy's Reverberant step accepts the epic helm WORN
-    renderLoadout(); // the weapon cells (keys 4/5) render off the gear record
-    emitHeld(); // a slotted/unequipped weapon changes what key 4/5 holds
-    restoreWeaponSlots(); // pre-0021 server: re-seat the locally saved weapons once
+    renderLoadout(); // gear ownership feeds the quick-slot reconcile
+    emitHeld(); // a returned/migrated weapon changes what the hand holds
+    migrateWeaponSlots(); // drain weapons an old client left in the gear record
   });
   bus.on('chat', (msg: ChatMsg) => appendChat(msg));
   bus.on('chatlog', (msgs: ChatMsg[]) => {
@@ -1988,47 +1989,44 @@ function saveInvOrder(): void {
 
 // ---------------------------------------------------------------- v4: the Loadout
 
-/** three quick-slots holding ready TOOLS (keys 1–3); weapons live in the two
- *  dedicated weapon slots behind keys 4–5 (the gear record, MOVE semantics) */
-const LOADOUT_SLOTS = 3;
-/** total selectable hotbar cells: 3 tool quick-slots + 2 weapon slots */
-const HOTBAR_SLOTS = LOADOUT_SLOTS + 2;
-let loadout: (ItemId | null)[] = [null, null, null];
+/** five uniform quick-slots (keys 1–5): each is a REFERENCE to a bag item, and
+ *  any Tool — weapons included — sits in any slot (the 2026-07-17 unification;
+ *  the dedicated MOVE-semantics weapon cells are gone, weapons live in the bag
+ *  like every other Tool) */
+const LOADOUT_SLOTS = 5;
+let loadout: (ItemId | null)[] = [null, null, null, null, null];
 let loadoutSel = 0;
-/**
- * The weapon slots as last saved locally. Against the CURRENT live server
- * (pre-0021 jw_equip) weapon slots are never persisted server-side — they run
- * in reference mode — so without this stash every login would wipe them. A
- * one-shot restore re-seats saved weapons the bag still holds; once 0021 is
- * live the server record arrives non-empty and the restore never fires.
- */
-let savedWeapons: (ItemId | null)[] = [null, null];
-let weaponRestoreDone = false;
-
-/** the weapon slot behind hotbar index 3/4, or null for a tool cell */
-function weaponSlotAt(i: number): WeaponSlot | null {
-  return i === 3 ? 'weapon1' : i === 4 ? 'weapon2' : null;
-}
+/** items the Player dragged OFF the hotbar back into the pack — the auto-seat
+ *  must not bounce them straight back into the freed slot. Seating one again
+ *  (drag/double-click) un-benches it. */
+let benched = new Set<ItemId>();
+/** one-shot guard: drain weapons a previous client left in the gear record */
+let weaponMigrationDone = false;
 
 const loadoutKey = () => `jungle-world:loadout:${meName}`;
 
 function loadLoadout(): void {
-  loadout = [null, null, null];
+  loadout = [null, null, null, null, null];
   loadoutSel = 0;
-  savedWeapons = [null, null];
-  weaponRestoreDone = false;
+  benched = new Set();
+  weaponMigrationDone = false;
   try {
     const parsed = JSON.parse(localStorage.getItem(loadoutKey()) ?? 'null') as
-      | { slots?: (ItemId | null)[]; sel?: number; weapons?: (ItemId | null)[] }
+      | { slots?: (ItemId | null)[]; sel?: number; weapons?: (ItemId | null)[]; benched?: ItemId[] }
       | null;
+    if (parsed && Array.isArray(parsed.benched)) {
+      for (const id of parsed.benched) if (typeof id === 'string') benched.add(id);
+    }
     if (parsed && Array.isArray(parsed.slots)) {
       for (let i = 0; i < LOADOUT_SLOTS; i++) loadout[i] = parsed.slots[i] ?? null;
     }
+    // legacy save (3 tool slots + 2 weapon cells): the weapon cells become slots 4/5
     if (parsed && Array.isArray(parsed.weapons)) {
-      savedWeapons = [parsed.weapons[0] ?? null, parsed.weapons[1] ?? null];
+      loadout[3] = loadout[3] ?? parsed.weapons[0] ?? null;
+      loadout[4] = loadout[4] ?? parsed.weapons[1] ?? null;
     }
     if (parsed && Number.isInteger(parsed.sel)) {
-      loadoutSel = Math.max(0, Math.min(HOTBAR_SLOTS - 1, parsed.sel!));
+      loadoutSel = Math.max(0, Math.min(LOADOUT_SLOTS - 1, parsed.sel!));
     }
   } catch {
     /* corrupt entry — start empty */
@@ -2036,57 +2034,57 @@ function loadLoadout(): void {
 }
 
 function saveLoadout(): void {
-  // until the one-shot restore has run the gear record is still weapon-less
-  // (boot renders fire before 'equipped' arrives) — keep the loaded stash
-  // instead of clobbering it with empties
-  const weapons = weaponRestoreDone ? [equippedGear.weapon1 ?? null, equippedGear.weapon2 ?? null] : savedWeapons;
-  localStorage.setItem(loadoutKey(), JSON.stringify({ slots: loadout, sel: loadoutSel, weapons }));
+  localStorage.setItem(loadoutKey(), JSON.stringify({ slots: loadout, sel: loadoutSel, benched: [...benched] }));
 }
 
 /**
- * One-shot after join: the pre-0021 server never persists weapon slots, so the
- * gear record arrives weapon-less every login — re-seat the locally saved
- * weapons the bag still holds (reference mode re-arms them). A 0021 server
- * returns them in the record itself, and this never fires.
+ * One-shot after join: weapons no longer live in the gear record (all five
+ * quick-slots are bag references now) — release anything a previous client
+ * version left in weapon1/weapon2 back to the bag, seating it into a free
+ * quick-slot first so it stays on the hotbar while the unequip round-trips.
  */
-function restoreWeaponSlots(): void {
-  if (weaponRestoreDone || !invReady) return;
-  weaponRestoreDone = true;
-  if (equippedGear.weapon1 || equippedGear.weapon2) return; // the server record wins
-  (['weapon1', 'weapon2'] as WeaponSlot[]).forEach((slot, i) => {
-    const id = savedWeapons[i];
-    if (id && isWeapon(id) && (inv[id] ?? 0) > 0) bus.emit('weapon-slot-set', slot, id);
+function migrateWeaponSlots(): void {
+  if (weaponMigrationDone || !invReady) return;
+  weaponMigrationDone = true;
+  (['weapon1', 'weapon2'] as WeaponSlot[]).forEach((slot) => {
+    const id = equippedGear[slot];
+    if (!id) return;
+    if (!loadout.includes(id)) {
+      const free = loadout.indexOf(null);
+      if (free >= 0) loadout[free] = id;
+    }
+    bus.emit('weapon-slot-set', slot, null); // MOVE it back into the bag
   });
 }
 
-/** only non-weapon Tools sit in quick-slots (weapons live in the gear slots);
- *  drop unowned ones and auto-seat newly-owned ones. Legacy saved loadouts with
- *  weapons in them are cleaned by the same filter. */
+/** any owned Tool — weapons included — may sit in a quick-slot; drop unowned
+ *  ones and auto-seat newly-owned ones. Ownership goes through gearOwns so a
+ *  weapon still mid-migration out of the old gear record counts as owned. */
 function reconcileLoadout(): void {
   // Before the first inventory snapshot the inv is empty; reconciling now would drop every
   // saved slot (nothing looks owned) and the following renderLoadout would persist the wipe.
   if (!invReady) return;
-  const ownedTools = (Object.entries(inv) as [ItemId, number][])
-    .filter(([id, n]) => (n ?? 0) > 0 && ITEMS[id]?.kind === 'tool' && !isWeapon(id))
-    .map(([id]) => id);
+  const ownedTools = (Object.keys(ITEMS) as ItemId[]).filter(
+    (id) => ITEMS[id].kind === 'tool' && gearOwns(inv, equippedGear, id),
+  );
   for (let i = 0; i < LOADOUT_SLOTS; i++) {
     if (loadout[i] && !ownedTools.includes(loadout[i]!)) loadout[i] = null;
+    // one reference per item — a legacy save could carry the same weapon twice
+    // (the old gear cells legitimately held doubles); first occurrence wins
+    if (loadout[i] && loadout.indexOf(loadout[i]!) < i) loadout[i] = null;
   }
+  for (const id of [...benched]) if (!ownedTools.includes(id)) benched.delete(id); // no zombie benchings
   for (const id of ownedTools) {
-    if (loadout.includes(id)) continue;
+    if (loadout.includes(id) || benched.has(id)) continue;
     const free = loadout.indexOf(null);
     if (free >= 0) loadout[free] = id;
   }
 }
 
-/** the currently in-hand item, or null when the selected slot is empty/unowned.
- *  Hotbar 3/4 are the weapon slots — the slot itself IS ownership (the weapon
- *  was moved out of the bag), so there is no inv check for them. */
+/** the currently in-hand item, or null when the selected slot is empty/unowned */
 function heldItem(): ItemId | null {
-  const wslot = weaponSlotAt(loadoutSel);
-  if (wslot) return equippedGear[wslot] ?? null;
   const id = loadout[loadoutSel];
-  return id && (inv[id] ?? 0) > 0 ? id : null;
+  return id && gearOwns(inv, equippedGear, id) ? id : null;
 }
 
 /** tell GameScene which single item is in-hand (broadcast + used on hit RPCs) */
@@ -2095,29 +2093,26 @@ function emitHeld(): void {
 }
 
 function selectLoadout(i: number): void {
-  if (i < 0 || i >= HOTBAR_SLOTS) return;
+  if (i < 0 || i >= LOADOUT_SLOTS) return;
   loadoutSel = i;
   saveLoadout();
   renderLoadout();
   emitHeld();
 }
 
+/** the two inventory drag payloads a quick-slot accepts (any Tool, any weapon) */
+const LOADOUT_PAYLOADS = ['application/x-jw-tool', 'application/x-jw-weapon'];
+
 function renderLoadout(): void {
   reconcileLoadout();
   saveLoadout();
-  renderCharacter(); // the paperdoll's weapon slots + attributes track the held item
+  renderCharacter(); // the paperdoll's attributes track the held item
   const bar = el('loadout-bar');
   bar.innerHTML = '';
-  for (let i = 0; i < HOTBAR_SLOTS; i++) {
-    const wslot = weaponSlotAt(i);
-    const id = wslot ? equippedGear[wslot] ?? null : loadout[i];
+  for (let i = 0; i < LOADOUT_SLOTS; i++) {
+    const id = loadout[i];
     const slot = document.createElement('div');
-    slot.className =
-      'loadout-slot' +
-      (i === loadoutSel ? ' selected' : '') +
-      (id ? ' filled' : '') +
-      (wslot ? ' weapon' : '') +
-      (i === LOADOUT_SLOTS ? ' divider' : ''); // visual split: tools | weapons
+    slot.className = 'loadout-slot' + (i === loadoutSel ? ' selected' : '') + (id ? ' filled' : '');
     slot.setAttribute('data-testid', `loadout-${i}`);
     const key = document.createElement('span');
     key.className = 'loadout-key';
@@ -2130,15 +2125,22 @@ function renderLoadout(): void {
       icon.alt = ITEMS[id].name;
       icon.draggable = false;
       slot.appendChild(icon);
-      slot.title = wslot ? t.inv.weaponSlotHold(ITEMS[id].name, i + 1) : t.inv.slotHold(ITEMS[id].name, i + 1);
+      slot.title = t.inv.slotHold(ITEMS[id].name, i + 1);
+      // slots drag like items: onto another slot to move (the dedup there
+      // clears this one), onto the pack grid to unslot back into the bag view
+      slot.draggable = true;
+      slot.addEventListener('dragstart', (e) => {
+        e.dataTransfer!.setData('application/x-jw-unslot', String(i));
+        e.dataTransfer!.setData(isWeapon(id) ? 'application/x-jw-weapon' : 'application/x-jw-tool', id);
+        e.dataTransfer!.effectAllowed = 'move';
+      });
     } else {
-      slot.title = wslot ? t.inv.weaponSlotEmpty(i + 1) : t.inv.slotEmpty(i + 1);
+      slot.title = t.inv.slotEmpty(i + 1);
     }
-    // accept the matching drag payload from the inventory grid: plain Tools onto
-    // quick-slots, weapons onto the gear cells (an equip = MOVE, via GameScene)
-    const payload = wslot ? 'application/x-jw-weapon' : 'application/x-jw-tool';
+    // every slot accepts every Tool from the bag (weapons ride their own drag
+    // payload but seat exactly the same way — a reference, never a MOVE)
     slot.addEventListener('dragover', (e) => {
-      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(payload)) {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).some((tp) => LOADOUT_PAYLOADS.includes(tp))) {
         e.preventDefault();
         slot.classList.add('drop');
       }
@@ -2147,16 +2149,13 @@ function renderLoadout(): void {
     slot.addEventListener('drop', (e) => {
       e.preventDefault();
       slot.classList.remove('drop');
-      const dropped = e.dataTransfer?.getData(payload) as ItemId;
+      const dropped = (e.dataTransfer?.getData('application/x-jw-tool') ||
+        e.dataTransfer?.getData('application/x-jw-weapon')) as ItemId;
       if (!dropped) return;
-      if (wslot) {
-        bus.emit('weapon-slot-set', wslot, dropped);
-        selectLoadout(i); // hold the newly slotted weapon at once
-        return;
-      }
-      // no duplicates — clear the Tool from any other quick-slot first
+      // no duplicates — clear the item from any other quick-slot first
       for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === dropped) loadout[k] = null;
       loadout[i] = dropped;
+      benched.delete(dropped); // deliberately seated — auto-seat may manage it again
       saveLoadout();
       renderLoadout();
       emitHeld();
@@ -2269,15 +2268,17 @@ function invUse(id: ItemId): void {
   if (kind === 'structure') bus.emit('request-place', id as StructureId);
   else if (kind === 'food') bus.emit('eat', id);
   else if (kind === 'armor') bus.emit('equip-toggle', id);
-  else if (isWeapon(id)) {
-    // already slotted? select that hotbar cell instead of re-equipping — on the
-    // pre-0021 server the bag copy is a reference-mode mirage, and equipping it
-    // into the OTHER slot would double-seat the single owned copy
-    if (equippedGear.weapon1 === id) return selectLoadout(3);
-    if (equippedGear.weapon2 === id) return selectLoadout(4);
-    // seat the weapon into the first free weapon slot (or replace slot 1)
-    const slot: WeaponSlot = !equippedGear.weapon1 ? 'weapon1' : !equippedGear.weapon2 ? 'weapon2' : 'weapon1';
-    bus.emit('weapon-slot-set', slot, id);
+  else if (kind === 'tool') {
+    // take it in hand: select its quick-slot, seating it into a free one first —
+    // or, with the bar full (auto-seat keeps it full for anyone owning 5+ Tools),
+    // into the CURRENTLY SELECTED slot so the gesture always works
+    const at = loadout.indexOf(id);
+    if (at >= 0) return selectLoadout(at);
+    const free = loadout.indexOf(null);
+    const seat = free >= 0 ? free : loadoutSel;
+    loadout[seat] = id;
+    benched.delete(id); // deliberately seated
+    selectLoadout(seat); // saves + re-renders + emits held
   }
 }
 
@@ -2289,12 +2290,24 @@ function isEquipped(id: ItemId): boolean {
 
 function renderInventory(): void {
   const grid = el('inv-grid');
+  wireUnslotDrop(grid);
   grid.innerHTML = '';
   hideItemTooltip(); // re-render discards the slots; drop any popup anchored to an old one
   const present = new Map(
     // skip any item id no longer known (e.g. a retired Structure still in a save)
     (Object.entries(inv) as [ItemId, number][]).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id]),
   );
+  // a quick-slotted item lives ON THE HOTBAR, not in the pack view: hide one
+  // copy per occupied slot (pure display — the bag still owns the item, every
+  // ownership/craft check is untouched). Drag a hotbar slot onto the pack to
+  // return it; spare copies keep showing with the reduced count.
+  for (const id of loadout) {
+    if (!id) continue;
+    const n = present.get(id);
+    if (n === undefined) continue;
+    if (n <= 1) present.delete(id);
+    else present.set(id, n - 1);
+  }
   // vacate slots whose item is gone, then seat newcomers in the first free slot
   for (let i = 0; i < invOrder.length; i++) {
     const it = invOrder[i];
@@ -2376,6 +2389,10 @@ function renderInventory(): void {
     slot.addEventListener('dragleave', () => slot.classList.remove('drop'));
     slot.addEventListener('drop', (e) => {
       e.preventDefault();
+      // only a pack-reorder drag carries text/plain; a hotbar drag must fall
+      // through to the grid's unslot handler (getData('') would parse as 0
+      // and phantom-swap slot 0 otherwise)
+      if (!Array.from(e.dataTransfer!.types).includes('text/plain')) return;
       const from = Number(e.dataTransfer!.getData('text/plain'));
       if (!Number.isInteger(from) || from === i || invOrder[from] == null) return;
       [invOrder[from], invOrder[i]] = [invOrder[i] ?? null, invOrder[from]];
@@ -2387,12 +2404,36 @@ function renderInventory(): void {
   renderInvDetail(present);
 }
 
+/** the pack accepts a drag FROM the hotbar: dropping anywhere on the grid
+ *  clears that quick-slot, so the item shows in the pack view again */
+let unslotWired = false;
+function wireUnslotDrop(grid: HTMLElement): void {
+  if (unslotWired) return;
+  unslotWired = true;
+  grid.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('application/x-jw-unslot')) e.preventDefault();
+  });
+  grid.addEventListener('drop', (e) => {
+    const idx = e.dataTransfer?.getData('application/x-jw-unslot');
+    if (idx == null || idx === '') return; // '0' is a valid slot index
+    e.preventDefault();
+    const id = loadout[Number(idx)];
+    if (id) benched.add(id); // stay in the pack — don't auto-seat it right back
+    loadout[Number(idx)] = null;
+    saveLoadout();
+    renderLoadout();
+    renderInventory();
+    emitHeld();
+  });
+}
+
 // ------------------------------------------------------------ character panel
 // The WoW-style paperdoll (ADR-0017 §4): the Avatar wearing its Armor, the
 // equipment slots you drag Items into, and the attributes those Items grant.
 
-/** the four paperdoll slots: three Armor slots + the in-hand weapon */
-type EquipSlotKind = ArmorSlot | WeaponSlot;
+/** the four paperdoll slots: three Armor slots + the in-hand weapon (a MIRROR
+ *  of the hotbar's held item — weapons live in the bag + quick-slots) */
+type EquipSlotKind = ArmorSlot | 'weapon';
 
 /** redraw the whole character block (paperdoll + slots + attributes) */
 function renderCharacter(): void {
@@ -2417,10 +2458,19 @@ function renderPaperdoll(): void {
   ctx.drawImage(sheet, 0, 0, AVATAR_W, AVATAR_H, 0, 0, canvas.width, canvas.height);
 }
 
-/** the item currently seated in an equipment slot (armor + the two weapon slots
- *  all read straight off the persisted gear record) */
+/** the item currently seated in an equipment slot (weapon = the in-hand Tool) */
 function slotItem(kind: EquipSlotKind): ItemId | null {
-  return equippedGear[kind] ?? null;
+  return kind === 'weapon' ? heldItem() : equippedGear[kind] ?? null;
+}
+
+/** seat a Tool/weapon dropped on the paperdoll's weapon cell into the SELECTED
+ *  quick-slot and wield it at once (reference semantics, never a MOVE) */
+function equipWeaponToLoadout(toolId: ItemId): void {
+  if (ITEMS[toolId]?.kind !== 'tool') return;
+  for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === toolId) loadout[k] = null;
+  loadout[loadoutSel] = toolId;
+  benched.delete(toolId); // deliberately seated
+  selectLoadout(loadoutSel); // saves, re-renders the bar, emits held (→ renderCharacter)
 }
 
 /** line-art empty-slot icons for the slots whose emoji render as solid shapes
@@ -2448,12 +2498,13 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
     slot.appendChild(icon);
     slot.addEventListener('mouseenter', () => showItemTooltip(id, slot));
     slot.addEventListener('mouseleave', hideItemTooltip);
-    // every filled slot unequips on click — the piece MOVES back to the bag
-    slot.title = `${ITEMS[id].name} — ${t.character.unequipHint}`;
-    slot.onclick = () => {
-      if (kind === 'weapon1' || kind === 'weapon2') bus.emit('weapon-slot-set', kind, null);
-      else bus.emit('equip-toggle', id);
-    };
+    // armor slots unequip on click; the weapon slot mirrors the loadout (read-only)
+    if (kind !== 'weapon') {
+      slot.title = `${ITEMS[id].name} — ${t.character.unequipHint}`;
+      slot.onclick = () => bus.emit('equip-toggle', id);
+    } else {
+      slot.title = ITEMS[id].name;
+    }
   } else {
     const ghost = document.createElement('span');
     ghost.className = 'equip-ghost';
@@ -2465,11 +2516,11 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
     slot.appendChild(ghost);
     slot.title = t.character.emptySlot(label);
   }
-  // drop target: armor slots take the matching Armor; a weapon slot takes a weapon
-  const isWeaponSlot = kind === 'weapon1' || kind === 'weapon2';
-  const dropType = isWeaponSlot ? 'application/x-jw-weapon' : 'application/x-jw-armor';
+  // drop target: armor slots take the matching Armor; the weapon slot takes any
+  // Tool or weapon (both inventory drag payloads) and seats it via the hotbar
+  const dropTypes = kind === 'weapon' ? LOADOUT_PAYLOADS : ['application/x-jw-armor'];
   slot.addEventListener('dragover', (e) => {
-    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(dropType)) {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).some((tp) => dropTypes.includes(tp))) {
       e.preventDefault();
       slot.classList.add('drop');
     }
@@ -2478,10 +2529,10 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
   slot.addEventListener('drop', (e) => {
     e.preventDefault();
     slot.classList.remove('drop');
-    const dropped = e.dataTransfer?.getData(dropType) as ItemId | undefined;
+    const dropped = dropTypes.map((tp) => e.dataTransfer?.getData(tp)).find(Boolean) as ItemId | undefined;
     if (!dropped) return;
-    if (isWeaponSlot) {
-      bus.emit('weapon-slot-set', kind, dropped);
+    if (kind === 'weapon') {
+      equipWeaponToLoadout(dropped);
     } else {
       const def = armorDef(dropped);
       if (def && def.slot === kind && !isEquipped(dropped)) bus.emit('equip-toggle', dropped);
@@ -2491,7 +2542,7 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
 }
 
 /** (re)lay the equipment slots: helm→chest→boots (head-to-toe) on the left,
- *  the two weapon slots on the right */
+ *  the in-hand weapon on the right */
 function renderEquipSlots(): void {
   const left = document.getElementById('char-slots-left');
   const right = document.getElementById('char-slots-right');
@@ -2500,8 +2551,7 @@ function renderEquipSlots(): void {
   right.innerHTML = '';
   const order: ArmorSlot[] = ['helm', 'chest', 'boots'];
   for (const s of order) left.appendChild(buildEquipSlot(s));
-  right.appendChild(buildEquipSlot('weapon1'));
-  right.appendChild(buildEquipSlot('weapon2'));
+  right.appendChild(buildEquipSlot('weapon'));
 }
 
 /** the attributes block: the character's effective combat profile (content/stats.ts) */

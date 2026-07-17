@@ -780,14 +780,6 @@ button.ui-btn:disabled {
   border-color: var(--good);
   background: rgba(140, 233, 154, 0.16);
 }
-/* the two weapon slots (keys 4/5): a warm steel tint + a gap splitting them
-   from the tool quick-slots */
-.loadout-slot.weapon {
-  background: rgba(120, 90, 60, 0.35);
-}
-.loadout-slot.divider {
-  margin-left: 10px;
-}
 .loadout-slot .inv-icon {
   width: 32px;
   height: 32px;

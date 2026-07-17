@@ -722,6 +722,9 @@ export interface MobState {
   guard?: boolean;
   /** the Warden's live volley mode (host-only): 0 = fan, 1 = the wide slow wall */
   mode?: number;
+  /** Wildlife enrage (ADR-0012, host-set): charging its shooter — rides the
+   *  snapshot so every client tints the sprite; pure presentation here */
+  rage?: boolean;
 }
 
 export function createMob(id: string, spawn: MobSpawn, heads: number, bossHpPerHead = BOSS_HP_PER_HEAD, hpMul = 1): MobState {
@@ -821,6 +824,9 @@ export interface MobCtx {
   rng: () => number;
   /** ADR-0015: the live Stage's per-Depth hardening (undefined on Stages 1–2 + Wildlife) */
   tune?: MobTune;
+  /** override the kind's static profile for THIS step (Wildlife enrage swaps in a
+   *  hotter melee profile without touching the registered kind — same engine) */
+  profile?: MobProfile;
 }
 
 /** what a mob's step produced this frame for the host to render/adjudicate */
@@ -870,7 +876,7 @@ function moveToward(m: MobState, tx: number, ty: number, speed: number, ctx: Mob
 export function stepMob(m: MobState, ctx: MobCtx): MobEvent {
   if (m.st === 'dead') return {};
   m.t += ctx.dt;
-  const P = profileOf(m.kind);
+  const P = ctx.profile ?? profileOf(m.kind);
   const ai = aiOf(m.kind, P);
   // AGGRO GATE: a mob only "sees" a player within its aggro range, so it stays
   // inert until you actually approach (the safe-antechamber pacing — otherwise a
