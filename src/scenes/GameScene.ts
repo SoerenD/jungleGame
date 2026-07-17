@@ -182,91 +182,11 @@ import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX } from '../mobSprites';
 import { RECIPES } from '../content/recipes';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
+import type { GameContext } from '../systems/context';
+import type { DistrictDef, ElevationRegion, GameSystem, Mode, OkJoin, WorldData } from '../systems/types';
 import { drawStructureArt } from '../ui/icons';
 import { showIntro } from '../ui/intro';
 import { t, zoneName } from '../i18n';
-
-type OkJoin = Extract<JoinResult, { ok: true }>;
-
-interface WorldData {
-  spawn: { tx: number; ty: number };
-  /** ADR-0012: `dangerous` flags the frontier wilds where predators may spawn */
-  zones: { name: string; x: number; y: number; w: number; h: number; dangerous?: boolean }[];
-  nodes: { id: string; type: keyof typeof NODE_TYPES; tx: number; ty: number }[];
-  foliage: { kind: string; tx: number; ty: number }[];
-  blocked: number[];
-  collide: number[];
-  tablets: { id: string; tx: number; ty: number }[];
-  gate: { tx: number; ty: number }[];
-  altar: { tx: number; ty: number };
-  treasureSpots: { tx: number; ty: number }[];
-  arena: { x: number; y: number; w: number; h: number };
-  guardianHome: { tx: number; ty: number };
-  sealMonument: { tx: number; ty: number };
-  guardianAltar: { tx: number; ty: number };
-  sealGate: { tx: number; ty: number }[];
-  welcomeStone: { tx: number; ty: number };
-  /** faux-elevation regions (ADR-0009) — omitted on pre-frontier maps */
-  elevation?: { regions: ElevationRegion[] };
-  /** Realm districts (ADR-0017 §2) — omitted on pre-Realm maps */
-  districts?: DistrictDef[];
-  /**
-   * Per-Warden arenas in the World (ADR-0017 §1), keyed by WardenDef id. Rung 0's
-   * Guardian keeps the top-level arena/guardianHome/guardianAltar/sealMonument
-   * fields; every further Warden's court lives here with the same anatomy.
-   */
-  wardenArenas?: Record<string, WardenArena>;
-  /** the Hushdark's pedestal-vaults (ADR-0017 rung 2) — omitted outside that Realm */
-  hushdarkVaults?: HushdarkVault[];
-  /** the memorial plinth where a master leaves a permanent named greeting shade */
-  hushdarkMemorial?: { tx: number; ty: number } | null;
-}
-
-/** one Hushdark vault: pedestals to cover with overlaid shades + a claim door */
-interface HushdarkVault {
-  id: string;
-  pedestals: { tx: number; ty: number }[];
-  door: { tx: number; ty: number };
-  /** the DEEP vault — sealed until the first (shallow) vault is opened that week */
-  deep?: boolean;
-}
-
-/** one Warden's authored court in the World: the Guardian-arena anatomy, per rung */
-interface WardenArena {
-  arena: { x: number; y: number; w: number; h: number };
-  home: { tx: number; ty: number };
-  altar: { tx: number; ty: number };
-  monument: { tx: number; ty: number };
-  sealGate: { tx: number; ty: number }[];
-}
-
-/**
- * A Realm district (ADR-0017 §2): presented as its own small map, implemented
- * as a far-edge rect on the one grid, sealed in void cliff and entered only
- * through its paired teleport gates. Plain persistent map space — builds,
- * nodes and fog work inside unchanged (deliberately NOT the Delve's instanced
- * overlay). `name` is the English display id, localized like a Zone name.
- */
-interface DistrictDef {
-  id: string;
-  name: string;
-  rect: { x: number; y: number; w: number; h: number };
-  /** the world-side arch and its district-side twin */
-  gate: { worldTx: number; worldTy: number; districtTx: number; districtTy: number };
-}
-
-/** a faux-elevation terrace (ADR-0009): plateau + cliff faces + ramp + a fog-lifting vista */
-interface ElevationRegion {
-  name: string;
-  /** terrace level (1 = first plateau, 2 = a plateau stacked on it, …); defaults to 1 */
-  level?: number;
-  bounds: { x: number; y: number; w: number; h: number };
-  plateau: [number, number][];
-  faces: [number, number][];
-  ramp: [number, number][];
-  vista: { tx: number; ty: number };
-  vistaChunkRadius: number;
-}
 
 interface FishingCast {
   nodeId: string;
@@ -922,9 +842,63 @@ export class GameScene extends Phaser.Scene {
   private dismantleArmed: { id: string; until: number } | null = null;
   /** whether the alt-fire mouse button (LMB) is currently held over the canvas (B1) */
   private lmbDown = false;
+  // ---- ADR-0018: the humble-Scene decomposition seam
+  /** the ONE shared-state object injected into every system (ADR-0018 §2) */
+  private ctx!: GameContext;
+  /**
+   * The ordered system list — update() dispatches through it in the documented
+   * §8 sequence. Filled one extraction at a time; empty is a no-op (scaffolding).
+   */
+  private systems: GameSystem[] = [];
 
   constructor() {
     super('GameScene');
+  }
+
+  /**
+   * THE single inventory mutate+emit path (ADR-0018; exposed as
+   * ctx.setInventory). Every former `this.inventory = X; bus.emit('inventory')`
+   * pair funnels through here so pack state and the HUD can never diverge.
+   */
+  private setInv(inv: Inventory): void {
+    this.setInv(inv);
+  }
+
+  /** build the shared GameContext once the player sprite exists (create()) */
+  private buildContext(): void {
+    const self = this;
+    this.ctx = {
+      scene: this,
+      backend: this.backend,
+      bus,
+      world: this.world,
+      me: this.me,
+      player: this.player,
+      get mode(): Mode {
+        return self.inDelve ? 'delve' : 'overworld';
+      },
+      held: {
+        get item(): ItemId | null {
+          return self.heldItem;
+        },
+        set item(v: ItemId | null) {
+          self.heldItem = v;
+        },
+        get lastDir(): Dir {
+          return self.lastDir;
+        },
+        set lastDir(v: Dir) {
+          self.lastDir = v;
+        },
+      },
+      get inventory(): Inventory {
+        return self.inventory;
+      },
+      setInventory: (inv: Inventory) => this.setInv(inv),
+      get journey(): JourneyState {
+        return self.journey;
+      },
+    };
   }
 
   init(data: { backend: Backend; me: OkJoin }): void {
@@ -1337,6 +1311,15 @@ export class GameScene extends Phaser.Scene {
       this.physics.add.collider(this.player, this.blockersGroup),
     ];
 
+    // ADR-0018: the shared context + the ordered system list. Systems register
+    // here as they are extracted; on scene shutdown every system detaches its
+    // bus listeners (destroy) so a world-switch restart can never double-subscribe.
+    this.buildContext();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      for (const s of this.systems) s.destroy();
+      this.systems = [];
+    });
+
     // v4: Loadout visuals — created before wireBus()/the first inventory emit so
     // the initial 'held' event can update them. Light now comes only from a held
     // Hand Torch (the automatic player glow is gone) — warm orange, bigger and
@@ -1578,8 +1561,7 @@ export class GameScene extends Phaser.Scene {
         grant: (items: Inventory) => {
           const inv = (this.backend as any).debugGrant?.(items) as Inventory | null;
           if (inv) {
-            this.inventory = inv;
-            bus.emit('inventory', inv);
+            this.setInv(inv);
           }
         },
         // ADR-0011 Deep playtest handles (dev only) — drive the chained Stages
@@ -1909,8 +1891,7 @@ export class GameScene extends Phaser.Scene {
         if (res.reason === 'POOL_FULL') bus.emit('toast', t.toast.villagePoolFull, 'bad');
         return;
       }
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       const h = this.village.hall;
       if (h) this.floatText((h.tx + 1) * TILE, h.ty * TILE - 8, `+${res.gained}`, '#ffca7a');
       bus.emit('toast', t.toast.villageContributed(res.gained), 'good');
@@ -2772,8 +2753,7 @@ export class GameScene extends Phaser.Scene {
     }
     void this.backend.hitGuardian(tool).then((res) => {
       if (!res.ok) return;
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       if (res.deflected) return;
       // float the DAMAGE DEALT (cosmetically scaled), NOT remaining HP — the HP
       // bar owns the pool. A crit pops bigger and gold (ADR-0006 §1).
@@ -2831,8 +2811,7 @@ export class GameScene extends Phaser.Scene {
       run: () => {
         void this.backend.summonGuardian().then((res) => {
           if (res.ok) {
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
+            this.setInv(res.inventory);
           } else if (res.reason === 'FIGHT_IN_PROGRESS') {
             bus.emit('toast', t.toast.fightAlreadyRaging, 'bad');
           } else if (res.reason === 'NO_TOTEM') {
@@ -2865,8 +2844,7 @@ export class GameScene extends Phaser.Scene {
         run: () => {
           void this.backend.contributeWardenAltar(id).then((res) => {
             if (res.ok) {
-              this.inventory = res.inventory;
-              bus.emit('inventory', this.inventory);
+              this.setInv(res.inventory);
               const text = Object.entries(res.taken)
                 .map(([item, n]) => `-${n} ${ITEMS[item as ItemId]?.name ?? item}`)
                 .join('  ');
@@ -2891,8 +2869,7 @@ export class GameScene extends Phaser.Scene {
       run: () => {
         void this.backend.summonWarden(id).then((res) => {
           if (res.ok) {
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
+            this.setInv(res.inventory);
           } else if (res.reason === 'FIGHT_IN_PROGRESS') {
             bus.emit('toast', t.toast.fightAlreadyRaging, 'bad');
           } else if (res.reason === 'NO_TOTEM') {
@@ -2914,8 +2891,7 @@ export class GameScene extends Phaser.Scene {
       run: () => {
         void this.backend.contributeSeal().then((res) => {
           if (res.ok) {
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
+            this.setInv(res.inventory);
             const text = Object.entries(res.taken)
               .map(([item, n]) => `-${n} ${item}`)
               .join('  ');
@@ -3052,8 +3028,7 @@ export class GameScene extends Phaser.Scene {
         this.floatText(x, y - 10, text, '#8ce9ff');
       }
       if (result.inventory) {
-        this.inventory = result.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(result.inventory);
       }
     });
   }
@@ -3080,8 +3055,7 @@ export class GameScene extends Phaser.Scene {
         if (hasFish) {
           void this.backend.cook().then((res) => {
             if (!res.ok) return;
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
+            this.setInv(res.inventory);
             bus.emit('toast', t.toast.cookFish, 'good');
             this.sfx('craft', 0.5);
           });
@@ -3089,8 +3063,7 @@ export class GameScene extends Phaser.Scene {
           // roast meat via the generic craft path (jw_craft — no new RPC)
           void this.backend.craft('cooked_meat').then((res) => {
             if (!res.ok) return;
-            this.inventory = res.inventory;
-            bus.emit('inventory', this.inventory);
+            this.setInv(res.inventory);
             bus.emit('toast', t.toast.cookMeat, 'good');
             this.sfx('craft', 0.5);
           });
@@ -3701,13 +3674,12 @@ export class GameScene extends Phaser.Scene {
       this.desiredEquip = null;
       const res = await this.backend.equip(want);
       this.equipped = res.equipped;
-      // equip MOVES the piece: adopt the mutated bag so the equipped piece leaves
-      // the inventory grid (and a bared one returns) live.
-      this.inventory = res.inventory;
       this.rebuildOwnAvatar();
-      // 'inventory' BEFORE 'equipped': a drained weapon must be back in the bag
-      // when the HUD reconciles on the equipped event, or its quick-slot flickers
-      bus.emit('inventory', this.inventory);
+      // equip MOVES the piece: adopt the mutated bag so the equipped piece leaves
+      // the inventory grid (and a bared one returns) live. 'inventory' BEFORE
+      // 'equipped': a drained weapon must be back in the bag when the HUD
+      // reconciles on the equipped event, or its quick-slot flickers
+      this.setInv(res.inventory);
       bus.emit('equipped', this.equipped);
       this.sfx('craft', 0.4);
     });
@@ -3772,8 +3744,7 @@ export class GameScene extends Phaser.Scene {
         bus.emit('toast', t.toast.tradeFailed, 'bad');
         return;
       }
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       bus.emit('toast', t.toast.traded(res.got.count, ITEMS[res.got.item]?.name ?? res.got.item), 'good');
       this.sfx('craft', 0.6);
       bus.emit('trade-close');
@@ -3820,8 +3791,7 @@ export class GameScene extends Phaser.Scene {
         bus.emit('toast', res.reason === 'FESTIVAL_ACTIVE' ? t.toast.festivalRunning : t.toast.wishFailed, 'bad');
         return;
       }
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       this.applyVillage(res.village); // emits the 🎉 toast on the start transition
       this.sfx('blip', 0.5);
       if (!res.festivalStarted) bus.emit('toast', t.toast.wished(count), 'good');
@@ -3882,8 +3852,7 @@ export class GameScene extends Phaser.Scene {
       }
       void this.backend.craft(recipeId).then((result) => {
         if (result.ok) {
-          this.inventory = result.inventory;
-          bus.emit('inventory', this.inventory);
+          this.setInv(result.inventory);
           bus.emit('toast', t.toast.crafted(ITEMS[result.crafted].name), 'good');
           this.sfx('craft', 0.5);
           if (result.crafted === 'axe' || result.crafted === 'ancient_axe') this.tickJourney('craft_axe');
@@ -3909,8 +3878,7 @@ export class GameScene extends Phaser.Scene {
     bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
       void this.backend.crateDeposit(crateId, item, count).then((res) => {
         if (!res.ok) return;
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         bus.emit('crate-open', crateId, res.contents);
       });
     });
@@ -3920,8 +3888,7 @@ export class GameScene extends Phaser.Scene {
           if (res.reason === 'NOTHING') bus.emit('toast', t.toast.crateGone, 'bad');
           return;
         }
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         bus.emit('crate-open', crateId, res.contents);
       });
     });
@@ -3936,8 +3903,7 @@ export class GameScene extends Phaser.Scene {
           if (res.reason === 'NOTHING') bus.emit('toast', t.toast.millFullOrNoWood, 'bad');
           return;
         }
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         this.noteSawmillState(sawmillId, res.state);
         bus.emit('sawmill-open', sawmillId, res.state);
         this.sfx('place', 0.5);
@@ -3950,8 +3916,7 @@ export class GameScene extends Phaser.Scene {
           if (res.reason === 'NOTHING') bus.emit('toast', t.toast.noPlankYet, 'bad');
           return;
         }
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         this.noteSawmillState(sawmillId, res.state);
         bus.emit('sawmill-open', sawmillId, res.state);
         bus.emit('toast', t.toast.collectPlanks, 'good');
@@ -3966,8 +3931,7 @@ export class GameScene extends Phaser.Scene {
           if (res.reason === 'NOTHING') bus.emit('toast', t.toast.refinerFullOrEmpty(ITEMS[o.cfg.inputItem].name), 'bad');
           return;
         }
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         bus.emit('refiner-open', o, res.state);
         this.sfx('place', 0.5);
       });
@@ -3979,8 +3943,7 @@ export class GameScene extends Phaser.Scene {
           if (res.reason === 'NOTHING') bus.emit('toast', t.toast.refinerNotReady, 'bad');
           return;
         }
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         bus.emit('refiner-open', o, res.state);
         bus.emit('toast', t.toast.refinerCollected(ITEMS[o.cfg.outputItem].name), 'good');
         this.sfx('harvest', 0.6);
@@ -3997,8 +3960,7 @@ export class GameScene extends Phaser.Scene {
             : this.backend.eatCookedFish();
       void eat.then((res) => {
         if (!res.ok) return;
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         this.buffUntil = Date.now() + res.buffMs;
         bus.emit('buff', this.buffUntil);
         bus.emit('toast', t.toast.warmHearty, 'good');
@@ -4008,8 +3970,7 @@ export class GameScene extends Phaser.Scene {
     bus.on('drop-item', (id: ItemId, count: number) => {
       void this.backend.dropItem(id, count).then((res) => {
         if (!res.ok) return;
-        this.inventory = res.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(res.inventory);
         bus.emit('toast', t.toast.dropped(ITEMS[id].name, count), 'info');
       });
     });
@@ -4463,8 +4424,7 @@ export class GameScene extends Phaser.Scene {
           } else {
             void this.backend.offerAltar().then((res) => {
               if (res.ok) {
-                this.inventory = res.inventory;
-                bus.emit('inventory', this.inventory);
+                this.setInv(res.inventory);
                 bus.emit('toast', t.toast.offeringAccepted, 'good');
                 this.sfx('craft', 0.6);
               } else if (res.reason === 'INSUFFICIENT') {
@@ -4485,8 +4445,7 @@ export class GameScene extends Phaser.Scene {
           run: () => {
             void this.backend.dig().then((res) => {
               if (res.ok) {
-                this.inventory = res.inventory;
-                bus.emit('inventory', this.inventory);
+                this.setInv(res.inventory);
                 const text = Object.entries(res.loot)
                   .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
                   .join('  ');
@@ -4721,8 +4680,7 @@ export class GameScene extends Phaser.Scene {
         if (result.gained.stone) this.tickJourney('harvest_stone');
       }
       if (result.inventory) {
-        this.inventory = result.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(result.inventory);
       }
     });
   }
@@ -4745,8 +4703,7 @@ export class GameScene extends Phaser.Scene {
   private openCrate(crateId: string): void {
     void this.backend.crateOpen(crateId).then((res) => {
       if (!res.ok) return;
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       bus.emit('crate-open', crateId, res.contents);
       this.sfx('blip', 0.4);
     });
@@ -4755,8 +4712,7 @@ export class GameScene extends Phaser.Scene {
   private openSawmill(sawmillId: string): void {
     void this.backend.sawmillOpen(sawmillId).then((res) => {
       if (!res.ok) return;
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       this.noteSawmillState(sawmillId, res.state);
       bus.emit('sawmill-open', sawmillId, res.state);
       this.sfx('blip', 0.4);
@@ -4819,8 +4775,7 @@ export class GameScene extends Phaser.Scene {
   private openRefiner(refinerId: string, cfg: RefinerConfig, name: string): void {
     void this.backend.refinerOpen(refinerId, cfg).then((res) => {
       if (!res.ok) return;
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       bus.emit('refiner-open', { id: refinerId, cfg, name }, res.state);
       this.sfx('blip', 0.4);
     });
@@ -5133,8 +5088,7 @@ export class GameScene extends Phaser.Scene {
     this.dismantleArmed = null;
     void this.backend.dismantleStructure(s.id).then((res) => {
       if (!res.ok) return;
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       this.sfx('place', 0.5);
       const gained = Object.entries(res.refund)
         .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
@@ -5248,8 +5202,7 @@ export class GameScene extends Phaser.Scene {
     const foundingHall = item === 'village_hall' && !this.village.hall; // first founding for the celebratory toast
     void this.backend.placeStructure(item, tx, ty, text).then((result) => {
       if (result.ok) {
-        this.inventory = result.inventory;
-        bus.emit('inventory', this.inventory);
+        this.setInv(result.inventory);
         bus.emit('toast', t.toast.placed(ITEMS[item].name), 'good');
         this.sfx('place', 0.6);
         this.useHint('place');
@@ -6342,8 +6295,7 @@ export class GameScene extends Phaser.Scene {
       else delete this.lootPending[k as ItemId];
     }
     void this.backend.claimDelveLoot(take).then((res) => {
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       this.sfx('craft', 0.8);
       bus.emit('loot-changed', { ...this.lootPending });
     });
@@ -6600,8 +6552,7 @@ export class GameScene extends Phaser.Scene {
         bus.emit('toast', t.toast.echoNeedsCharm, 'bad');
         return;
       }
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       this.echoGhosts = [res.ghost, ...this.echoGhosts.filter((g) => g.ghostId !== res.ghost.ghostId)];
       bus.emit('toast', t.toast.echoCaptured, 'good');
     });
@@ -6733,8 +6684,7 @@ export class GameScene extends Phaser.Scene {
     const res = await this.backend.claimReverb(vaultWeek(Date.now())).catch(() => ({ ok: false as const }));
     if (!res.ok) return;
     if ('inventory' in res && res.inventory) {
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
     }
     if ('weekly' in res && res.weekly) bus.emit('toast', t.toast.reverbWeekly, 'good');
     if ('firstEver' in res && res.firstEver) {
@@ -7840,16 +7790,45 @@ export class GameScene extends Phaser.Scene {
     const parts = Object.entries(loot).filter(([, n]) => (n as number) > 0);
     if (!parts.length) return;
     void this.backend.claimDelveLoot(loot as Inventory).then((res) => {
-      this.inventory = res.inventory;
-      bus.emit('inventory', this.inventory);
+      this.setInv(res.inventory);
       const text = parts.map(([it, n]) => `+${n} ${ITEMS[it as ItemId]?.name ?? it}`).join('  ');
       bus.emit('toast', kind === 'foraged' ? t.toast.foraged(text) : t.toast.hunted(text), 'good');
     });
   }
 
+  /**
+   * The per-frame ORDER (ADR-0018 / plan §8) — preserved exactly from the
+   * pre-refactor file; each numbered step migrates into a system without
+   * moving in the sequence:
+   *   1. pendingDeepEntry (?deep dev drop-in)
+   *   2. [delve mode: updateDelve, then EARLY RETURN — no overworld step runs]
+   *   3. sawmill blades/puffs
+   *   4. atmosphere: night/dusk overlays, veils, echo-ambience (Hushdark), verdant
+   *   5. torch/held/shadow follow + elevation depth
+   *   6. waterfall audio proximity lerp
+   *   7. remote-player interpolation
+   *   8. wildlife (host sim + render + own-harm)
+   *   9. fight block (waves, fury, melee ring, guardian pose, eye)
+   *  10. stun marker upkeep
+   *  11. fishing bite/timeout
+   *  12. buff expiry
+   *  13. [chat focus / stunned: halt movement + return]
+   *  14. movement + animation + depth
+   *  15. throttled sendPosition
+   *  16. placement ghost
+   *  17. X dismantle
+   *  18. ESC/ENTER place-mode keys
+   *  19. E/LMB action dispatch (resolveEAction + cadence gates)
+   * Systems dispatch through `this.systems` in exactly this order as they are
+   * extracted; until then the inline blocks below remain authoritative.
+   */
   update(time: number, delta: number): void {
     if (!this.player) return;
     const dt = delta / 1000;
+    // ADR-0018 dispatch: each extracted system's update() is called EXPLICITLY
+    // at its numbered position in the sequence above (never a flat loop — the
+    // delve early-return and the chat/stun halt live INSIDE the sequence).
+    // `this.systems` carries the lifecycle (create/destroy) in the same order.
 
     // ?deep dev flag: drop straight into the Deep on the first frame (once)
     if (this.pendingDeepEntry) {
