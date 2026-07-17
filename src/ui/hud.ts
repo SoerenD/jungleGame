@@ -2129,10 +2129,15 @@ function renderLoadout(): void {
       icon.draggable = false;
       slot.appendChild(icon);
       slot.title = t.inv.slotHold(ITEMS[id].name, i + 1);
+      // a quick-slotted weapon is hidden from the pack grid, so this is the
+      // only place left to see its Codex Card — same hover popup the pack gives
+      slot.addEventListener('mouseenter', () => showItemTooltip(id, slot));
+      slot.addEventListener('mouseleave', hideItemTooltip);
       // slots drag like items: onto another slot to move (the dedup there
       // clears this one), onto the pack grid to unslot back into the bag view
       slot.draggable = true;
       slot.addEventListener('dragstart', (e) => {
+        hideItemTooltip(); // don't leave the popup floating over a drag
         e.dataTransfer!.setData('application/x-jw-unslot', String(i));
         e.dataTransfer!.setData(isWeapon(id) ? 'application/x-jw-weapon' : 'application/x-jw-tool', id);
         e.dataTransfer!.effectAllowed = 'move';

@@ -399,6 +399,17 @@ export class FightSystem implements GameSystem {
     this.activeBoss().broken = v;
   }
 
+  /** is the local Player standing inside the active fight's arena rect? (the
+   *  bow's boss-hit gate, ProjectileSystem — sniping from beyond the arena wall
+   *  would collect participation loot for zero exposure to the slam waves) */
+  playerInArena(): boolean {
+    const a = this.activeBoss().arena;
+    const player = this.ctx.player;
+    const ax = Math.floor(player.x / TILE) - a.x;
+    const ay = Math.floor((player.y - 4) / TILE) - a.y;
+    return ax >= 0 && ay >= 0 && ax < a.w && ay < a.h;
+  }
+
   /** the Reverberant is summon-only: show/hide its pre-built sprite + blockers */
   private setReverbVisible(v: boolean): void {
     const rig = this.rigs.reverb;

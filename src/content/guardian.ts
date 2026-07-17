@@ -100,11 +100,15 @@ export const BARE_HANDS: WeaponCombat = { min: 1, max: 2, critChance: 0, critMul
  * Intended relationships (hold these when tuning integers): Bow ≈ 60% of melee
  * DPS (a safety tax for hitting from range); axe ≈ pickaxe DPS but opposite feel
  * (axe wide/swingy/high-crit, pickaxe fast/steady/narrow); ancients a ~×1.6 band
- * scale-up with the base tool's crit. The crafted ladder is a STRICT climb —
- * acquisition order = power order, so every forge is worth it: ancients ~9.4 <
- * Mirefang ~9.5 < Sword ~10.6 < Forgebrand ~11.3 net DPS. The harvest keys that
+ * scale-up with the base tool's crit. The CRAFTED ladder (built at a station,
+ * no boss drop required) is a strict climb — acquisition order = power order:
+ * ancients ~9.4 < Sword ~10.6 < Forgebrand ~11.3 net DPS. The harvest keys that
  * open the Delve must never outclass the pure-combat weapons forged from its
- * loot (only the Fabled tier sits above, ~12.7+).
+ * loot. Warden-ladder DROPS sit on their own axis, not the crafted one — a
+ * guaranteed reward for clearing a Warden must be at least as good as anything
+ * on the crafted ladder: Mirefang ~11.1 ties Forgebrand's ~11.3, the current
+ * top of the crafted tier. Only the Fabled set (a rare ~1% roll, not a
+ * guaranteed drop) sits clearly above both axes, ~12.7+.
  */
 export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   bow: { min: 2, max: 2, critChance: 0.06, critMult: 1.5, attackMs: 500 },
@@ -117,11 +121,14 @@ export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   // + cadence, and unlike every other weapon it strikes Husks, the Deep Guardian,
   // AND the Guardian. Crafted from Delve loot; plugs straight into this table.
   sword: { min: 3, max: 6, critChance: 0.14, critMult: 1.9, attackMs: 480 },
-  // The Mirefang (ADR-0017 rung 1): the Mire Warden's participation weapon drop —
-  // a pure-combat blade on the Sword family, tuned to the same ~9.4 net DPS crafted
-  // tier (a keen mid-band with a touch more crit than the Sword). Its realm-synergy
-  // passive (ignoring the tide's wade-slow) lives in the scene, not this table.
-  mirefang: { min: 3, max: 5, critChance: 0.15, critMult: 1.9, attackMs: 480 },
+  // The Mirefang (ADR-0017 rung 1): the Mire Warden's guaranteed weapon drop —
+  // a pure-combat blade on the Sword family (same crit/mult, a touch faster and
+  // heavier-banded), tuned to tie the Forgebrand's ~11.3 net DPS: clearing a
+  // Warden is later, harder content than the Delve, so its guaranteed reward
+  // must be at least as good as the Delve's own top-of-ladder prize, never a
+  // downgrade. Its realm-synergy passive (ignoring the tide's wade-slow) lives
+  // in the scene, not this table.
+  mirefang: { min: 3, max: 6, critChance: 0.15, critMult: 1.9, attackMs: 460 },
   // The Forgebrand (ADR-0011): the Deep's PURE-COMBAT reward — a molten
   // two-hander and the TOP of the crafted ladder (~11.3 net DPS, above the
   // Sword's ~10.6): a SLOWER cadence (640 vs 480 ms) traded for the heaviest

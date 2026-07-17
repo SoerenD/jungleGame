@@ -150,16 +150,14 @@ export class ProjectileSystem implements GameSystem {
         });
       }
     } else {
-      if (this.fight.fight) {
+      if (this.fight.fight && this.fight.playerInArena()) {
         const spr = this.fight.activeBoss().sprite;
         // the colossus body: a generous 3x3-tile circle at its lower mass. The
-        // BOSS hit keeps the authored 8-tile bow reach even though the arrow
-        // itself now flies off-screen — the fight's whole safety design is
-        // standing inside the arena (ADR-0002); a screen-length snipe from
-        // beyond the wall would collapse "safe but weaker" into "perfectly
-        // safe" and hand out participation loot for zero exposure.
-        const bossMax = Math.min(maxPx, TILE * 8);
-        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, bossMax, spr.x, spr.y - TILE * 1.5, TILE * 1.8);
+        // reach is the same off-screen range as any other shot — the exposure
+        // gate is standing inside the arena (ADR-0002), checked above; a snipe
+        // from beyond the wall never reaches this branch at all, so "safe but
+        // weaker" can't collapse into "perfectly safe" participation loot.
+        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, maxPx, spr.x, spr.y - TILE * 1.5, TILE * 1.8);
         consider(t0, () => this.fight.fireGuardianHit(tool, spr.x, spr.y - TILE * 3));
       }
       for (const m of this.wildlife.wildMobs.values()) {
