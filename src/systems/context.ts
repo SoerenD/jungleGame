@@ -26,6 +26,8 @@ export interface GameContext {
   mode: Mode;
   /** in-hand item + facing: read by many systems, written by PlayerSystem/InputSystem */
   held: { item: ItemId | null; lastDir: Dir };
+  /** play a one-shot sound at the live per-channel mix (owned by AtmosphereSystem) */
+  sfx(key: string, volume: number): void;
   /** the live pack — read-only view; mutate ONLY through setInventory() */
   readonly inventory: Inventory;
   /** THE single inventory mutate+emit path (replaces the ~35 assign+emit pairs) */

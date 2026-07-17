@@ -183,6 +183,7 @@ import { RECIPES } from '../content/recipes';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import type { GameContext } from '../systems/context';
+import { FogSystem } from '../systems/FogSystem';
 import {
   addBlockerBody,
   addShadow,
@@ -456,9 +457,7 @@ export class GameScene extends Phaser.Scene {
    */
   private nodePips = new Map<string, { gfx: Phaser.GameObjects.Graphics; tween: Phaser.Tweens.Tween | null }>();
   /** reusable tooltip showing the name of the Resource Node under the cursor */
-  private nodeHoverLabel: Phaser.GameObjects.Text | null = null;
-  /** player-set multiplier on WORLD_LABEL_BASE_SCALE (Settings ▸ Name label size) */
-  private worldLabelScale = loadWorldLabelScale();
+  nodeHoverLabel: Phaser.GameObjects.Text | null = null;
   private structuresByTile = new Map<string, Structure>();
   private structureIds = new Set<string>();
   /** per-structure display + collision objects, kept so a dismantle can tear them down */
@@ -468,7 +467,7 @@ export class GameScene extends Phaser.Scene {
   /** per-Sawmill "milling until" timestamp — derived from its last observed state */
   private sawmillMillingUntil = new Map<string, number>();
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
-  private remotes = new Map<string, RemoteView>();
+  remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
   /** the worn gear (ADR-0017 §4) — armor bakes into my sheet; the legacy weapon
    *  slots only ever DRAIN now (the HUD migration returns them to the bag) */
@@ -484,13 +483,14 @@ export class GameScene extends Phaser.Scene {
   private ghostCells: Phaser.GameObjects.Graphics | null = null;
   private lastPosSent = 0;
   private lastSwingAt = 0;
+  // ---- ADR-0018 systems (referenced by other systems + transitional delegates)
+  private fogSystem!: FogSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
    * the position stream (PlayerPos.swings) so peers can echo my swings.
    */
   private swingCount = 0;
-  private currentZone = '';
   private muted = false;
   /** per-channel 0..1 volume mix, editable from the settings menu */
   private volumes: Record<AudioChannel, number> = { master: 1, ambience: 1, music: 1, sfx: 1 };
@@ -508,17 +508,13 @@ export class GameScene extends Phaser.Scene {
   private digMarker: Phaser.GameObjects.Text | null = null;
   // ---- v2: the Seal
   private seal: SealState | null = null;
-  private monumentPos = { x: 0, y: 0 };
+  monumentPos = { x: 0, y: 0 };
   private sealBarrierParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
-  private nearMonument = false;
   // A3 (ADR-0010): the communal Village. `village` mirrors the backend record;
   // the aura/banner render its automatic grandeur around the founded Hall.
-  private village: VillageRecord = emptyVillage();
+  village: VillageRecord = emptyVillage();
   private villageAura?: Phaser.GameObjects.Graphics;
   private villageBanner?: Phaser.GameObjects.Text;
-  private nearHall = false;
-  /** standing beside a Forge (ADR-none): gates crafting the heavy forged gear */
-  private nearForge = false;
   // ---- v2: the Guardian
   private fight: FightState | null = null;
   /** per-Warden altar/gate progress (ADR-0017) — mirrors the backend's view */
@@ -567,10 +563,9 @@ export class GameScene extends Phaser.Scene {
   private mireEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
   private mireArenaRect: { x: number; y: number; w: number; h: number } | null = null;
   private mireSealGate: { tx: number; ty: number }[] = [];
-  private mireAltarPos = { x: 0, y: 0 };
+  mireAltarPos = { x: 0, y: 0 };
   private mireMonumentPos = { x: 0, y: 0 };
   private mireBroken = false;
-  private nearMireAltar = false;
   // ---- ADR-0017 rung 2: the Echo Warden's parallel arena in The Cavern Mouth
   // (same second-dormant-sprite pattern as the Mire, MP-correct).
   private echoSprite?: Phaser.GameObjects.Sprite;
@@ -582,10 +577,9 @@ export class GameScene extends Phaser.Scene {
   private echoEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
   private echoArenaRect: { x: number; y: number; w: number; h: number } | null = null;
   private echoSealGate: { tx: number; ty: number }[] = [];
-  private echoAltarPos = { x: 0, y: 0 };
+  echoAltarPos = { x: 0, y: 0 };
   private echoMonumentPos = { x: 0, y: 0 };
   private echoBroken = false;
-  private nearEchoAltar = false;
   // ---- ADR-0017 rung 3: the Verdant Warden's parallel arena in the Green Terraces
   // (same dormant-sprite pattern as the Mire/Echo, MP-correct).
   private verdantSprite?: Phaser.GameObjects.Sprite;
@@ -597,10 +591,9 @@ export class GameScene extends Phaser.Scene {
   private verdantEntranceSpot: ArenaSpot = { ax: 0, ay: 0 };
   private verdantArenaRect: { x: number; y: number; w: number; h: number } | null = null;
   private verdantSealGate: { tx: number; ty: number }[] = [];
-  private verdantAltarPos = { x: 0, y: 0 };
+  verdantAltarPos = { x: 0, y: 0 };
   private verdantMonumentPos = { x: 0, y: 0 };
   private verdantBroken = false;
-  private nearVerdantAltar = false;
   // ---- ADR-0017 rung 2: the Reverberant — a puzzle-SUMMONED boss (NOT dormant-
   // visible). Its sprite is pre-built hidden and revealed on summon; it rises in
   // the pedestal court (wardenArenas.reverb) when the 3-pedestal puzzle is solved.
@@ -650,7 +643,7 @@ export class GameScene extends Phaser.Scene {
   private rubbleHits = 0;
   /** captured World colliders, disabled while inside the Delve */
   private worldColliders: Phaser.Physics.Arcade.Collider[] = [];
-  private inDelve = false;
+  inDelve = false;
   private delveRunId: string | null = null;
   private isDelveHost = false;
   /** roster locked at entry (like the Ward) — no late join */
@@ -755,21 +748,14 @@ export class GameScene extends Phaser.Scene {
   private verdantAmbience = 0;
   private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
   private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private leavesActive = false;
   private lastFireflyAt = 0;
   private lastLeafAt = 0;
-  // ---- fog of war (per-Player, persisted through the Backend)
-  private fogRT!: Phaser.GameObjects.RenderTexture;
-  private explored = new Set<number>();
-  private readonly fogChunksW = Math.ceil(MAP_W / FOG_CHUNK);
-  private readonly fogChunksH = Math.ceil(MAP_H / FOG_CHUNK);
   // ---- faux-elevation (ADR-0009): each raised tile → its terrace level (1, 2, …)
-  private highGround = new Map<string, number>();
-  private vistaRegions: ElevationRegion[] = [];
-  private vistaLifted = new Set<string>();
+  highGround = new Map<string, number>();
+  vistaRegions: ElevationRegion[] = [];
   // ---- Realm districts (ADR-0017 §2): the "separate map" presentation state
   /** the district the Player stands in (camera clamp + minimap crop + dot filter); null = the World */
-  private activeDistrict: DistrictDef | null = null;
+  activeDistrict: DistrictDef | null = null;
   /** both arches of every Realm gate, for the E-interaction scan */
   private realmGates: {
     d: DistrictDef;
@@ -851,6 +837,7 @@ export class GameScene extends Phaser.Scene {
         return self.inventory;
       },
       setInventory: (inv: Inventory) => this.setInv(inv),
+      sfx: (key: string, volume: number) => this.sfx(key, volume),
       get journey(): JourneyState {
         return self.journey;
       },
@@ -1415,8 +1402,8 @@ export class GameScene extends Phaser.Scene {
     bus.emit('equipped', this.equipped);
     bus.emit('inventory', this.inventory);
 
-    // zone tracking + lazy regrowth visuals — both timestamp-derived, no game tick
-    this.time.addEvent({ delay: 300, loop: true, callback: () => this.checkZone() });
+    // lazy regrowth visuals — timestamp-derived, no game tick (the zone tick
+    // now lives in FogSystem.create)
     this.time.addEvent({ delay: 600, loop: true, callback: () => { this.checkRegrowthVisuals(); this.refreshWildgrainStages(); } });
 
     const startAmbient = () => {
@@ -1489,7 +1476,9 @@ export class GameScene extends Phaser.Scene {
 
     this.buildElevation();
     this.buildWaterfall();
-    this.initFog();
+    this.fogSystem = new FogSystem(this.ctx, this);
+    this.systems.push(this.fogSystem);
+    this.fogSystem.create();
     this.wireDragPlace();
     this.buildDelveEntrance();
     this.buildRealmGates();
@@ -1506,7 +1495,7 @@ export class GameScene extends Phaser.Scene {
         scene: this,
         state: () => ({
           player: { x: this.player.x, y: this.player.y, tx: Math.floor(this.player.x / TILE), ty: Math.floor(this.player.y / TILE) },
-          zone: this.currentZone,
+          zone: this.fogSystem.currentZone,
           inventory: { ...this.inventory },
           remotes: [...this.remotes.keys()],
           muted: this.muted,
@@ -2866,7 +2855,7 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------ v3: the Journey
 
   /** tick one Journey objective (idempotent; optimistic local + backend persist) */
-  private tickJourney(step: JourneyStepId): void {
+  tickJourney(step: JourneyStepId): void {
     if (this.journey.steps[step]) return;
     this.journey.steps[step] = true;
     bus.emit('journey', this.journey);
@@ -2892,7 +2881,7 @@ export class GameScene extends Phaser.Scene {
    * the first harvestable Resource Nodes, "E — read" at the Welcome Stone and
    * tablets). Runs on the coarse checkZone cadence, not every frame.
    */
-  private updateHints(): void {
+  updateHints(): void {
     if (!this.hintText) return;
     const px = this.player.x;
     const py = this.player.y - 4;
@@ -3091,7 +3080,7 @@ export class GameScene extends Phaser.Scene {
    * through the wall (the "I can see the hidden Hushdark" clipping report).
    * The inset below excludes the ring, matching the carved interior exactly.
    */
-  private districtOf(tx: number, ty: number): DistrictDef | null {
+  districtOf(tx: number, ty: number): DistrictDef | null {
     for (const d of this.world.districts ?? []) {
       const r = d.rect;
       if (tx > r.x && tx < r.x + r.w - 1 && ty > r.y && ty < r.y + r.h - 1) return d;
@@ -3108,7 +3097,7 @@ export class GameScene extends Phaser.Scene {
    * inside a district, dev teleports — re-clamps without touching a call site.
    * (The Delve owns the camera while inside; checkZone pauses then.)
    */
-  private applyCameraRegion(force = false): void {
+  applyCameraRegion(force = false): void {
     const d = this.districtOf(Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE));
     if (!force && d === this.activeDistrict) return;
     this.activeDistrict = d;
@@ -3280,73 +3269,6 @@ export class GameScene extends Phaser.Scene {
     this.checkZone();
   }
 
-  // ------------------------------------------------------------ fog of war
-
-  /**
-   * The fog overlay: one RenderTexture pixel per tile, scaled up to cover
-   * the World, sitting above every world sprite. Explored chunks are erased
-   * with a feathered brush so the frontier fades instead of snapping.
-   */
-  private initFog(): void {
-    this.fogRT = this.add.renderTexture(0, 0, MAP_W, MAP_H);
-    this.fogRT.setOrigin(0, 0);
-    this.fogRT.setScale(TILE);
-    this.fogRT.setDepth(899_990);
-    this.fogRT.fill(0x06120a, 0.96);
-    this.fogRT.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
-    // Explored-chunk indices encode the fog stride (fogChunksW = ceil(MAP_W/4)).
-    // Map growth re-strides them (200→300→384): an index saved under the old
-    // row-width decodes to a shifted chunk under the new one — the "venetian-
-    // blind" stripes on relog. FIX: remap each stored index from its SAVE stride
-    // (persisted as exploredStride; a legacy save has none → assume the last
-    // pre-Realm stride) to the CURRENT stride. Pinned growth keeps every chunk's
-    // (cx,cy), so the remap is lossless — the reveal lands exactly where it was.
-    const savedStride = this.me.exploredStride ?? LEGACY_FOG_STRIDE;
-    for (const c of this.me.explored) {
-      if (c < 0) continue;
-      const cx = c % savedStride;
-      const cy = Math.floor(c / savedStride);
-      if (cx >= this.fogChunksW || cy >= this.fogChunksH) continue; // per-axis guard
-      this.explored.add(cy * this.fogChunksW + cx); // re-encode at the current stride
-    }
-    for (const c of this.explored) this.eraseFogChunk(c);
-    bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
-    this.updateFog();
-  }
-
-  private eraseFogChunk(idx: number): void {
-    const cx = idx % this.fogChunksW;
-    const cy = Math.floor(idx / this.fogChunksW);
-    // the 24-tile brush centered on the chunk; overlapping erases keep the
-    // interior fully clear while the frontier stays feathered
-    this.fogRT.erase('fog-brush', (cx + 0.5) * FOG_CHUNK - 12, (cy + 0.5) * FOG_CHUNK - 12);
-  }
-
-  /** reveal chunks around the Player; new ones persist through the Backend */
-  private updateFog(): void {
-    const pcx = Math.floor(this.player.x / TILE / FOG_CHUNK);
-    const pcy = Math.floor(this.player.y / TILE / FOG_CHUNK);
-    const r = FOG_REVEAL_RADIUS;
-    const fresh: number[] = [];
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (dx * dx + dy * dy > r * r + 1) continue;
-        const cx = pcx + dx;
-        const cy = pcy + dy;
-        if (cx < 0 || cy < 0 || cx >= this.fogChunksW || cy >= this.fogChunksH) continue;
-        const idx = cy * this.fogChunksW + cx;
-        if (this.explored.has(idx)) continue;
-        this.explored.add(idx);
-        this.eraseFogChunk(idx);
-        fresh.push(idx);
-      }
-    }
-    if (fresh.length) {
-      void this.backend.markExplored(fresh, this.fogChunksW);
-      bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
-    }
-  }
-
   // ------------------------------------------------------------ faux-elevation (ADR-0009)
 
   /**
@@ -3486,46 +3408,6 @@ export class GameScene extends Phaser.Scene {
     return (this.highGround.get(`${tx},${ty}`) ?? 0) * ELEV_DEPTH_BONUS;
   }
 
-  /** reaching a plateau top lifts fog-of-war around its vista, once (ADR-0009) */
-  private checkVista(): void {
-    if (this.vistaRegions.length === 0) return;
-    const ptx = Math.floor(this.player.x / TILE);
-    const pty = Math.floor((this.player.y - 4) / TILE);
-    const here = this.highGround.get(`${ptx},${pty}`) ?? 0;
-    for (const r of this.vistaRegions) {
-      if (this.vistaLifted.has(r.name)) continue;
-      if (here < (r.level ?? 1)) continue; // must be up on THIS terrace (or higher)
-      this.vistaLifted.add(r.name);
-      this.liftVistaFog(r);
-      bus.emit('toast', t.toast.vistaRevealed(zoneName(r.name)), 'good');
-      this.sfx('blip', 0.5);
-    }
-  }
-
-  private liftVistaFog(r: ElevationRegion): void {
-    const cx = Math.floor(r.vista.tx / FOG_CHUNK);
-    const cy = Math.floor(r.vista.ty / FOG_CHUNK);
-    const rad = r.vistaChunkRadius;
-    const fresh: number[] = [];
-    for (let dy = -rad; dy <= rad; dy++) {
-      for (let dx = -rad; dx <= rad; dx++) {
-        if (dx * dx + dy * dy > rad * rad + 1) continue;
-        const ccx = cx + dx;
-        const ccy = cy + dy;
-        if (ccx < 0 || ccy < 0 || ccx >= this.fogChunksW || ccy >= this.fogChunksH) continue;
-        const idx = ccy * this.fogChunksW + ccx;
-        if (this.explored.has(idx)) continue;
-        this.explored.add(idx);
-        this.eraseFogChunk(idx);
-        fresh.push(idx);
-      }
-    }
-    if (fresh.length) {
-      void this.backend.markExplored(fresh, this.fogChunksW);
-      bus.emit('fog', this.explored, this.fogChunksW, this.fogChunksH);
-    }
-  }
-
   /** 0 = noon, 1 = midnight — derived from the real clock, no tick state */
   private nightness(): number {
     if (FORCE_NIGHT) return 1;
@@ -3533,23 +3415,14 @@ export class GameScene extends Phaser.Scene {
     return 1 - (0.5 + 0.5 * Math.cos(phase * Math.PI * 2));
   }
 
-  /**
-   * On-screen scale for an in-world name tag. World-space text is magnified by
-   * the camera zoom, so a fixed scale shrinks to nothing when zoomed out (2×)
-   * and balloons when zoomed in (5×). Counter-scaling by `ZOOM / cam.zoom` keeps
-   * every tag the SAME readable size on screen at every zoom level — referenced
-   * to the default ZOOM so it looks unchanged at the starting zoom. × the
-   * player's Name-label-size setting.
-   */
+  /** in-world name-tag scale — FogSystem.labelScale (ADR-0018) */
   private labelScale(): number {
-    return (WORLD_LABEL_BASE_SCALE * this.worldLabelScale * ZOOM) / this.cameras.main.zoom;
+    return this.fogSystem.labelScale();
   }
 
   /** re-apply `labelScale()` to every live name tag (after a zoom or setting change) */
   private applyWorldLabelScale(): void {
-    const s = this.labelScale();
-    this.nodeHoverLabel?.setScale(s);
-    for (const r of this.remotes.values()) r.label.setScale(s);
+    this.fogSystem.applyWorldLabelScale();
   }
 
   /**
@@ -3769,11 +3642,6 @@ export class GameScene extends Phaser.Scene {
       // broadcast promptly so every other Player's in-hand item updates now
       this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined, this.swingCount);
     });
-    // Settings ▸ Name label size — re-scale every live in-world name tag now
-    bus.on('world-label-scale', (mult: number) => {
-      this.worldLabelScale = mult;
-      this.applyWorldLabelScale();
-    });
     bus.on('send-chat', (text: string) => {
       void this.backend.sendChat(text);
     });
@@ -3802,7 +3670,7 @@ export class GameScene extends Phaser.Scene {
       // backstop the Forge gate (the HUD already hides these cards away from a
       // Forge): the heavy forged gear can only be made beside a Forge Structure
       const recipe = RECIPES.find((r) => r.id === recipeId);
-      if (recipe?.requiresForge && !this.nearForge) {
+      if (recipe?.requiresForge && !this.fogSystem.nearForge) {
         bus.emit('toast', t.toast.forgeRequired, 'bad');
         return;
       }
@@ -4634,7 +4502,7 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------ structures
 
   /** the first structure of one of `types` on the 3x3 of tiles around the Player */
-  private nearbyStructure(types: StructureId[]): Structure | null {
+  nearbyStructure(types: StructureId[]): Structure | null {
     const ptx = Math.floor(this.player.x / TILE);
     const pty = Math.floor((this.player.y - 4) / TILE);
     for (let dy = -1; dy <= 1; dy++) {
@@ -5402,88 +5270,9 @@ export class GameScene extends Phaser.Scene {
     floatText(this, x, y, text, color, sizePx);
   }
 
+  /** the movement-cadence zone/fog/panels hub — FogSystem.checkZone (ADR-0018) */
   private checkZone(): void {
-    if (this.inDelve) return; // the Delve owns the zone banner while you're inside
-    // ADR-0017: positional region derivation — camera clamp per district/World
-    this.applyCameraRegion();
-    // the minimap 'pos' stream: dots filter BOTH ways by district (a Player in
-    // the World never sees Realm dots and vice versa; same-district Players see
-    // each other), and the active district rect crops the minimap's view
-    const here = this.activeDistrict;
-    bus.emit('pos', {
-      x: this.player.x,
-      y: this.player.y,
-      others: [...this.remotes.values()]
-        .filter((r) => this.districtOf(Math.floor(r.sprite.x / TILE), Math.floor(r.sprite.y / TILE)) === here)
-        .map((r) => ({ x: r.sprite.x, y: r.sprite.y })),
-      view: here ? here.rect : undefined,
-    });
-    const tx = this.player.x / TILE;
-    const ty = this.player.y / TILE;
-    let zone = 'Deep Jungle';
-    for (const z of this.world.zones) {
-      if (tx >= z.x && tx < z.x + z.w && ty >= z.y && ty < z.y + z.h) {
-        zone = z.name;
-        break;
-      }
-    }
-    if (zone !== this.currentZone) {
-      this.currentZone = zone;
-      bus.emit('zone', zone);
-    }
-    this.leavesActive = zone === 'Dense Grove' || zone === 'Hidden Grove' || zone === 'Deep Jungle';
-    // the Seal monument shows its progress on approach
-    const nearMon =
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.monumentPos.x, this.monumentPos.y) < TILE * 6;
-    if (nearMon !== this.nearMonument) {
-      this.nearMonument = nearMon;
-      bus.emit('seal-near', nearMon);
-      if (nearMon) this.tickJourney('visit_seal');
-    }
-    // ADR-0017 rung 1: near the Mire Warden's altar its Offering-bars panel shows
-    // (the real authored altar on the Mangrove Coast — no dev flag)
-    const nearWarden =
-      !!this.world.wardenArenas?.mire &&
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.mireAltarPos.x, this.mireAltarPos.y) < TILE * 6;
-    if (nearWarden !== this.nearMireAltar) {
-      this.nearMireAltar = nearWarden;
-      bus.emit('warden-altar-near', nearWarden ? 'mire' : null);
-    }
-    // ADR-0017 rung 2: the Echo Warden's altar Offering-bars panel in The Cavern Mouth
-    const nearEcho =
-      !!this.world.wardenArenas?.echo &&
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.echoAltarPos.x, this.echoAltarPos.y) < TILE * 6;
-    if (nearEcho !== this.nearEchoAltar) {
-      this.nearEchoAltar = nearEcho;
-      bus.emit('warden-altar-near', nearEcho ? 'echo' : null);
-    }
-    // ADR-0017 rung 3: the Verdant Warden's altar Offering-bars panel in the Green Terraces
-    const nearVerdant =
-      !!this.world.wardenArenas?.verdant &&
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.verdantAltarPos.x, this.verdantAltarPos.y) < TILE * 6;
-    if (nearVerdant !== this.nearVerdantAltar) {
-      this.nearVerdantAltar = nearVerdant;
-      bus.emit('warden-altar-near', nearVerdant ? 'verdant' : null);
-    }
-    // the Village Hall shows the tier/pool panel on approach (ADR-0010)
-    const hall = this.village.hall;
-    const nearHall =
-      !!hall &&
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, (hall.tx + 1) * TILE, (hall.ty + 1) * TILE) < TILE * 7;
-    if (nearHall !== this.nearHall) {
-      this.nearHall = nearHall;
-      bus.emit('village-near', nearHall);
-    }
-    // beside a Forge, the heavy forged Tools/weapons become craftable (the craft
-    // menu re-renders on this flag); a tight 3×3 like cooking at a campfire
-    const nearForge = !!this.nearbyStructure(['forge']);
-    if (nearForge !== this.nearForge) {
-      this.nearForge = nearForge;
-      bus.emit('forge-near', nearForge);
-    }
-    this.updateFog();
-    this.checkVista();
-    this.updateHints();
+    this.fogSystem.checkZone();
   }
 
   // ------------------------------------------------------------ update
@@ -5996,7 +5785,7 @@ export class GameScene extends Phaser.Scene {
     this.applyCameraRegion(true);
     this.stunnedUntil = 0;
     this.delveExhausted = false;
-    bus.emit('zone', this.currentZone || 'Ancient Ruins');
+    bus.emit('zone', this.fogSystem.currentZone || 'Ancient Ruins');
     // restore the entity depths the Delve overlay had bumped sky-high
     this.playerShadow.setDepth(2);
     this.torchGlow.setDepth(890_000);
@@ -7810,7 +7599,7 @@ export class GameScene extends Phaser.Scene {
       const v = cam.worldView;
       this.fireflies.emitParticleAt(v.x + Math.random() * v.width, v.y + Math.random() * v.height);
     }
-    if (this.leavesActive && time - this.lastLeafAt > 320) {
+    if (this.fogSystem.leavesActive && time - this.lastLeafAt > 320) {
       this.lastLeafAt = time;
       const v = cam.worldView;
       this.leaves.emitParticleAt(v.x + Math.random() * v.width, v.y - 6);
