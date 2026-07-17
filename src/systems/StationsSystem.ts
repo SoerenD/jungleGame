@@ -11,6 +11,7 @@ import { ITEMS, type ItemId } from '../content/items';
 import { RECIPES } from '../content/recipes';
 import type { GameScene } from '../scenes/GameScene';
 import { t } from '../i18n';
+import type { BuildSystem } from './BuildSystem';
 import type { GameContext } from './context';
 import type { FogSystem } from './FogSystem';
 import type { RefinerTarget } from '../ui/bus';
@@ -24,6 +25,8 @@ export class StationsSystem implements GameSystem {
   sawmillMillingUntil = new Map<string, number>();
   /** wired by GameScene (the craft handler's Forge gate reads it) */
   fog!: FogSystem;
+  /** wired by GameScene (emitSawmillBuilt scans the placed structures) */
+  build!: BuildSystem;
 
   private onCraft = (recipeId: string): void => {
     // backstop the Forge gate (the HUD already hides these cards away from a
@@ -252,7 +255,7 @@ export class StationsSystem implements GameSystem {
   /** the Into-the-Delve "Build a Sawmill" step: does any Sawmill stand in the World? */
   emitSawmillBuilt(): void {
     let built = false;
-    for (const s of this.host.structuresByTile.values()) {
+    for (const s of this.build.structuresByTile.values()) {
       if (s.type === 'sawmill') { built = true; break; }
     }
     this.ctx.bus.emit('sawmill-built', built);
