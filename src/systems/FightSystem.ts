@@ -906,10 +906,18 @@ export class FightSystem implements GameSystem {
     this.meleeRingShoveUntil = Date.now() + 260;
     this.ctx.sfx('chop', 0.4);
     this.ctx.scene.cameras.main.shake(160, 0.004);
+    // clamped to the arena's own tile rect (independent of the entrance Ward,
+    // which stays deliberately permeable to a roster fighter) so the shove can
+    // never fling a Player out through the gate or past the court's walls
+    const margin = 0.75;
+    const minX = (a.x + margin) * TILE;
+    const maxX = (a.x + kit.arenaW - margin) * TILE;
+    const minY = (a.y + margin) * TILE;
+    const maxY = (a.y + kit.arenaH - margin) * TILE;
     this.ctx.scene.tweens.add({
       targets: player,
-      x: player.x + Math.cos(ang) * TILE * 2.2,
-      y: player.y + Math.sin(ang) * TILE * 2.2,
+      x: Phaser.Math.Clamp(player.x + Math.cos(ang) * TILE * 2.2, minX, maxX),
+      y: Phaser.Math.Clamp(player.y + Math.sin(ang) * TILE * 2.2, minY, maxY),
       duration: 220,
       ease: 'quad.out',
     });
