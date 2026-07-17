@@ -183,6 +183,7 @@ import { RECIPES } from '../content/recipes';
 import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import type { GameContext } from '../systems/context';
+import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { FogSystem } from '../systems/FogSystem';
 import {
   addBlockerBody,
@@ -445,7 +446,7 @@ export class GameScene extends Phaser.Scene {
   private backend!: Backend;
   private me!: OkJoin;
   private world!: WorldData;
-  private groundLayer!: Phaser.Tilemaps.TilemapLayer;
+  groundLayer!: Phaser.Tilemaps.TilemapLayer;
   private player!: Phaser.Physics.Arcade.Sprite;
   private nodes = new Map<string, NodeView>();
   private nodesByTile = new Map<string, string>();
@@ -485,22 +486,13 @@ export class GameScene extends Phaser.Scene {
   private lastSwingAt = 0;
   // ---- ADR-0018 systems (referenced by other systems + transitional delegates)
   private fogSystem!: FogSystem;
+  private atmosphere!: AtmosphereSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
    * the position stream (PlayerPos.swings) so peers can echo my swings.
    */
   private swingCount = 0;
-  private muted = false;
-  /** per-channel 0..1 volume mix, editable from the settings menu */
-  private volumes: Record<AudioChannel, number> = { master: 1, ambience: 1, music: 1, sfx: 1 };
-  /** the looping jungle bed — kept so its volume can track the mix live */
-  private ambientSound: Phaser.Sound.BaseSound | null = null;
-  /** the waterfall proximity bed. The falls are a tall COLUMN, not a point, so
-   *  the bed fades with distance to the nearest point on that vertical line —
-   *  a circular audible zone around the whole drop, heard equally from any side. */
-  private waterfallSound: Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound | null = null;
-  private waterfallSrc = { x: 0, yTop: 0, yBottom: 0 };
   private quest: QuestState | null = null;
   private tabletSpots: { id: string; x: number; y: number }[] = [];
   private altarPos = { x: 0, y: 0 };
@@ -543,7 +535,7 @@ export class GameScene extends Phaser.Scene {
   private stunMarker: Phaser.GameObjects.Text | null = null;
   /** melee-ring shove cooldown: one push per contact so the tween can't restack (no stun) */
   private meleeRingShoveUntil = 0;
-  private fightMusic: Phaser.Sound.BaseSound | null = null;
+  fightMusic: Phaser.Sound.BaseSound | null = null;
   /** v5: the Ward — a fresh barrier slammed across the entrance for the fight */
   private wardParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
   /** arena-local center of the entrance (the sealGate) — the wave-0 Ward-slam spot */
@@ -726,33 +718,11 @@ export class GameScene extends Phaser.Scene {
   /** throttle for the unripe-wildgrain harvest refusal toast (ADR-0017 rung 3) */
   private cultivationToastAt = 0;
   private welcomeStonePos = { x: 0, y: 0 };
-  private glows: { img: Phaser.GameObjects.Image; base: number; x: number; y: number }[] = [];
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
   private heldItem: ItemId | null = null;
   private heldSprite!: Phaser.GameObjects.Image;
   private torchGlow!: Phaser.GameObjects.Image;
   private playerShadow!: Phaser.GameObjects.Image;
-  private nightOverlay!: Phaser.GameObjects.Rectangle;
-  private duskOverlay!: Phaser.GameObjects.Rectangle;
-  /** the Sunken Mire's ambience: veil + mist banks, 0..1 blend (update()) */
-  private mireVeil!: Phaser.GameObjects.Rectangle;
-  private mirePuffs: Phaser.GameObjects.Image[] = [];
-  private mireAmbience = 0;
-  /** ADR-0017 rung 1: the Tide's rising-water sheen — alpha tracks tideHeight */
-  private tideVeil!: Phaser.GameObjects.Rectangle;
-  /** ADR-0017 rung 2: the Hushdark's cold, muffled dark — a blue-black veil, 0..1 blend */
-  private hushVeil!: Phaser.GameObjects.Rectangle;
-  private hushAmbience = 0;
-  /** ADR-0017 rung 3: the Green Terraces' warm daylit gold-green wash, 0..1 blend */
-  private verdantVeil!: Phaser.GameObjects.Rectangle;
-  private verdantAmbience = 0;
-  private fireflies!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private leaves!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private lastFireflyAt = 0;
-  private lastLeafAt = 0;
-  // ---- faux-elevation (ADR-0009): each raised tile → its terrace level (1, 2, …)
-  highGround = new Map<string, number>();
-  vistaRegions: ElevationRegion[] = [];
   // ---- Realm districts (ADR-0017 §2): the "separate map" presentation state
   /** the district the Player stands in (camera clamp + minimap crop + dot filter); null = the World */
   activeDistrict: DistrictDef | null = null;
@@ -806,7 +776,7 @@ export class GameScene extends Phaser.Scene {
     this.setInv(inv);
   }
 
-  /** build the shared GameContext once the player sprite exists (create()) */
+  /** build the shared GameContext (create(), right after the world JSON loads) */
   private buildContext(): void {
     const self = this;
     this.ctx = {
@@ -815,7 +785,9 @@ export class GameScene extends Phaser.Scene {
       bus,
       world: this.world,
       me: this.me,
-      player: this.player,
+      get player(): Phaser.Physics.Arcade.Sprite {
+        return self.player;
+      },
       get mode(): Mode {
         return self.inDelve ? 'delve' : 'overworld';
       },
@@ -851,9 +823,19 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.world = this.cache.json.get('worldData') as WorldData;
-    this.muted = localStorage.getItem(MUTE_KEY) === '1';
-    this.sound.mute = this.muted;
-    this.volumes = loadVolumes();
+
+    // ADR-0018: the shared context + the ordered system list, built up front so
+    // world-dressing blocks below can already push into system-owned pools
+    // (e.g. the atmosphere glow pool). On scene shutdown every system detaches
+    // its bus listeners (destroy) — a world-switch restart must never
+    // double-subscribe.
+    this.buildContext();
+    this.atmosphere = new AtmosphereSystem(this.ctx, this);
+    this.systems.push(this.atmosphere);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      for (const s of this.systems) s.destroy();
+      this.systems = [];
+    });
 
     const map = this.make.tilemap({ key: 'jungle-map' });
     const tileset = map.addTilesetImage(TILESET.name, TILESET.key)!;
@@ -988,7 +970,7 @@ export class GameScene extends Phaser.Scene {
         .setScale(2.6)
         .setAlpha(0)
         .setDepth(890_001);
-      this.glows.push({ img: this.guardianGlow, base: 0.5, x, y });
+      this.atmosphere.glows.push({ img: this.guardianGlow, base: 0.5, x, y });
       // the amber eye's blaze while an Eye Window is open
       this.guardianEyeGlow = this.add
         .image(x, y - 61, 'glow')
@@ -1057,7 +1039,7 @@ export class GameScene extends Phaser.Scene {
           .setScale(2.6)
           .setAlpha(0)
           .setDepth(890_001);
-        this.glows.push({ img: this.mireGlow, base: 0.5, x, y });
+        this.atmosphere.glows.push({ img: this.mireGlow, base: 0.5, x, y });
         this.mireEyeGlow = this.add
           .image(x, y - 61, 'glow')
           .setBlendMode(Phaser.BlendModes.ADD)
@@ -1122,7 +1104,7 @@ export class GameScene extends Phaser.Scene {
           .setScale(2.6)
           .setAlpha(0)
           .setDepth(890_001);
-        this.glows.push({ img: this.echoGlow, base: 0.5, x, y });
+        this.atmosphere.glows.push({ img: this.echoGlow, base: 0.5, x, y });
         this.echoEyeGlow = this.add
           .image(x, y - 61, 'glow')
           .setBlendMode(Phaser.BlendModes.ADD)
@@ -1187,7 +1169,7 @@ export class GameScene extends Phaser.Scene {
           .setScale(2.6)
           .setAlpha(0)
           .setDepth(890_001);
-        this.glows.push({ img: this.verdantGlow, base: 0.5, x, y });
+        this.atmosphere.glows.push({ img: this.verdantGlow, base: 0.5, x, y });
         this.verdantEyeGlow = this.add
           .image(x, y - 61, 'glow')
           .setBlendMode(Phaser.BlendModes.ADD)
@@ -1201,7 +1183,7 @@ export class GameScene extends Phaser.Scene {
     // ---- ADR-0017 rung 2: the Reverberant — pre-built HIDDEN (no altar/monument;
     // summoned by the puzzle). The sprite/glow/blockers exist so activeBoss('reverb')
     // routes correctly, but stay invisible + disabled until it RISES on summon
-    // (startFight) and are hidden again on defeat (endFight). NOT in `this.glows`
+    // (startFight) and are hidden again on defeat (endFight). NOT in `this.atmosphere.glows`
     // (no dormant ambient pulse — the fight drives its glow).
     const wr = this.world.wardenArenas?.reverb;
     if (wr) {
@@ -1253,15 +1235,6 @@ export class GameScene extends Phaser.Scene {
       this.physics.add.collider(this.player, this.groundLayer),
       this.physics.add.collider(this.player, this.blockersGroup),
     ];
-
-    // ADR-0018: the shared context + the ordered system list. Systems register
-    // here as they are extracted; on scene shutdown every system detaches its
-    // bus listeners (destroy) so a world-switch restart can never double-subscribe.
-    this.buildContext();
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      for (const s of this.systems) s.destroy();
-      this.systems = [];
-    });
 
     // v4: Loadout visuals — created before wireBus()/the first inventory emit so
     // the initial 'held' event can update them. Light now comes only from a held
@@ -1406,79 +1379,14 @@ export class GameScene extends Phaser.Scene {
     // now lives in FogSystem.create)
     this.time.addEvent({ delay: 600, loop: true, callback: () => { this.checkRegrowthVisuals(); this.refreshWildgrainStages(); } });
 
-    const startAmbient = () => {
-      if (this.cache.audio.exists('ambient')) {
-        this.ambientSound = this.sound.add('ambient', {
-          loop: true,
-          volume: AMBIENT_BASE_VOLUME * this.volumes.ambience * this.volumes.master,
-        });
-        this.ambientSound.play();
-      }
-      // the waterfall bed loops silently and swells with proximity (see update())
-      if (this.cache.audio.exists('waterfall')) {
-        this.waterfallSound = this.sound.add('waterfall', { loop: true, volume: 0 }) as typeof this.waterfallSound;
-        this.waterfallSound?.play();
-      }
-    };
-    if (this.sound.locked) this.sound.once('unlocked', startAmbient);
-    else startAmbient();
-
-    // ---- atmosphere: day/night overlays, player glow, fireflies, leaves
-    this.duskOverlay = this.add.rectangle(0, 0, 10, 10, 0xff7b39).setAlpha(0).setDepth(899_998);
-    this.nightOverlay = this.add.rectangle(0, 0, 10, 10, 0x0a1433).setAlpha(0).setDepth(899_999);
-    // the Sunken Mire's stagnant air (ADR-0017): a cold teal veil plus slow
-    // mist banks, faded in while the Player stands inside that district.
-    // Both sit UNDER the fog overlay so the unexplored dark stays black.
-    this.mireVeil = this.add.rectangle(0, 0, 10, 10, 0x0e2622).setAlpha(0).setDepth(899_985);
-    // the Tide's rising-water sheen: a teal wash over the district that swells and
-    // ebbs with the clock (ADR-0017 rung 1). Sits just over the stagnant veil.
-    this.tideVeil = this.add.rectangle(0, 0, 10, 10, 0x2f8f74).setAlpha(0).setDepth(899_986);
-    // the Hushdark's cold, muffled dark (ADR-0017 rung 2): a deep blue-black veil
-    // over the district, faded in on gate crossing exactly like the Mire's veil.
-    this.hushVeil = this.add.rectangle(0, 0, 10, 10, 0x0a1020).setAlpha(0).setDepth(899_985);
-    // the Green Terraces' warm daylit wash (ADR-0017 rung 3): a soft gold-green tint
-    // over the district — the opposite of the Hushdark's dark, faded in on gate crossing.
-    this.verdantVeil = this.add.rectangle(0, 0, 10, 10, 0x9ac46a).setAlpha(0).setDepth(899_985);
-    for (let i = 0; i < 7; i++) {
-      this.mirePuffs.push(
-        this.add
-          .image(0, 0, 'glow')
-          .setTint(0xa8c4b8)
-          .setAlpha(0)
-          .setDepth(899_986)
-          .setScale(3.2 + (i % 3) * 1.7, 1.5 + (i % 2) * 0.8),
-      );
-    }
-    // both ambient emitters stay parked at (0,0) forever and are fed with
-    // emitParticleAt — moving a Phaser 3.60+ emitter drags every live
-    // particle with it, which used to fill the night screen with fast dots
-    this.fireflies = this.add
-      .particles(0, 0, 'glow', {
-        scale: { start: 0.06, end: 0.015 },
-        alpha: { start: 0.9, end: 0 },
-        tint: 0xd8ff8a,
-        blendMode: 'ADD',
-        lifespan: 4200,
-        speed: { min: 4, max: 16 },
-        emitting: false,
-      })
-      .setDepth(895_000);
-    this.leaves = this.add
-      .particles(0, 0, 'leaf', {
-        angle: { min: 80, max: 100 },
-        speed: { min: 18, max: 34 },
-        rotate: { min: -180, max: 180 },
-        alpha: { start: 0.9, end: 0.4 },
-        lifespan: 6000,
-        emitting: false,
-      })
-      .setDepth(894_000);
-
-    this.buildElevation();
-    this.buildWaterfall();
-    this.fogSystem = new FogSystem(this.ctx, this);
+    // AtmosphereSystem.create() covers (in the original order): the ambient +
+    // waterfall audio beds, day/night + veil overlays, mist puffs, fireflies,
+    // leaves, and the elevation/waterfall world dressing (ADR-0009).
+    this.atmosphere.create();
+    this.fogSystem = new FogSystem(this.ctx, this, this.atmosphere);
     this.systems.push(this.fogSystem);
     this.fogSystem.create();
+    this.atmosphere.fog = this.fogSystem;
     this.wireDragPlace();
     this.buildDelveEntrance();
     this.buildRealmGates();
@@ -1498,7 +1406,7 @@ export class GameScene extends Phaser.Scene {
           zone: this.fogSystem.currentZone,
           inventory: { ...this.inventory },
           remotes: [...this.remotes.keys()],
-          muted: this.muted,
+          muted: this.atmosphere.muted,
         }),
         teleport: (tx: number, ty: number) => {
           this.player.setPosition((tx + 0.5) * TILE, (ty + 0.5) * TILE);
@@ -2097,7 +2005,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.fightMusic && this.cache.audio.exists('guardian_drums')) {
       this.fightMusic = this.sound.add('guardian_drums', {
         loop: true,
-        volume: FIGHT_MUSIC_BASE_VOLUME * this.volumes.music * this.volumes.master,
+        volume: FIGHT_MUSIC_BASE_VOLUME * this.atmosphere.volumes.music * this.atmosphere.volumes.master,
       });
     }
     this.fightMusic?.play();
@@ -2231,7 +2139,7 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: spr, angle: -24, duration: 640, ease: 'Bounce.out' }); // heavy topple on its base
     // the runes gutter out: implode + snuff the glow. Its night-smoulder is
     // driven every frame by the glows pool from `base`, so zero that too.
-    const ge = this.glows.find((g) => g.img === b.glow);
+    const ge = this.atmosphere.glows.find((g) => g.img === b.glow);
     if (ge) ge.base = 0;
     this.tweens.add({
       targets: b.glow,
@@ -2285,7 +2193,7 @@ export class GameScene extends Phaser.Scene {
     b.sprite.setAngle(0);
     b.sprite.clearTint();
     b.glow.setVisible(true).setTint(b.art.glowBase).setScale(2.6);
-    const ge = this.glows.find((g) => g.img === b.glow);
+    const ge = this.atmosphere.glows.find((g) => g.img === b.glow);
     if (ge) ge.base = 0.5;
   }
 
@@ -3201,7 +3109,7 @@ export class GameScene extends Phaser.Scene {
         .setScale(0.9)
         .setAlpha(0)
         .setDepth(890_000);
-      this.glows.push({ img: glow, base: 0.35, x, y: y - 4 });
+      this.atmosphere.glows.push({ img: glow, base: 0.35, x, y: y - 4 });
       glowImg = glow;
     }
     this.realmGates.push({ d, side, x, y, objs: [c, blocker, shadow], glow: glowImg });
@@ -3217,8 +3125,8 @@ export class GameScene extends Phaser.Scene {
     for (const g of this.realmGates) {
       for (const o of g.objs) o.destroy();
       if (g.glow) {
-        const i = this.glows.findIndex((e) => e.img === g.glow);
-        if (i >= 0) this.glows.splice(i, 1);
+        const i = this.atmosphere.glows.findIndex((e) => e.img === g.glow);
+        if (i >= 0) this.atmosphere.glows.splice(i, 1);
         g.glow.destroy();
       }
     }
@@ -3270,150 +3178,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------ faux-elevation (ADR-0009)
-
-  /**
-   * The reusable elevation primitive (faux-3D, ADR-0009): for each raised region
-   * draw a base shadow, tall drawn CLIFF FACES hung below every front-facing edge
-   * (real height, not a flat band), and a landmark on the peak so occlusion sells
-   * the raise; record the plateau tiles so entities on top get the depth bump.
-   */
-  private buildElevation(): void {
-    const regions = this.world.elevation?.regions ?? [];
-    // pass 1: record each tile's terrace level (higher wins) and grass over the top
-    for (const r of regions) {
-      const lvl = r.level ?? 1;
-      for (const [tx, ty] of r.plateau) {
-        const key = `${tx},${ty}`;
-        if (lvl > (this.highGround.get(key) ?? 0)) this.highGround.set(key, lvl);
-        // a GRASSY terrace, not a stone court — this is what stops it reading as an
-        // arena. Purely visual (walkability is unchanged); no map regen.
-        const g = (tx * 7 + ty * 13) % 6;
-        this.groundLayer.putTileAt(g === 0 ? 10 : g === 1 ? 11 : 1, tx, ty);
-      }
-    }
-    const levelAt = (tx: number, ty: number) => this.highGround.get(`${tx},${ty}`) ?? 0;
-    const maxLevel = regions.reduce((m, r) => Math.max(m, r.level ?? 1), 1);
-    // pass 2: per terrace — base shadow, cliff faces on drops, summit stones, vista
-    for (const r of regions) {
-      const lvl = r.level ?? 1;
-      const cx = (r.bounds.x + r.bounds.w / 2) * TILE;
-      const cy = (r.bounds.y + r.bounds.h) * TILE;
-      const shadow = this.add.image(cx, cy + 2, 'shadow');
-      shadow.setDisplaySize(r.bounds.w * TILE * 1.15, r.bounds.h * TILE * 0.7);
-      shadow.setAlpha(0.34);
-      shadow.setDepth(-4); // above the ground/decor layers, below world objects
-      // tall cliff faces only where the south neighbour is walkable AND lower (a real
-      // drop): the front edge of each terrace — never over its own top or a side wall
-      for (const [tx, ty] of r.faces) {
-        if (this.world.blocked[(ty + 1) * MAP_W + tx] === 2) continue; // south is cliff — no drop
-        if (levelAt(tx, ty + 1) >= lvl) continue; // south is same/higher terrain — no drop
-        this.drawCliffFace((tx + 0.5) * TILE, (ty + 1) * TILE);
-      }
-      // a ring of standing stones on the SUMMIT (highest terrace) — a highland cairn,
-      // clearly decorative, not harvestable. The depth bump puts a Player up top
-      // behind-and-above them, and that occlusion is what reads as height.
-      if (lvl === maxLevel) {
-        for (const [dx, dy] of [[0, 0], [-2, -1], [2, -1], [-1, 1], [1, 1]] as [number, number][]) {
-          const stx = r.vista.tx + dx;
-          const sty = r.vista.ty + dy;
-          if (levelAt(stx, sty) < lvl) continue; // keep them on the summit top
-          const sx = (stx + 0.5) * TILE;
-          const sy = (sty + 1) * TILE;
-          const mark = this.objImage(sx, sy, 'ruin_pillar');
-          if (mark) {
-            mark.setScale(dx === 0 && dy === 0 ? 1 : 0.8);
-            mark.setDepth(sy + lvl * ELEV_DEPTH_BONUS);
-            this.addShadow(sx, sy - 1, 13).setDepth(lvl * ELEV_DEPTH_BONUS + 1);
-          }
-        }
-      }
-      this.vistaRegions.push(r);
-    }
-  }
-
-  /** a tall drawn cliff face hung DOWN from a raised edge at screen-y `topY`;
-   *  sorts at the drop line so anything to its south (in front) draws over it */
-  private drawCliffFace(px: number, topY: number): void {
-    const face = this.add.image(px, topY, 'cliff_face');
-    face.setOrigin(0.5, 0);
-    face.setDepth(topY);
-  }
-
-  /**
-   * The northern cliff range gets drawn faces; the Thundering Falls itself is a
-   * side-on animated waterfall (user-supplied `user-falls.png`, frames 0-3). The
-   * source river above the crest is painted over with the band's stone tile so the
-   * falls appear to burst straight out of the cliff, then two scaled columns of the
-   * animation fill the drop from the lip down to the plunge pool, with rising mist.
-   * NOTE: the falls sheet's provenance is unconfirmed — see assetConfig / CREDITS.md.
-   */
-  private buildWaterfall(): void {
-    const band = 6;
-    const cliffBottomY = band * TILE;
-    // the authored water column (generate-map fillRect 96,0,9,22): the waterfall
-    // ART covers this stretch, so skip the procedural cliff faces across it (+margin)
-    const colX0 = 96;
-    const colW = 9;
-    const midX = (colX0 + colW / 2) * TILE;
-    const skipLo = colX0 - 3;
-    const skipHi = colX0 + colW + 3;
-    for (let tx = 0; tx < MAP_W; tx++) {
-      if (tx >= skipLo && tx < skipHi) continue; // the waterfall art frames this stretch
-      const above = this.world.blocked[(band - 1) * MAP_W + tx];
-      const at = this.world.blocked[band * MAP_W + tx];
-      if (above === 2 && at !== 2) this.drawCliffFace((tx + 0.5) * TILE, cliffBottomY);
-    }
-    // the source river above the crest is hidden: paint the band's stone tile
-    // (index 6) over the water column so the falls burst straight out of the cliff.
-    for (let ty = 0; ty < band; ty++) {
-      for (let tx = colX0; tx < colX0 + colW; tx++) {
-        this.groundLayer.putTileAt(6, tx, ty)?.setCollision(true);
-      }
-    }
-    // the falls: the user-supplied side-on animation (user-falls.png). The sheet
-    // is a 6×2 grid of 96×193 cells; frames 0-3 are the four phases of a full
-    // crest→pool drop. Two columns, scaled to fill the 9-wide water column from
-    // the cliff lip down to the plunge pool (~ty24).
-    const T2 = TILE * 2; // the drop reaches the pool in `rows` two-tile steps
-    const rows = 9;
-    const dropTop = band * TILE; // crest at the cliff lip
-    const dropBottom = dropTop + rows * T2; // reaches the plunge pool
-    if (!this.anims.exists('waterfall')) {
-      this.anims.create({ key: 'waterfall', frames: this.anims.generateFrameNumbers('waterfall_anim', { frames: [0, 1, 2, 3] }), frameRate: 8, repeat: -1 });
-    }
-    for (const [i, dx] of [-36, 36].entries()) {
-      const sp = this.add.sprite(midX + dx, (dropTop + dropBottom) / 2, 'waterfall_anim', 0);
-      sp.setDisplaySize(108, dropBottom - dropTop);
-      sp.setDepth(dropBottom - 14); // over terrain, under entities near the pool
-      sp.play({ key: 'waterfall', startFrame: (i * 2) % 4 }); // stagger the two columns
-    }
-    // rising mist at the plunge pool
-    this.add
-      .particles(midX, band * TILE + rows * T2 - T2, 'glow', {
-        tint: 0xdff2ff, blendMode: 'ADD', scale: { start: 0.14, end: 0 }, alpha: { start: 0.4, end: 0 },
-        speed: { min: 8, max: 26 }, angle: { min: 245, max: 295 }, lifespan: 900, frequency: 80, quantity: 1,
-      })
-      .setDepth(band * TILE + rows * T2 + 1);
-    // the falls span a tall column (crest → pool); the bed measures distance to
-    // this vertical line, so it's heard equally from any side — not just below.
-    this.waterfallSrc = { x: midX, yTop: dropTop, yBottom: dropBottom };
-  }
-
-  /** depth added to an entity on a raised terrace — level × bonus (0 at the base),
-   *  so a Player on the summit sorts above one on the terrace above one at the base */
-  private elevationBonus(x: number, y: number): number {
-    if (this.highGround.size === 0) return 0;
-    const tx = Math.floor(x / TILE);
-    const ty = Math.floor((y - 4) / TILE);
-    return (this.highGround.get(`${tx},${ty}`) ?? 0) * ELEV_DEPTH_BONUS;
-  }
-
-  /** 0 = noon, 1 = midnight — derived from the real clock, no tick state */
-  private nightness(): number {
-    if (FORCE_NIGHT) return 1;
-    const phase = (Date.now() % DAY_CYCLE_MS) / DAY_CYCLE_MS;
-    return 1 - (0.5 + 0.5 * Math.cos(phase * Math.PI * 2));
-  }
 
   /** in-world name-tag scale — FogSystem.labelScale (ADR-0018) */
   private labelScale(): number {
@@ -3654,17 +3418,6 @@ export class GameScene extends Phaser.Scene {
     bus.on('chat-blur', () => {
       this.chatFocused = false;
       this.input.keyboard!.enabled = true;
-    });
-    bus.on('toggle-mute', () => {
-      this.muted = !this.muted;
-      this.sound.mute = this.muted;
-      localStorage.setItem(MUTE_KEY, this.muted ? '1' : '0');
-      bus.emit('mute', this.muted);
-    });
-    bus.on('set-volume', (channel: AudioChannel, value: number) => {
-      this.volumes[channel] = Math.max(0, Math.min(1, value));
-      localStorage.setItem(VOLUME_KEY, JSON.stringify(this.volumes));
-      this.applyMusicVolumes();
     });
     bus.on('craft', (recipeId: string) => {
       // backstop the Forge gate (the HUD already hides these cards away from a
@@ -4675,7 +4428,7 @@ export class GameScene extends Phaser.Scene {
         .setScale(glowDef.scale)
         .setAlpha(0)
         .setDepth(890_001);
-      this.glows.push({ img: glowImg, base: glowDef.base, x, y: baseY });
+      this.atmosphere.glows.push({ img: glowImg, base: glowDef.base, x, y: baseY });
     }
     this.structureViews.set(s.id, { objects, bodies, glowImg });
     // v3: a working Sawmill spins a saw blade. Seat it near the top-centre of the
@@ -4704,7 +4457,7 @@ export class GameScene extends Phaser.Scene {
     if (view) {
       for (const o of view.objects) o.destroy();
       for (const b of view.bodies) b.destroy();
-      if (view.glowImg) this.glows = this.glows.filter((g) => g.img !== view.glowImg);
+      if (view.glowImg) this.atmosphere.glows = this.atmosphere.glows.filter((g) => g.img !== view.glowImg);
       this.structureViews.delete(id);
     }
     // the blade sprite is destroyed with view.objects above; drop its bookkeeping
@@ -5251,19 +5004,7 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------ helpers
 
   private sfx(key: string, volume: number): void {
-    if (this.cache.audio.exists(key)) {
-      this.sound.play(key, { volume: volume * this.volumes.sfx * this.volumes.master });
-    }
-  }
-
-  /** push the current mix onto the two live looping beds (SFX read it per-play) */
-  private applyMusicVolumes(): void {
-    const setVol = (s: Phaser.Sound.BaseSound | null, base: number, ch: AudioChannel) => {
-      // BaseSound has no setVolume in its type; the concrete web/HTML5 sounds do
-      (s as Phaser.Sound.WebAudioSound | null)?.setVolume?.(base * this.volumes[ch] * this.volumes.master);
-    };
-    setVol(this.ambientSound, AMBIENT_BASE_VOLUME, 'ambience');
-    setVol(this.fightMusic, FIGHT_MUSIC_BASE_VOLUME, 'music');
+    this.atmosphere.sfx(key, volume);
   }
 
   private floatText(x: number, y: number, text: string, color: string, sizePx = 10): void {
@@ -6148,7 +5889,7 @@ export class GameScene extends Phaser.Scene {
   // f(loop-phase) client-side (content/echoes.ts). Runs only inside the Hushdark.
 
   /** the Hushdark frame: refresh shades, advance a recording, render shades, vaults */
-  private updateEchoes(time: number, _delta: number): void {
+  updateEchoes(time: number, _delta: number): void {
     const inHush = this.activeDistrict?.id === 'the_hushdark';
     const now = Date.now();
     // refresh the shade list + the vault-claim weeks (RPC reads; throttled; NEVER
@@ -6407,13 +6148,7 @@ export class GameScene extends Phaser.Scene {
     const dt = delta / 1000;
     const cam = this.cameras.main;
     if (this.delveBackdrop) this.delveBackdrop.setPosition(cam.midPoint.x, cam.midPoint.y).setSize(cam.displayWidth + 8, cam.displayHeight + 8);
-    this.nightOverlay.setAlpha(0);
-    this.duskOverlay.setAlpha(0);
-    this.mireVeil.setAlpha(0);
-    this.tideVeil.setAlpha(0);
-    this.hushVeil.setAlpha(0);
-    this.verdantVeil.setAlpha(0);
-    for (const p of this.mirePuffs) p.setAlpha(0);
+    this.atmosphere.hideForDelve();
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
       .setAlpha(this.heldItem === 'hand_torch' ? 0.5 : 0.22)
@@ -6998,7 +6733,7 @@ export class GameScene extends Phaser.Scene {
   private maintainWildPool(): void {
     const anchors = this.wildPlayerAnchors();
     if (!anchors.length) return;
-    const night = this.nightness() > CREATURE_NIGHT_THRESHOLD;
+    const night = this.atmosphere.nightness() > CREATURE_NIGHT_THRESHOLD;
     for (const [id, m] of this.wildMobs) {
       let near = false;
       for (const a of anchors) {
@@ -7520,108 +7255,22 @@ export class GameScene extends Phaser.Scene {
     // v3 (#3): spin the blade + puff sawdust on any Sawmill currently milling
     this.updateSawmills(time, dt);
 
-    // atmosphere: day/night tint, light glows, fireflies, leaves
-    const cam = this.cameras.main;
-    const night = this.nightness();
-    this.nightOverlay
-      .setPosition(cam.midPoint.x, cam.midPoint.y)
-      .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
-      .setAlpha(Math.pow(night, 1.6) * 0.5);
-    this.duskOverlay
-      .setPosition(cam.midPoint.x, cam.midPoint.y)
-      .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
-      .setAlpha(Math.max(0, 1 - Math.abs(night - 0.5) * 4) * 0.12);
-    // the Mire's stagnant air fades in over ~a second as the Player crosses
-    // the gate (and back out again) — no hard cut on teleport
-    const mireTarget = this.activeDistrict?.id === 'sunken_mire' ? 1 : 0;
-    this.mireAmbience += (mireTarget - this.mireAmbience) * Math.min(1, delta / 450);
-    if (this.mireAmbience > 0.005) {
-      // the veil yields to the night overlay — stacked full-strength they
-      // drown the bog in unreadable black
-      this.mireVeil
-        .setPosition(cam.midPoint.x, cam.midPoint.y)
-        .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
-        .setAlpha(this.mireAmbience * 0.2 * (1 - Math.pow(night, 1.6) * 0.7));
-      const v = cam.worldView;
-      for (let i = 0; i < this.mirePuffs.length; i++) {
-        const p = this.mirePuffs[i];
-        const span = v.width + 260;
-        const drift = (i * 197 + time * 0.011 * (1 + i * 0.17)) % span;
-        p.setPosition(v.x - 130 + drift, v.y + ((i * 131 + Math.sin(time / 2400 + i * 1.7) * 26) % Math.max(1, v.height)));
-        p.setAlpha(this.mireAmbience * (0.055 + 0.03 * Math.sin(time / 900 + i * 2.3)));
-      }
-      // the Tide's rising-water sheen swells with the clock (ADR-0017 rung 1):
-      // faint at low ebb, a stronger teal wash at flood, fading in/out on gate
-      // crossing exactly like the veil (mireAmbience) so teleport never hard-cuts
-      const h = tideHeight(Date.now(), TIDE_PERIOD_MS);
-      this.tideVeil
-        .setPosition(cam.midPoint.x, cam.midPoint.y)
-        .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
-        .setAlpha(this.mireAmbience * (0.05 + 0.20 * h) * (1 - Math.pow(night, 1.6) * 0.6));
-    } else {
-      this.mireVeil.setAlpha(0);
-      this.tideVeil.setAlpha(0);
-      for (const p of this.mirePuffs) p.setAlpha(0);
-    }
-    // ADR-0017 rung 2: the Hushdark's cold muffled dark — fades in over ~a second
-    // on gate crossing, deepest where the night overlay hasn't already blacked it out
-    const hushTarget = this.activeDistrict?.id === 'the_hushdark' ? 1 : 0;
-    this.hushAmbience += (hushTarget - this.hushAmbience) * Math.min(1, delta / 450);
-    this.hushVeil
-      .setPosition(cam.midPoint.x, cam.midPoint.y)
-      .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
-      .setAlpha(this.hushAmbience * 0.34 * (1 - Math.pow(night, 1.6) * 0.6));
-    // the Echoes mechanic runs only inside the Hushdark (recording + shade replay + vaults)
-    if (hushTarget || this.hushAmbience > 0.01) this.updateEchoes(time, delta);
-    // ADR-0017 rung 3: the Green Terraces' warm daylit gold-green wash — fades in over
-    // ~a second on gate crossing like the other veils, gentle by day and yielding to night
-    const verdantTarget = this.activeDistrict?.id === 'green_terraces' ? 1 : 0;
-    this.verdantAmbience += (verdantTarget - this.verdantAmbience) * Math.min(1, delta / 450);
-    this.verdantVeil
-      .setPosition(cam.midPoint.x, cam.midPoint.y)
-      .setSize(cam.displayWidth + 8, cam.displayHeight + 8)
-      .setAlpha(this.verdantAmbience * 0.14 * (1 - Math.pow(night, 1.6) * 0.8));
+    // atmosphere (§8 step 4): overlays, veils (+ Hushdark echo-ambience), glow
+    // pool, fireflies, leaves — AtmosphereSystem.update (ADR-0018)
+    this.atmosphere.update(time, delta);
+    const night = this.atmosphere.nightness();
     // v4: light follows only a held Hand Torch (warm orange, dim like a flame)
     this.torchGlow
       .setPosition(this.player.x, this.player.y - 8)
       .setAlpha(this.heldItem === 'hand_torch' ? 0.1 + night * 0.35 : 0);
     positionHeld(this.heldSprite, this.player.x, this.player.y, this.lastDir);
     // keep the in-hand item with the Player when they climb a plateau (ADR-0009)
-    const heldBump = this.elevationBonus(this.player.x, this.player.y);
+    const heldBump = this.atmosphere.elevationBonus(this.player.x, this.player.y);
     if (heldBump) this.heldSprite.setDepth(this.heldSprite.depth + heldBump);
     this.playerShadow.setPosition(this.player.x, this.player.y - 1);
-    for (let i = 0; i < this.glows.length; i++) {
-      const g = this.glows[i];
-      g.img.setAlpha(night * (g.base + 0.12 * Math.sin(time / 90 + i * 2.1)));
-    }
-    if (night > 0.5 && time - this.lastFireflyAt > 260) {
-      this.lastFireflyAt = time;
-      const v = cam.worldView;
-      this.fireflies.emitParticleAt(v.x + Math.random() * v.width, v.y + Math.random() * v.height);
-    }
-    if (this.fogSystem.leavesActive && time - this.lastLeafAt > 320) {
-      this.lastLeafAt = time;
-      const v = cam.worldView;
-      this.leaves.emitParticleAt(v.x + Math.random() * v.width, v.y - 6);
-    }
 
-    // waterfall proximity bed: silent afar, swelling as the Player nears the
-    // plunge pool. `prox²` keeps it faint at the edge and ramps up close; the
-    // lerp smooths the crossing and any live change to the ambience/master mix.
-    if (this.waterfallSound) {
-      // nearest point on the falls' vertical line → a circular audible zone
-      // around the whole column, so the sides are as loud as standing below it
-      const wy = Phaser.Math.Clamp(this.player.y, this.waterfallSrc.yTop, this.waterfallSrc.yBottom);
-      const wd = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.waterfallSrc.x, wy);
-      const prox = Phaser.Math.Clamp(
-        (WATERFALL_FAR_RADIUS - wd) / (WATERFALL_FAR_RADIUS - WATERFALL_NEAR_RADIUS),
-        0,
-        1,
-      );
-      const target = prox * prox * WATERFALL_BASE_VOLUME * this.volumes.ambience * this.volumes.master;
-      const cur = this.waterfallSound.volume;
-      this.waterfallSound.setVolume(cur + (target - cur) * Math.min(1, dt * 4));
-    }
+    // waterfall proximity bed (§8 step 6) — AtmosphereSystem.updateAudio
+    this.atmosphere.updateAudio(dt);
 
     // remote interpolation
     for (const r of this.remotes.values()) {
@@ -7629,7 +7278,7 @@ export class GameScene extends Phaser.Scene {
       r.sprite.x += (r.targetX - r.sprite.x) * k;
       r.sprite.y += (r.targetY - r.sprite.y) * k;
       // elevation depth bump: a peer up on a plateau sorts above the base (ADR-0009)
-      const rBump = this.elevationBonus(r.sprite.x, r.sprite.y);
+      const rBump = this.atmosphere.elevationBonus(r.sprite.x, r.sprite.y);
       r.sprite.setDepth(r.sprite.y + rBump);
       r.shadow.setPosition(r.sprite.x, r.sprite.y - 1);
       r.label.setPosition(r.sprite.x, r.sprite.y - AVATAR_H - 2);
@@ -7803,7 +7452,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.applyAnim(this.player, this.lastDir, moving);
     // elevation depth bump: on a plateau the Player draws above base entities (ADR-0009)
-    this.player.setDepth(this.player.y + this.elevationBonus(this.player.x, this.player.y));
+    this.player.setDepth(this.player.y + this.atmosphere.elevationBonus(this.player.x, this.player.y));
 
     if (time - this.lastPosSent > 100) {
       this.lastPosSent = time;

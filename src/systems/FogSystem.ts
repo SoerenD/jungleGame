@@ -13,6 +13,7 @@ import Phaser from 'phaser';
 import { FOG_CHUNK, FOG_REVEAL_RADIUS, LEGACY_FOG_STRIDE, MAP_H, MAP_W, TILE, ZOOM, loadWorldLabelScale } from '../config';
 import type { GameScene } from '../scenes/GameScene';
 import { t, zoneName } from '../i18n';
+import type { AtmosphereSystem } from './AtmosphereSystem';
 import type { GameContext } from './context';
 import type { ElevationRegion, GameSystem } from './types';
 
@@ -53,6 +54,7 @@ export class FogSystem implements GameSystem {
   constructor(
     private ctx: GameContext,
     private host: GameScene,
+    private atmosphere: AtmosphereSystem,
   ) {}
 
   create(): void {
@@ -145,13 +147,12 @@ export class FogSystem implements GameSystem {
 
   /** reaching a plateau top lifts fog-of-war around its vista, once (ADR-0009) */
   private checkVista(): void {
-    const host = this.host;
-    if (host.vistaRegions.length === 0) return;
+    if (this.atmosphere.vistaRegions.length === 0) return;
     const player = this.ctx.player;
     const ptx = Math.floor(player.x / TILE);
     const pty = Math.floor((player.y - 4) / TILE);
-    const here = host.highGround.get(`${ptx},${pty}`) ?? 0;
-    for (const r of host.vistaRegions) {
+    const here = this.atmosphere.highGround.get(`${ptx},${pty}`) ?? 0;
+    for (const r of this.atmosphere.vistaRegions) {
       if (this.vistaLifted.has(r.name)) continue;
       if (here < (r.level ?? 1)) continue; // must be up on THIS terrace (or higher)
       this.vistaLifted.add(r.name);
