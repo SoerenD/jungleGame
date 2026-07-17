@@ -112,6 +112,11 @@ export interface GameEvents {
   'refiner-collect': [target: RefinerTarget];
   eat: [id?: ItemId];
   'drop-item': [id: ItemId, count: number];
+  /** a pack item was dragged onto the game canvas — HUD opens the discard modal */
+  'ground-drop-request': [id: ItemId];
+  /** the item kinds currently referenced by the quick-slots — they don't consume
+   *  pack capacity (HUD → HarvestSystem's pack-cap check) */
+  'loadout-kinds': [ids: ItemId[]];
   'sign-text': [text: string | null];
 }
 

@@ -39,7 +39,7 @@ import {
   TERRACE_QUEST_STEPS,
 } from '../content/journey';
 import { RECIPES } from '../content/recipes';
-import { inventoryCapacity, milestoneForTier, tierThreshold, TRADEABLE, tradeUnitCost, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
+import { inventoryCapacity, invKindCount, milestoneForTier, tierThreshold, TRADEABLE, tradeUnitCost, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
 import type {
   ChatMsg,
   DepthDescentRecord,
@@ -544,6 +544,7 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
       names.map((n) => `<span class="who">${n === meName ? n + t.youSuffix : n}</span>`).join('<br>');
   });
   bus.on('toast', (text: string, kind: 'info' | 'good' | 'bad' = 'info') => toast(text, kind));
+  bus.on('ground-drop-request', (id: ItemId) => openDropModal(id));
   bus.on('mute', (m: boolean) => {
     el('btn-mute').textContent = m ? t.bottomBar.muted : t.bottomBar.sound;
     el<HTMLInputElement>('settings-mute').checked = m;
@@ -2154,17 +2155,39 @@ function renderLoadout(): void {
       const dropped = (e.dataTransfer?.getData('application/x-jw-tool') ||
         e.dataTransfer?.getData('application/x-jw-weapon')) as ItemId;
       if (!dropped) return;
-      // no duplicates — clear the item from any other quick-slot first
-      for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === dropped) loadout[k] = null;
-      loadout[i] = dropped;
+      const prev = loadout[i]; // whatever this slot referenced before the drop
+      const fromRaw = e.dataTransfer?.getData('application/x-jw-unslot');
+      if (fromRaw != null && fromRaw !== '') {
+        // dragged FROM another quick-slot → SWAP the two slots (a plain move when
+        // this one was empty). The old occupant lands in the drag's source slot,
+        // so nothing auto-shuffles off to a surprise third place.
+        const from = Number(fromRaw);
+        if (from === i) return;
+        loadout[i] = dropped;
+        loadout[from] = prev;
+      } else {
+        // dragged FROM the pack → seat it here and send the bumped item BACK to
+        // the pack (bench it so the auto-seat can't yank it into a free slot).
+        // One reference per item: clear any other slot still holding the newcomer.
+        for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === dropped) loadout[k] = null;
+        loadout[i] = dropped;
+        if (prev && prev !== dropped) benched.add(prev);
+      }
       benched.delete(dropped); // deliberately seated — auto-seat may manage it again
       saveLoadout();
       renderLoadout();
+      renderInventory(); // a bumped item now shows in the pack view again
       emitHeld();
     });
     slot.onclick = () => selectLoadout(i);
     bar.appendChild(slot);
   }
+  // tell the game which kinds are on the quick-slots — they don't consume pack
+  // capacity (the harvest pack-cap check exempts them)
+  bus.emit(
+    'loadout-kinds',
+    loadout.filter((id): id is ItemId => !!id),
+  );
 }
 
 // ------------------------------------------------------------ item hover popup
@@ -2310,24 +2333,25 @@ function renderInventory(): void {
     if (n <= 1) present.delete(id);
     else present.set(id, n - 1);
   }
-  // vacate slots whose item is gone, then seat newcomers in the first free slot
-  for (let i = 0; i < invOrder.length; i++) {
-    const it = invOrder[i];
-    if (it && !present.has(it)) invOrder[i] = null;
-  }
+  // Compact the arrangement down to exactly the VISIBLE items — the player's
+  // order preserved, then any newcomers appended by kind. No gaps, so the empty
+  // cells that remain are HONEST free capacity, never phantoms left behind by a
+  // hidden quick-bar item.
   const kindOrder = { resource: 0, tool: 1, armor: 2, consumable: 3, food: 4, structure: 5 };
+  const arranged = invOrder.filter((id): id is ItemId => !!id && present.has(id));
   const newcomers = [...present.keys()]
-    .filter((id) => !invOrder.includes(id))
+    .filter((id) => !arranged.includes(id))
     .sort((a, b) => kindOrder[ITEMS[a].kind] - kindOrder[ITEMS[b].kind] || a.localeCompare(b));
-  for (const id of newcomers) {
-    const free = invOrder.indexOf(null);
-    if (free >= 0) invOrder[free] = id;
-    else invOrder.push(id);
-  }
+  invOrder = [...arranged, ...newcomers];
   saveInvOrder();
   if (invSelected && !present.has(invSelected)) invSelected = null;
 
-  for (let i = 0; i < Math.max(inventoryCapacity(villageTier), invOrder.length); i++) {
+  // quick-bar items are "equipped", so they don't consume pack space: the free
+  // slots shown = capacity minus the kinds that DO count (the same exemption the
+  // harvest pack-cap check applies, so what you see matches what you can pick up).
+  const exempt = new Set(loadout.filter((id): id is ItemId => !!id));
+  const freeSlots = Math.max(0, inventoryCapacity(villageTier) - invKindCount(inv, exempt));
+  for (let i = 0; i < invOrder.length + freeSlots; i++) {
     const id = invOrder[i] ?? null;
     const slot = document.createElement('div');
     slot.className = 'inv-slot';
@@ -2367,6 +2391,9 @@ function renderInventory(): void {
       slot.addEventListener('dragstart', (e) => {
         hideItemTooltip(); // don't leave the popup floating over a drag
         e.dataTransfer!.setData('text/plain', String(i));
+        // a universal id payload so a drop onto the game canvas can discard ANY
+        // item kind (the ground-drop modal); a Structure ignores it and places
+        e.dataTransfer!.setData('application/x-jw-item', id);
         // extra payloads so the item can also be dropped onto the Loadout bar
         // (Tools/weapons) or the game canvas to place it (Structures)
         if (isWeapon(id)) e.dataTransfer!.setData('application/x-jw-weapon', id);
@@ -2640,6 +2667,75 @@ function renderInvDetail(present: Map<ItemId, number>): void {
     actions.appendChild(mkDrop(false, t.inv.drop));
     if (n > 1) actions.appendChild(mkDrop(true, t.inv.dropAll(n)));
   }
+}
+
+// ---------------------------------------------------- drag-to-ground discard
+// Dropping a pack item on the game canvas asks (via the bus) to throw it away.
+// "Drop" means discard — there is no ground pickup (ADR-0001) — so we confirm
+// with a modal before the item is gone for good.
+let dropModal: HTMLElement | null = null;
+let dropModalKey: ((e: KeyboardEvent) => void) | null = null;
+
+function closeDropModal(): void {
+  if (dropModalKey) {
+    window.removeEventListener('keydown', dropModalKey, true);
+    dropModalKey = null;
+  }
+  dropModal?.remove();
+  dropModal = null;
+}
+
+function openDropModal(id: ItemId): void {
+  if (!ITEMS[id]) return;
+  // a WORN Armor piece can't be thrown away — take it off first (mirrors the
+  // pack detail panel, which hides its Drop button while a piece is equipped)
+  if (isEquipped(id)) return toast(t.toast.dropWornFirst, 'bad');
+  const n = inv[id] ?? 0;
+  if (n < 1) return;
+  closeDropModal(); // never stack two
+  const name = ITEMS[id].name;
+  const ov = document.createElement('div');
+  ov.id = 'drop-overlay';
+  ov.setAttribute('data-testid', 'drop-overlay');
+  ov.innerHTML =
+    `<div id="drop-card" role="dialog" aria-modal="true" aria-label="${escHtml(t.inv.dropTitle(name))}">` +
+    `<div class="drop-icon"><img src="${itemIcon(id)}" alt="" /></div>` +
+    `<h2>${escHtml(t.inv.dropTitle(name))}</h2>` +
+    `<p>${escHtml(t.inv.dropBody)}</p>` +
+    `<div class="drop-actions"></div></div>`;
+  document.body.appendChild(ov);
+  dropModal = ov;
+  const actions = ov.querySelector<HTMLElement>('.drop-actions')!;
+  const mkBtn = (label: string, cls: string, testid: string, run: () => void): void => {
+    const b = document.createElement('button');
+    b.className = 'ui-btn ' + cls;
+    b.textContent = label;
+    b.setAttribute('data-testid', testid);
+    b.onclick = run;
+    actions.appendChild(b);
+  };
+  mkBtn(t.inv.dropCancel, 'drop-cancel', 'drop-modal-cancel', closeDropModal);
+  mkBtn(t.inv.drop, 'drop-go', `drop-modal-one-${id}`, () => {
+    closeDropModal();
+    bus.emit('drop-item', id, 1);
+  });
+  if (n > 1) {
+    mkBtn(t.inv.dropAll(n), 'drop-go', `drop-modal-all-${id}`, () => {
+      closeDropModal();
+      bus.emit('drop-item', id, n);
+    });
+  }
+  ov.addEventListener('click', (e) => {
+    if (e.target === ov) closeDropModal(); // backdrop click cancels
+  });
+  dropModalKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDropModal();
+    }
+  };
+  window.addEventListener('keydown', dropModalKey, true); // capture, ahead of the HUD hotkeys
 }
 
 /** one ingredient chip: item icon + required count, greyed/red when short */

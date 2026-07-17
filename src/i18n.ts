@@ -346,6 +346,10 @@ const en = {
     drop: 'Drop',
     dropAll: (n: number) => `Drop all (${n})`,
     dropConfirm: 'Sure?',
+    // the drag-to-ground discard modal
+    dropTitle: (name: string) => `Drop ${name}?`,
+    dropBody: 'Thrown away for good — nothing is left on the ground.',
+    dropCancel: 'Cancel',
   },
 
   // ADR-0017 §3/§4: the Codex Card's Armor stat rows
@@ -480,6 +484,7 @@ const en = {
     refinerCollected: (item: string) => `You collect the finished ${item}.`,
     warmHearty: 'Warm and hearty — your step quickens! (+20% speed)',
     dropped: (name: string, n: number) => (n > 1 ? `Dropped ${n}× ${name}.` : `Dropped ${name}.`),
+    dropWornFirst: 'Take it off first — worn gear can’t be thrown away.',
     hostLeftCollapse: 'The host left — the Delve collapses around you. No loot.',
     groveOpen: 'The grove already stands open.',
     offeringAccepted: 'The offering is accepted — the vines part!',
@@ -946,6 +951,10 @@ const de: Strings = {
     drop: 'Wegwerfen',
     dropAll: (n) => `Alle wegwerfen (${n})`,
     dropConfirm: 'Sicher?',
+    // the drag-to-ground discard modal
+    dropTitle: (name) => `${name} wegwerfen?`,
+    dropBody: 'Endgültig weg — es bleibt nichts auf dem Boden liegen.',
+    dropCancel: 'Abbrechen',
   },
 
   armor: {
@@ -1075,6 +1084,7 @@ const de: Strings = {
     refinerCollected: (item) => `Du sammelst die fertige Ware ein: ${item}.`,
     warmHearty: 'Warm und herzhaft — dein Schritt wird schneller! (+20% Tempo)',
     dropped: (name, n) => (n > 1 ? `${n}× ${name} weggeworfen.` : `${name} weggeworfen.`),
+    dropWornFirst: 'Erst ablegen — getragene Ausrüstung kann nicht weggeworfen werden.',
     hostLeftCollapse: 'Der Host ist gegangen — der Schacht stürzt um dich herum ein. Keine Beute.',
     groveOpen: 'Der Hain steht bereits offen.',
     offeringAccepted: 'Die Opfergabe wird angenommen — die Ranken teilen sich!',

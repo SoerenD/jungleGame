@@ -109,6 +109,9 @@ export class HarvestSystem implements GameSystem {
   private nodePips = new Map<string, { gfx: Phaser.GameObjects.Graphics; tween: Phaser.Tweens.Tween | null }>();
   /** throttle for the "pack full" harvest toast (ADR-0013) */
   private packFullToastAt = 0;
+  /** item kinds held on the quick-slots — "equipped", so they don't consume pack
+   *  capacity (kept in sync by the HUD via the 'loadout-kinds' bus event) */
+  private hotbarKinds = new Set<ItemId>();
   /** throttle for the tide-submerged reed refusal toast (ADR-0017 rung 1) */
   private tideToastAt = 0;
   /** throttle for the unripe-wildgrain harvest refusal toast (ADR-0017 rung 3) */
@@ -128,6 +131,7 @@ export class HarvestSystem implements GameSystem {
 
   create(): void {
     this.ctx.backend.on('nodeChanged', this.onNodeChanged);
+    this.ctx.bus.on('loadout-kinds', this.onLoadoutKinds);
     // lazy regrowth + wildgrain-stage visuals — timestamp-derived, no game tick
     this.regrowTimer = this.ctx.scene.time.addEvent({
       delay: 600,
@@ -143,9 +147,16 @@ export class HarvestSystem implements GameSystem {
 
   destroy(): void {
     this.ctx.backend.off('nodeChanged', this.onNodeChanged);
+    this.ctx.bus.off('loadout-kinds', this.onLoadoutKinds);
     this.regrowTimer?.remove();
     this.regrowTimer = null;
   }
+
+  /** the HUD reports which kinds sit on the quick-slots; they're exempt from the
+   *  pack-cap check (quick-bar items are "equipped", not carried) */
+  private onLoadoutKinds = (ids: ItemId[]): void => {
+    this.hotbarKinds = new Set(ids);
+  };
 
   // ------------------------------------------------------------ nodes
 
@@ -544,7 +555,7 @@ export class HarvestSystem implements GameSystem {
   private packWouldOverflow(view: NodeView): boolean {
     const cap = inventoryCapacity(this.village.village.tier);
     const yields = Object.keys(NODE_TYPES[view.state.type]?.yield ?? {});
-    return yields.some((it) => !canAcceptItem(this.ctx.inventory, it, cap));
+    return yields.some((it) => !canAcceptItem(this.ctx.inventory, it, cap, this.hotbarKinds));
   }
 
   /** the pack-full refusal toast, throttled so repeats don't spam it */

@@ -104,17 +104,25 @@ export function inventoryCapacity(tier: number): number {
   return INVENTORY_BASE_SLOTS + (tier >= 1 ? INVENTORY_ROW_SLOTS : 0);
 }
 
-/** distinct item kinds currently held (each is one slot) */
-export function invKindCount(inv: Partial<Record<string, number>>): number {
+/** distinct item kinds currently held that consume a pack slot. `exempt` holds
+ *  kinds that DON'T count — quick-bar items are "equipped", not carried, so they
+ *  take no pack space (the pack view hides them for the same reason). */
+export function invKindCount(inv: Partial<Record<string, number>>, exempt?: ReadonlySet<string>): number {
   let n = 0;
-  for (const k in inv) if ((inv[k] ?? 0) > 0) n++;
+  for (const k in inv) if ((inv[k] ?? 0) > 0 && !exempt?.has(k)) n++;
   return n;
 }
 
-/** can the pack take `item`? always if a kind is already held (its stack just grows), else it needs a free slot */
-export function canAcceptItem(inv: Partial<Record<string, number>>, item: string, capacity: number): boolean {
+/** can the pack take `item`? always if a kind is already held (its stack just
+ *  grows), else it needs a free slot (quick-bar kinds in `exempt` don't count) */
+export function canAcceptItem(
+  inv: Partial<Record<string, number>>,
+  item: string,
+  capacity: number,
+  exempt?: ReadonlySet<string>,
+): boolean {
   if ((inv[item] ?? 0) > 0) return true;
-  return invKindCount(inv) < capacity;
+  return invKindCount(inv, exempt) < capacity;
 }
 
 // ---------------------------------------------------------------- Trade Post

@@ -1538,6 +1538,62 @@ button.ui-btn.drop-armed:hover:not(:disabled) {
   }
 }
 
+/* ---------------- drag-to-ground discard modal ---------------- */
+#drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 10, 5, 0.72);
+}
+#drop-card {
+  width: 340px;
+  max-width: calc(100vw - 48px);
+  background: var(--panel);
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  padding: 22px 24px;
+  text-align: center;
+  box-shadow: 0 14px 46px rgba(0, 0, 0, 0.7);
+}
+#drop-card .drop-icon {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+#drop-card .drop-icon img {
+  width: 48px;
+  height: 48px;
+  image-rendering: pixelated;
+}
+#drop-card h2 {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: calc(18px * var(--ui-scale));
+}
+#drop-card p {
+  margin: 0 0 18px;
+  color: var(--dim);
+  font-size: calc(13px * var(--ui-scale));
+  line-height: 1.5;
+}
+#drop-card .drop-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+#drop-card .drop-go {
+  background: #7a2f2f;
+  border-color: #b45151;
+  color: #ffecec;
+}
+#drop-card .drop-go:hover {
+  background: #8f3838;
+}
+
 /* ---------------- join overlay ---------------- */
 #join-overlay {
   position: fixed;

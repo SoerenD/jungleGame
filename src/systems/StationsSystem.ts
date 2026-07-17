@@ -27,6 +27,10 @@ export class StationsSystem implements GameSystem {
   fog!: FogSystem;
   /** wired by GameScene (emitSawmillBuilt scans the placed structures) */
   build!: BuildSystem;
+  /** canvas drag listeners for the ground-drop (discard) gesture — kept so
+   *  destroy() can detach them (a world-switch restart re-wires otherwise) */
+  private groundOver?: (e: DragEvent) => void;
+  private groundDrop?: (e: DragEvent) => void;
 
   private onCraft = (recipeId: string): void => {
     // backstop the Forge gate (the HUD already hides these cards away from a
@@ -172,6 +176,30 @@ export class StationsSystem implements GameSystem {
     bus.on('refiner-deposit', this.onRefinerDeposit);
     bus.on('refiner-refresh', this.onRefinerRefresh);
     bus.on('refiner-collect', this.onRefinerCollect);
+    this.wireGroundDrop();
+  }
+
+  /**
+   * Drag-to-ground: dropping a pack item onto the game canvas asks the HUD to
+   * open the discard modal (drop 'means' throw away — there is no ground pickup,
+   * ADR-0001). Structures fall through to BuildSystem's drag-place handler on
+   * the same canvas; every other kind carries `application/x-jw-item` here.
+   */
+  private wireGroundDrop(): void {
+    const canvas = this.ctx.scene.game.canvas;
+    const TYPE = 'application/x-jw-item';
+    this.groundOver = (e: DragEvent): void => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(TYPE)) e.preventDefault();
+    };
+    this.groundDrop = (e: DragEvent): void => {
+      const id = e.dataTransfer?.getData(TYPE) as ItemId;
+      if (!id || !ITEMS[id]) return;
+      if (ITEMS[id].kind === 'structure') return; // a Structure places instead (BuildSystem)
+      e.preventDefault();
+      this.ctx.bus.emit('ground-drop-request', id);
+    };
+    canvas.addEventListener('dragover', this.groundOver);
+    canvas.addEventListener('drop', this.groundDrop);
   }
 
   /** §8 step 3 (v3 #3): a working Sawmill spins its blade and coughs sawdust. "Working"
@@ -220,6 +248,9 @@ export class StationsSystem implements GameSystem {
     bus.off('refiner-deposit', this.onRefinerDeposit);
     bus.off('refiner-refresh', this.onRefinerRefresh);
     bus.off('refiner-collect', this.onRefinerCollect);
+    const canvas = this.ctx.scene.game.canvas;
+    if (this.groundOver) canvas.removeEventListener('dragover', this.groundOver);
+    if (this.groundDrop) canvas.removeEventListener('drop', this.groundDrop);
   }
 
   openCrate(crateId: string): void {
