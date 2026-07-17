@@ -81,13 +81,12 @@ export type StructureId =
   | 'torch'
   | 'bridge'
   | 'crate'
-  | 'tiki_statue'
   | 'fruit_basket'
   | 'golden_idol'
-  // v2 — tier-2 Structures (obsidian_path retired 2026-07 — legacy placed
-  // instances render as reserved-but-invisible, the fence/hut_wall pattern)
+  // v2 — tier-2 Structures (obsidian_path, tiki_statue + hardwood_arch retired
+  // 2026-07 — pure decor with no function; legacy placed instances render as
+  // reserved-but-invisible, the fence/hut_wall pattern)
   | 'obsidian_statue'
-  | 'hardwood_arch'
   | 'guardian_trophy'
   | 'brazier'
   // v3 — functional Structures (hammock + table retired 2026-07; the Village
@@ -246,12 +245,10 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   torch: { name: 'Torch', kind: 'structure', desc: 'Lights the path.', blocks: false },
   bridge: { name: 'Bridge', kind: 'structure', desc: 'Walk over water.', blocks: false, onWater: true },
   crate: { name: 'Supply Crate', kind: 'structure', desc: 'Shared storage — E to deposit and withdraw. No locks between friends.', blocks: true },
-  tiki_statue: { name: 'Tiki Statue', kind: 'structure', desc: 'Watches the jungle.', blocks: true },
   fruit_basket: { name: 'Fruit Basket', kind: 'structure', desc: 'A welcoming snack pile.', blocks: false },
   golden_idol: { name: 'Golden Idol', kind: 'structure', desc: 'A gleaming trophy dug from a buried treasure. Cannot be crafted.', blocks: true },
   hushdark_reliquary: { name: 'Echo Reliquary', kind: 'structure', desc: 'A cold hushsteel shrine that hums with a swallowed note — the mark of the first Hushdark vault you ever opened. Not craftable; raise it where all can see the puzzle was solved.', blocks: true },
   obsidian_statue: { name: 'Obsidian Statue', kind: 'structure', desc: 'A gleaming black sentinel.', blocks: true },
-  hardwood_arch: { name: 'Hardwood Arch', kind: 'structure', desc: 'A grand gateway of ancient timber.', blocks: false },
   guardian_trophy: { name: 'Guardian Trophy', kind: 'structure', desc: 'Proof the Guardian was faced — and bested.', blocks: true },
   brazier: { name: 'Brazier', kind: 'structure', desc: 'An obsidian fire bowl — glows far into the night.', blocks: true },
   signpost: { name: 'Signpost', kind: 'structure', desc: 'Holds a short line of your writing, readable by everyone.', blocks: false },
@@ -349,12 +346,10 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   torch: { name: 'Fackel', desc: 'Erleuchtet den Weg.' },
   bridge: { name: 'Brücke', desc: 'Über Wasser gehen.' },
   crate: { name: 'Vorratskiste', desc: 'Geteilter Speicher — E zum Ein- und Auslagern. Keine Schlösser unter Freunden.' },
-  tiki_statue: { name: 'Tiki-Statue', desc: 'Wacht über den Dschungel.' },
   fruit_basket: { name: 'Obstkorb', desc: 'Ein einladender Snack-Haufen.' },
   golden_idol: { name: 'Goldenes Götzenbild', desc: 'Eine glänzende Trophäe, aus einem vergrabenen Schatz gegraben. Nicht herstellbar.' },
   hushdark_reliquary: { name: 'Echo-Reliquie', desc: 'Ein kalter Schrein aus Klangstahl, der mit einem verschluckten Ton summt — das Zeichen des ersten Gewölbes der Grabesstille, das du je geöffnet hast. Nicht herstellbar; richte ihn auf, wo alle sehen, dass das Rätsel gelöst wurde.' },
   obsidian_statue: { name: 'Obsidianstatue', desc: 'Ein glänzender schwarzer Wächter.' },
-  hardwood_arch: { name: 'Hartholzbogen', desc: 'Ein prächtiges Tor aus uraltem Holz.' },
   guardian_trophy: { name: 'Wächtertrophäe', desc: 'Beweis, dass der Wächter gestellt — und bezwungen — wurde.' },
   brazier: { name: 'Kohlenbecken', desc: 'Eine Feuerschale aus Obsidian — glüht weit in die Nacht.' },
   signpost: { name: 'Wegweiser', desc: 'Trägt eine kurze Zeile deiner Schrift, für alle lesbar.' },

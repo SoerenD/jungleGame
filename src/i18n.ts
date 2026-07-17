@@ -343,6 +343,9 @@ const en = {
     equip: 'Equip',
     unequip: 'Unequip',
     wornBadge: 'worn — every friend sees it on you',
+    drop: 'Drop',
+    dropAll: (n: number) => `Drop all (${n})`,
+    dropConfirm: 'Sure?',
   },
 
   // ADR-0017 §3/§4: the Codex Card's Armor stat rows
@@ -476,6 +479,7 @@ const en = {
     refinerNotReady: 'Nothing is finished yet — the refiner works slowly.',
     refinerCollected: (item: string) => `You collect the finished ${item}.`,
     warmHearty: 'Warm and hearty — your step quickens! (+20% speed)',
+    dropped: (name: string, n: number) => (n > 1 ? `Dropped ${n}× ${name}.` : `Dropped ${name}.`),
     hostLeftCollapse: 'The host left — the Delve collapses around you. No loot.',
     groveOpen: 'The grove already stands open.',
     offeringAccepted: 'The offering is accepted — the vines part!',
@@ -939,6 +943,9 @@ const de: Strings = {
     equip: 'Anlegen',
     unequip: 'Ablegen',
     wornBadge: 'angelegt — alle Freunde sehen es an dir',
+    drop: 'Wegwerfen',
+    dropAll: (n) => `Alle wegwerfen (${n})`,
+    dropConfirm: 'Sicher?',
   },
 
   armor: {
@@ -1067,6 +1074,7 @@ const de: Strings = {
     refinerNotReady: 'Noch nichts fertig — der Veredler arbeitet langsam.',
     refinerCollected: (item) => `Du sammelst die fertige Ware ein: ${item}.`,
     warmHearty: 'Warm und herzhaft — dein Schritt wird schneller! (+20% Tempo)',
+    dropped: (name, n) => (n > 1 ? `${n}× ${name} weggeworfen.` : `${name} weggeworfen.`),
     hostLeftCollapse: 'Der Host ist gegangen — der Schacht stürzt um dich herum ein. Keine Beute.',
     groveOpen: 'Der Hain steht bereits offen.',
     offeringAccepted: 'Die Opfergabe wird angenommen — die Ranken teilen sich!',

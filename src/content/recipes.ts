@@ -90,7 +90,6 @@ export const RECIPES: Recipe[] = [
   { id: 'torch', output: 'torch', count: 1, cost: { wood: 1, fiber: 1 }, kind: 'structure' },
   { id: 'bridge', output: 'bridge', count: 1, cost: { wood: 3, fiber: 2 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'crate', output: 'crate', count: 1, cost: { wood: 4, stone: 1 }, kind: 'structure' },
-  { id: 'tiki_statue', output: 'tiki_statue', count: 1, cost: { stone: 4, fiber: 1 }, kind: 'structure' },
   { id: 'fruit_basket', output: 'fruit_basket', count: 1, cost: { fiber: 2, fruit: 3 }, kind: 'structure' },
 
   // v3 — the Sawmill is tier-1 (the gateway to refined wood)...
@@ -114,7 +113,6 @@ export const RECIPES: Recipe[] = [
 
   // v2 tier-2 structures ("tier 2 builds on refined wood": planks replace raw wood)
   { id: 'obsidian_statue', output: 'obsidian_statue', count: 1, cost: { obsidian: 4 }, kind: 'structure' },
-  { id: 'hardwood_arch', output: 'hardwood_arch', count: 1, cost: { hardwood: 4, plank: 2 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'guardian_trophy', output: 'guardian_trophy', count: 1, cost: { guardian_scale: 5, obsidian: 2 }, kind: 'structure' },
   { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, plank: 2 }, kind: 'structure' },
 

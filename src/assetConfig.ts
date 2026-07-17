@@ -64,12 +64,10 @@ export const OBJECTS: Record<string, ObjectDef> = {
   st_torch: { url: '/assets/objects/torch.png' },
   st_bridge: { url: '/assets/objects/bridge.png' },
   st_crate: { url: '/assets/objects/crate.png' },
-  st_tiki_statue: { url: '/assets/objects/statue.png' },
   st_fruit_basket: { url: '/assets/objects/fruit-basket.png' },
   st_golden_idol: { url: '/assets/objects/golden-idol.png' },
   // v2 tier-2 structures
   st_obsidian_statue: { url: '/assets/objects/obsidian-statue.png' },
-  st_hardwood_arch: { url: '/assets/objects/hardwood-arch.png' },
   st_guardian_trophy: { url: '/assets/objects/guardian-trophy.png' },
   st_brazier: { url: '/assets/objects/brazier.png' },
   // v3 functional structures + plank decor

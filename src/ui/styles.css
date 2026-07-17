@@ -594,6 +594,14 @@ button.ui-btn:disabled {
   opacity: 0.35;
   cursor: default;
 }
+/* the pack's Drop button, once armed: one more click throws the item away forever */
+button.ui-btn.drop-armed {
+  background: #6e3c3c;
+  border-color: #a05050;
+}
+button.ui-btn.drop-armed:hover:not(:disabled) {
+  background: #8a4a4a;
+}
 
 /* minimap */
 #minimap {

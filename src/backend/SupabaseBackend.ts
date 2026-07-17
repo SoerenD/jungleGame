@@ -71,6 +71,7 @@ import type {
   DigResult,
   Dir,
   DismantleResult,
+  DropResult,
   DungeonMsg,
   EatResult,
   EquipResult,
@@ -1564,6 +1565,22 @@ export class SupabaseBackend implements Backend {
     if (!res || res.ok === false) return { ok: false, reason: 'NOTHING_TO_EAT' };
     this.inv = res.inventory as Inventory;
     return { ok: true, inventory: { ...this.inv }, buffMs: SPEED_BUFF_MS };
+  }
+
+  async dropItem(item: ItemId, count: number): Promise<DropResult> {
+    // throw items away through the generic craft RPC (count 0 output = a pure
+    // consume: jw_afford checks the stack, the cost is deducted, nothing is
+    // produced — the eatCookedMeat pattern), so NO new RPC is needed.
+    const res = await this.rpc<any>('jw_craft', {
+      p_who: this.me,
+      p_cost: { [item]: Math.max(1, count) },
+      p_output: item,
+      p_count: 0,
+      p_requires_tool: null,
+    });
+    if (!res || res.ok === false) return { ok: false, reason: 'NOT_OWNED' };
+    this.inv = res.inventory as Inventory;
+    return { ok: true, inventory: { ...this.inv } };
   }
 
   /**

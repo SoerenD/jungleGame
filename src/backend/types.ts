@@ -409,6 +409,10 @@ export type EatResult =
   | { ok: false; reason: 'NOTHING_TO_EAT' }
   | { ok: true; inventory: Inventory; buffMs: number };
 
+export type DropResult =
+  | { ok: false; reason: 'NOT_OWNED' }
+  | { ok: true; inventory: Inventory };
+
 export type OpenDelveResult =
   | { ok: false; reason: 'ALREADY_OPEN' }
   | { ok: true; delveOpen: true };
@@ -759,6 +763,12 @@ export interface Backend {
    * craft path server-side (no new RPC), exactly like eatCookedMeat.
    */
   eatGrasweaveRation(): Promise<EatResult>;
+  /**
+   * throw `count` of a carried item away — gone forever, no ground pickup.
+   * Server-ordered like every inventory mutation; reuses the generic craft
+   * path (a pure consume: cost only, zero output — no new RPC).
+   */
+  dropItem(item: ItemId, count: number): Promise<DropResult>;
   /** remember that this Player has seen the intro story */
   markIntroSeen(): Promise<void>;
   /** tick one Journey objective for this Player (idempotent) */

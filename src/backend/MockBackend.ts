@@ -85,6 +85,7 @@ import type {
   DigResult,
   Dir,
   DismantleResult,
+  DropResult,
   EatResult,
   EquipResult,
   FightState,
@@ -2056,6 +2057,16 @@ export class MockBackend implements Backend {
     p.inventory.grasweave_ration! -= 1;
     this.saveNow();
     return { ok: true, inventory: { ...p.inventory }, buffMs: SPEED_BUFF_MS };
+  }
+
+  async dropItem(item: ItemId, count: number): Promise<DropResult> {
+    await this.lag();
+    const p = this.me ? this.db.players[this.me] : null;
+    const held = p ? (p.inventory[item] ?? 0) : 0;
+    if (!p || held < 1) return { ok: false, reason: 'NOT_OWNED' };
+    p.inventory[item] = held - Math.max(1, Math.min(count, held));
+    this.saveNow();
+    return { ok: true, inventory: { ...p.inventory } };
   }
 
   // ------------------------------------------------------------ v2: intro story

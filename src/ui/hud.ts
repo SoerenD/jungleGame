@@ -1970,6 +1970,8 @@ const INV_SLOTS = 18;
 /** slot → item; the Player's arrangement, a purely cosmetic UI preference */
 let invOrder: (ItemId | null)[] = [];
 let invSelected: ItemId | null = null;
+/** the armed Drop button awaiting its confirming second click (null = disarmed) */
+let dropArm: { id: ItemId; all: boolean } | null = null;
 
 const invOrderKey = () => `jungle-world:invorder:${meName}`;
 
@@ -2584,6 +2586,7 @@ function renderInvDetail(present: Map<ItemId, number>): void {
   const desc = el('inv-detail-desc');
   const actions = el('inv-detail-actions');
   actions.innerHTML = '';
+  if (dropArm && dropArm.id !== invSelected) dropArm = null; // selection moved on — disarm
   if (!invSelected) {
     name.textContent = present.size === 0 ? t.inv.emptyGo : '';
     desc.textContent = present.size === 0 ? '' : t.inv.clickHint;
@@ -2609,6 +2612,33 @@ function renderInvDetail(present: Map<ItemId, number>): void {
     const id = invSelected;
     btn.onclick = () => invUse(id);
     actions.appendChild(btn);
+  }
+  // throwing away (anything but a WORN Armor piece — unequip it first): gone
+  // forever, no ground pickup. A two-click arm ("Sure?") keeps a mis-click
+  // from voiding a rare item; a quick-slotted copy is invisible to the pack,
+  // so the hotbar reference can never be dropped out from under the hand.
+  if (!isEquipped(invSelected)) {
+    const id = invSelected;
+    const n = present.get(id) ?? 0;
+    const mkDrop = (all: boolean, label: string): HTMLButtonElement => {
+      const armed = dropArm !== null && dropArm.id === id && dropArm.all === all;
+      const b = document.createElement('button');
+      b.className = 'ui-btn' + (armed ? ' drop-armed' : '');
+      b.textContent = armed ? t.inv.dropConfirm : label;
+      b.setAttribute('data-testid', `drop${all ? '-all' : ''}-${id}`);
+      b.onclick = () => {
+        if (!armed) {
+          dropArm = { id, all };
+          renderInvDetail(present);
+          return;
+        }
+        dropArm = null;
+        bus.emit('drop-item', id, all ? n : 1);
+      };
+      return b;
+    };
+    actions.appendChild(mkDrop(false, t.inv.drop));
+    if (n > 1) actions.appendChild(mkDrop(true, t.inv.dropAll(n)));
   }
 }
 

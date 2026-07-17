@@ -4005,6 +4005,14 @@ export class GameScene extends Phaser.Scene {
         this.sfx('munch', 0.6);
       });
     });
+    bus.on('drop-item', (id: ItemId, count: number) => {
+      void this.backend.dropItem(id, count).then((res) => {
+        if (!res.ok) return;
+        this.inventory = res.inventory;
+        bus.emit('inventory', this.inventory);
+        bus.emit('toast', t.toast.dropped(ITEMS[id].name, count), 'info');
+      });
+    });
   }
 
   private emitPresence(): void {
