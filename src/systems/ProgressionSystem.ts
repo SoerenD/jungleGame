@@ -15,6 +15,7 @@ import type { GameScene } from '../scenes/GameScene';
 import { showIntro } from '../ui/intro';
 import { t } from '../i18n';
 import type { GameContext } from './context';
+import type { HarvestSystem } from './HarvestSystem';
 import { addBlockerBody, addShadow, floatText, objImage } from './sceneFx';
 import type { EAction, GameSystem, NodeView } from './types';
 
@@ -29,6 +30,8 @@ export class ProgressionSystem implements GameSystem {
   private gateParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
   private digMarker: Phaser.GameObjects.Text | null = null;
   private welcomeStonePos = { x: 0, y: 0 };
+  /** wired by GameScene (the gather hint scans the live nodes) */
+  harvest!: HarvestSystem;
   private onQuest = (q: QuestState): void => this.applyQuest(q);
   private onGateOpened = (): void => this.openGateVisual();
 
@@ -143,7 +146,7 @@ export class ProgressionSystem implements GameSystem {
     if (!text && !hintRetired(this.journey, 'gather')) {
       let best: NodeView | null = null;
       let bestDist = INTERACT_RANGE;
-      for (const view of this.host.nodes.values()) {
+      for (const view of this.harvest.nodes.values()) {
         if (view.depletedShown) continue;
         const nt = NODE_TYPES[view.state.type];
         if (nt.requiredTool && (this.ctx.inventory[nt.requiredTool] ?? 0) <= 0) continue; // only nodes the Player can harvest teach

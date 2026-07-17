@@ -186,6 +186,7 @@ import type { GameContext } from '../systems/context';
 import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
+import { CHIP_TINTS, HarvestSystem } from '../systems/HarvestSystem';
 import { DistrictSystem } from '../systems/DistrictSystem';
 import { ProgressionSystem } from '../systems/ProgressionSystem';
 import { SealSystem } from '../systems/SealSystem';
@@ -316,79 +317,6 @@ const KIT_ART: Record<string, KitArt> = {
   verdant: { spriteKey: 'verdant_warden', idle: 'verdant-idle', eye: 'verdant-eye', glowBase: 0x7cc96f, fury: [0x7cc96f, 0xb6d24a, 0xffd24a], danger: 0x6aa83e, slam: 0xd8a83e, lunge: 0xf0c95e, ring: 0x9dc85a, eyeTint: 0xffe89a, ward: 0xcfe8a0 },
 };
 
-/**
- * ADR-0017 rung 3: a wildgrain bed's clock-derived growth stage → a multiplicative
- * tint over the golden ripe sprite, so ripeness reads across the field at a glance.
- * The bed art is drawn RIPE-golden (tools/compose-wildgrain.ts), so `ripe` passes it
- * through untinted; the growing stages push it green then dim brown.
- */
-const WILDGRAIN_STAGE_TINT: Record<WildgrainStage, number> = {
-  bare: 0x6b5a3a, // dim, barely-sprouted soil brown
-  sprout: 0x7f9a52, // young olive-green
-  green: 0xa8c46a, // lush unripe green
-  ripe: 0xffffff, // full sunlit gold as drawn — reads harvestable
-};
-
-/** deterministic per-id variance so the forest looks grown, not stamped */
-function idHash(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
-/**
- * J3 harvest impact kit — the most-repeated verb in the game (hold-E on a
- * Resource Node) finally answers back: per-hit debris chips tinted by node
- * type, a ~40ms squash punch on the sprite, and quiet damage pips while a
- * node sits below max HP. Pure client presentation over the shared 'poof'
- * texture (BootScene) — no new textures, no emitters, and no standing
- * per-node display objects (there are 3,854 node sprites; everything here
- * exists only at the point of impact and is reaped by a TTL sweep or its own
- * fade). Adjudication, yields, cadence and the wire are untouched.
- */
-const CHIP_COUNT_HIT = 5; // chips per landed swing
-const CHIP_COUNT_FINISH = 9; // the finishing hit pays a slightly larger burst
-/**
- * Debris tints per Node type — muted, matching the mature palette: bark brown
- * with a leaf fleck for wood, granite greys for stone, leaf green with a fruit
- * fleck for the bush, pale dry fiber, water droplets for a Fishing Spot, and
- * the tier-2 pair in dense heartwood dark / volcanic-glass violet.
- */
-const CHIP_TINTS: Record<NodeTypeId, number[]> = {
-  tree: [0x7a5a34, 0x5d4426, 0x4f7a3a],
-  rock: [0x9aa0a6, 0x6e747a, 0xb9bec2],
-  fruit_bush: [0x4f7a3a, 0x6f9c46, 0xc75b52],
-  fiber_vine: [0xd9cf9e, 0xb5ab7c, 0x8ba75f],
-  hardwood_tree: [0x4a3826, 0x6b5232, 0x8c7444],
-  obsidian_rock: [0x2e2838, 0x554a6a, 0x8f84b8],
-  fishing_spot: [0x66b8e0, 0x9ad4ee, 0x3f86b8],
-  salt_reed_bed: [0xb3a76e, 0x8f855a, 0xd8dcd2],
-  echo_crystal_seam: [0x93a8c9, 0x5a6b85, 0xd6e4f5],
-  wildgrain_bed: [0xd8a83e, 0xb5882e, 0x86a048],
-};
-/** damage pips: 2px cells above a damaged node — shown only while it was hit
- *  recently, then faded out (the mob HP bar's idea, smaller and quieter) */
-const NODE_PIP_SIZE = 2; // px — pixel-scale cells, no cartoon bar
-const NODE_PIP_GAP = 1;
-const NODE_PIP_HOLD_MS = 1500; // readable-at-a-glance window after the last hit
-const NODE_PIP_FADE_MS = 250;
-const NODE_PIP_FILL = 0xcfd6a8; // pale reed — far quieter than the mobs' bright green bar
-const NODE_PIP_LOST = 0x4a4a40; // spent pips go dark, keeping max HP readable
-const NODE_PUNCH_MS = 40; // squash punch per leg: rest → ~1.06 wide → rest (yoyo)
-/** sprite-data key holding a node's in-flight punch tween (kill-restart, like SWING_TWEEN_KEY) */
-const NODE_PUNCH_KEY = 'nodePunchTween';
-
-/**
- * A node sprite's rest scale, re-derived instead of stored: trees plant at
- * 0.9 + (idHash % 40)/100, everything else at 1. The SINGLE source of truth —
- * addNode() plants with it, the regrow tween settles back to it, and the punch
- * tween kill-restarts against it, so the three can never drift apart.
- * Re-deriving (not storing) keeps the hot path free of any per-node
- * DataManager/field allocation across all 3,854 sprites.
- */
-function nodeRestScale(state: NodeState): number {
-  return state.type === 'tree' ? 0.9 + (idHash(state.id) % 40) / 100 : 1;
-}
 /** a host-simulated Husk/boss projectile (tile units; velocity tiles/second) */
 interface DelveProjectile {
   id: string;
@@ -424,15 +352,6 @@ export class GameScene extends Phaser.Scene {
   private world!: WorldData;
   groundLayer!: Phaser.Tilemaps.TilemapLayer;
   private player!: Phaser.Physics.Arcade.Sprite;
-  nodes = new Map<string, NodeView>();
-  private nodesByTile = new Map<string, string>();
-  /**
-   * J3: the damage-pip displays live ONLY here — created lazily on the first
-   * damage shown for a node, destroyed by their own fade (or hideNodePips), so
-   * steady state carries zero pip objects. Keyed by node id; at most a
-   * screenful of entries exists even under heavy group harvesting.
-   */
-  private nodePips = new Map<string, { gfx: Phaser.GameObjects.Graphics; tween: Phaser.Tweens.Tween | null }>();
   /** reusable tooltip showing the name of the Resource Node under the cursor */
   nodeHoverLabel: Phaser.GameObjects.Text | null = null;
   structuresByTile = new Map<string, Structure>();
@@ -465,6 +384,7 @@ export class GameScene extends Phaser.Scene {
   private progression!: ProgressionSystem;
   private districtSystem!: DistrictSystem;
   private stationsSystem!: StationsSystem;
+  private harvest!: HarvestSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
@@ -669,12 +589,6 @@ export class GameScene extends Phaser.Scene {
   private wildKnockdownTimes: number[] = [];
   // ---- v2: fishing, cooking, intro
   buffUntil = 0;
-  /** throttle for the "pack full" harvest toast (ADR-0013) */
-  private packFullToastAt = 0;
-  /** throttle for the tide-submerged reed refusal toast (ADR-0017 rung 1) */
-  private tideToastAt = 0;
-  /** throttle for the unripe-wildgrain harvest refusal toast (ADR-0017 rung 3) */
-  private cultivationToastAt = 0;
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
   private heldItem: ItemId | null = null;
   private heldSprite!: Phaser.GameObjects.Image;
@@ -781,6 +695,8 @@ export class GameScene extends Phaser.Scene {
     this.atmosphere.district = this.districtSystem;
     this.stationsSystem = new StationsSystem(this.ctx, this);
     this.systems.push(this.stationsSystem);
+    this.harvest = new HarvestSystem(this.ctx, this);
+    this.systems.push(this.harvest);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       for (const s of this.systems) s.destroy();
       this.systems = [];
@@ -1255,12 +1171,16 @@ export class GameScene extends Phaser.Scene {
     this.wireBackend();
     this.wireBus();
     this.stationsSystem.create(); // craft/eat/drop + crate/sawmill/refiner bus handlers (ADR-0018)
+    this.harvest.village = this.villageSystem;
+    this.harvest.progression = this.progression;
+    this.progression.harvest = this.harvest;
+    this.harvest.create(); // nodeChanged listener + the 600 ms regrow/wildgrain tick
     this.recomputeWildHost(); // ADR-0012: elect the creature host now (re-run on every presence sync)
     bus.emit('journey', this.progression.journey);
 
     void this.backend.loadWorld().then((snap) => {
       this.villageSystem.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
-      for (const n of snap.nodes) this.addNode(n);
+      for (const n of snap.nodes) this.harvest.addNode(n);
       for (const s of snap.structures) this.addStructure(s);
       for (const p of snap.players) this.upsertRemote(p);
       bus.emit('chatlog', snap.chatLog);
@@ -1288,9 +1208,6 @@ export class GameScene extends Phaser.Scene {
     bus.emit('equipped', this.equipped);
     bus.emit('inventory', this.inventory);
 
-    // lazy regrowth visuals — timestamp-derived, no game tick (the zone tick
-    // now lives in FogSystem.create)
-    this.time.addEvent({ delay: 600, loop: true, callback: () => { this.checkRegrowthVisuals(); this.refreshWildgrainStages(); } });
 
     // AtmosphereSystem.create() covers (in the original order): the ambient +
     // waterfall audio beds, day/night + veil overlays, mist puffs, fireflies,
@@ -1303,6 +1220,8 @@ export class GameScene extends Phaser.Scene {
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
     this.stationsSystem.fog = this.fogSystem;
+    this.harvest.fog = this.fogSystem;
+    this.harvest.fishing = this.fishingSystem;
     this.fishingSystem = new FishingSystem(this.ctx, this);
     this.systems.push(this.fishingSystem);
     this.fishingSystem.create();
@@ -1441,7 +1360,6 @@ export class GameScene extends Phaser.Scene {
       bus.emit('chat', msg);
       if (msg.from !== this.me.name) this.sfx('blip', 0.04);
     });
-    this.backend.on('nodeChanged', (n: NodeState) => this.updateNode(n));
     this.backend.on('structurePlaced', (s: Structure) => {
       this.addStructure(s);
       // guarded like addStructure: an old client can still place a retired type
@@ -2654,326 +2572,17 @@ export class GameScene extends Phaser.Scene {
     return this.heldItem === 'bow' || this.heldItem === 'fabled_bow';
   }
 
-  // ------------------------------------------------------------ nodes
-
-  private nodeAlive(n: NodeState): boolean {
-    if (n.hp > 0) return true;
-    const t = NODE_TYPES[n.type];
-    return n.harvestedAt !== null && Date.now() >= n.harvestedAt + t.regrowMs;
-  }
-
-  /** soft ground shadow — sceneFx.addShadow (ADR-0018) */
+  // ---- sceneFx delegates (ADR-0018 transitional — callers migrate into systems)
   private addShadow(x: number, y: number, width: number): Phaser.GameObjects.Image {
     return addShadow(this, x, y, width);
   }
 
-  /** depth-sorted object image — sceneFx.objImage (ADR-0018) */
   private objImage(x: number, y: number, kind: string): Phaser.GameObjects.Image | null {
     return objImage(this, x, y, kind);
   }
 
-  private setObjTexture(img: Phaser.GameObjects.Image, kind: string): void {
-    setObjTexture(this, img, kind);
-  }
-
-  /** show the Resource Node's name in a small tooltip while the cursor hovers it */
-  private makeNodeHoverable(sprite: Phaser.GameObjects.Image, type: NodeState['type']): void {
-    sprite.setInteractive();
-    sprite.on('pointerover', () => {
-      // World Nodes stay interactive under the Delve overlay (only their physics
-      // colliders are disabled on entry); without this guard their hover label
-      // would surface over the Dungeon. No label while we're below.
-      if (this.inDelve) return;
-      if (!this.nodeHoverLabel) {
-        // same visual size as the remote-player name tags (fontSize 7, res 6)
-        // so hover text reads consistently across the World; the base scale is
-        // multiplied by the player's Name-label-size setting
-        this.nodeHoverLabel = this.add
-          .text(0, 0, '', {
-            fontSize: '7px',
-            color: '#e8f5e9',
-            stroke: '#000000',
-            strokeThickness: 2,
-            backgroundColor: 'rgba(10, 20, 8, 0.82)',
-            padding: { x: 4, y: 2 },
-          })
-          .setOrigin(0.5, 1)
-          .setResolution(6)
-          .setScale(this.labelScale())
-          .setDepth(999_995);
-      }
-      this.nodeHoverLabel
-        .setText(NODE_TYPES[type].name)
-        .setPosition(sprite.x, sprite.y - sprite.displayHeight - 2)
-        .setVisible(true);
-    });
-    sprite.on('pointerout', () => this.nodeHoverLabel?.setVisible(false));
-  }
-
-  private addNode(state: NodeState): void {
-    const x = (state.tx + 0.5) * TILE;
-    const y = (state.ty + 1) * TILE;
-    const alive = state.hp > 0;
-    const sprite = this.objImage(x, y, alive ? state.type : `${state.type}_depleted`);
-    if (!sprite) return;
-    this.makeNodeHoverable(sprite, state.type);
-    const h = idHash(state.id);
-    if (state.type === 'tree') {
-      sprite.setScale(nodeRestScale(state));
-      sprite.setFlipX(h % 2 === 0);
-      this.addShadow(x, y - 1, 26 * sprite.scaleX);
-    } else if (state.type === 'fruit_bush') {
-      sprite.setFlipX(h % 2 === 0);
-      this.addShadow(x, y - 1, 22);
-    } else if (state.type === 'rock') {
-      this.addShadow(x, y - 2, 16);
-    } else if (state.type === 'wildgrain_bed' && alive) {
-      // ADR-0017 rung 3: tint the fresh bed to its current growth stage so ripeness
-      // reads immediately on load (the 600ms refresh keeps it current thereafter)
-      sprite.setTint(WILDGRAIN_STAGE_TINT[wildgrainStage(Date.now(), idHash(state.id), CULTIVATION_PERIOD_MS)]);
-    }
-    let body: Phaser.GameObjects.Rectangle | null = null;
-    if (NODE_TYPES[state.type].blocks) {
-      body = this.addBlockerBody(state.tx, state.ty);
-      body.setData('nodeId', state.id);
-      (body.body as Phaser.Physics.Arcade.StaticBody).enable = alive;
-    }
-    this.nodes.set(state.id, { state, sprite, body, depletedShown: !alive });
-    this.nodesByTile.set(`${state.tx},${state.ty}`, state.id);
-  }
-
   private addBlockerBody(tx: number, ty: number): Phaser.GameObjects.Rectangle {
     return addBlockerBody(this, this.blockersGroup, tx, ty);
-  }
-
-  private updateNode(state: NodeState): void {
-    const view = this.nodes.get(state.id);
-    if (!view) return;
-    // J3: hp changes land HERE and only here (my own hit via the backend's
-    // nodeChanged relay, a friend's hit via the shared event, regrowth via
-    // checkRegrowthVisuals) — so the pip display hooks this exact spot and can
-    // never show a value the authoritative state doesn't hold.
-    const prevHp = view.state.hp;
-    view.state = state;
-    const alive = state.hp > 0;
-    if (alive === view.depletedShown) {
-      // state flipped relative to what we show
-      view.depletedShown = !alive;
-      this.setObjTexture(view.sprite, alive ? state.type : `${state.type}_depleted`);
-      if (view.body) (view.body.body as Phaser.Physics.Arcade.StaticBody).enable = alive;
-      // J3: the finishing hit is the payoff beat — a slightly larger debris
-      // burst rides the depletion squash below. Fired only on the flip (not on
-      // repeated depleted events) and only when actually visible: nodeChanged
-      // arrives for EVERY node on the map, and off-screen (or under the Delve
-      // overlay) a burst would be nothing but invisible tween churn.
-      if (!alive && this.nodeFxVisible(view)) this.nodeChipBurst(view, true);
-    }
-    if (!alive) {
-      // J3: a punch tween still mid-flight would hand the squash below a
-      // drifting start scale — settle the sprite at rest before the payoff
-      this.settleNodePunch(view);
-      this.hideNodePips(state.id); // depletion is the payoff beat; pips leave with it
-      // depleting hit lands: little poof of scale
-      this.tweens.add({ targets: view.sprite, scaleX: 1.15, scaleY: 0.9, duration: 80, yoyo: true });
-    } else if (state.hp < prevHp) {
-      // a landed hit left the node damaged — surface the authoritative hp
-      this.showNodePips(view);
-    } else if (state.hp > prevHp) {
-      this.hideNodePips(state.id); // regrown/refreshed — stale pips must not survive
-    }
-  }
-
-  private checkRegrowthVisuals(): void {
-    const now = Date.now();
-    for (const view of this.nodes.values()) {
-      if (!view.depletedShown || view.state.harvestedAt === null) continue;
-      const t = NODE_TYPES[view.state.type];
-      if (now >= view.state.harvestedAt + t.regrowMs) {
-        view.depletedShown = false;
-        view.state = { ...view.state, hp: t.maxHp, harvestedAt: null };
-        this.hideNodePips(view.state.id); // J3: back at max — no pips may linger
-        this.setObjTexture(view.sprite, view.state.type);
-        if (view.body) (view.body.body as Phaser.Physics.Arcade.StaticBody).enable = true;
-        // settle back to the sprite's PLANTED scale (trees vary by idHash) — a
-        // regrown tree left at flat 1.0 would visibly snap on its next punch
-        const rest = nodeRestScale(view.state);
-        this.tweens.add({ targets: view.sprite, scaleX: { from: rest * 0.6, to: rest }, scaleY: { from: rest * 0.6, to: rest }, duration: 250 });
-      }
-    }
-  }
-
-  /**
-   * ADR-0017 rung 3: retint every wildgrain bed by its clock-derived growth stage
-   * (bare → sprout → green → ripe golden) so ripeness sweeps the field as a spatial
-   * gradient. A pure f(clock, idHash) — every client reads the identical stage. The
-   * tint is reapplied each tick so it survives the depleted↔alive texture swaps; a
-   * depleted (harvested) bed shows its own stubble sprite untinted.
-   */
-  private refreshWildgrainStages(): void {
-    const now = Date.now();
-    for (const view of this.nodes.values()) {
-      if (view.state.type !== 'wildgrain_bed') continue;
-      if (view.depletedShown) {
-        view.sprite.clearTint();
-        continue;
-      }
-      view.sprite.setTint(WILDGRAIN_STAGE_TINT[wildgrainStage(now, idHash(view.state.id), CULTIVATION_PERIOD_MS)]);
-    }
-  }
-
-  // ------------------------------------------------- J3: harvest impact kit
-
-  /**
-   * Should node impact FX (chips, pips) render right now? nodeChanged events
-   * arrive for the WHOLE map — a friend harvesting three Zones away must not
-   * spawn invisible tweens here — and the Delve overlay (depth 900k+) hides
-   * the World entirely, so anything fired beneath it would be pure churn.
-   * Cheap: one rectangle-contains against the camera's live worldView.
-   */
-  private nodeFxVisible(view: NodeView): boolean {
-    return !this.inDelve && this.cameras.main.worldView.contains(view.sprite.x, view.sprite.y - TILE / 2);
-  }
-
-  /** chip debris off a node, tinted by its type, at roughly swing height */
-  private nodeChipBurst(view: NodeView, big: boolean): void {
-    const s = view.sprite;
-    this.burstChips(s.x, s.y - s.displayHeight * 0.4, s.depth + 2, CHIP_TINTS[view.state.type], big);
-  }
-
-  /**
-   * A short-lived burst of 2-3px debris chips — J4's death-puff pattern
-   * (tweened images off the shared 4px 'poof' texture, tinted per burst)
-   * tightened into impact debris: constant pixel size (0.5/0.75 of the 4px
-   * texture = whole 2/3px — no fractional-scaling shimmer), a flat outward
-   * scatter with a slight lift, and a hard TTL sweep so nothing strays. Never
-   * allocates a texture or an emitter — chips exist only at the impact point.
-   */
-  private burstChips(x: number, y: number, depth: number, tints: number[], big: boolean): void {
-    const n = big ? CHIP_COUNT_FINISH : CHIP_COUNT_HIT;
-    for (let i = 0; i < n; i++) {
-      const ang = (Math.PI * 2 * i) / n + (i % 2) * 0.7;
-      const dist = (big ? 12 : 8) + (i % 3) * 4;
-      const chip = this.add
-        .image(x + Math.cos(ang) * 2, y + Math.sin(ang), 'poof')
-        .setTint(tints[i % tints.length])
-        .setScale(i % 2 ? 0.5 : 0.75) // 2px / 3px off the 4px texture — whole pixels
-        .setDepth(depth);
-      this.tweens.add({
-        targets: chip,
-        x: x + Math.cos(ang) * dist,
-        y: y + Math.sin(ang) * dist * 0.5 - (big ? 6 : 4), // flattened scatter, slight lift
-        alpha: 0,
-        duration: 250 + (i % 4) * 40,
-        ease: 'Quad.out',
-        // each chip has exactly ONE tween, so its onComplete is the reap — no
-        // TTL constant to hand-sync against tween durations, nothing to leak
-        // if a duration is ever retuned. Scene teardown destroys chip and
-        // tween alike, so there is no orphan window.
-        onComplete: () => chip.destroy(),
-      });
-    }
-  }
-
-  /**
-   * The ~40ms hit punch: a squash (wider, slightly shorter) layered on the
-   * existing ±3° wobble — different properties (scale vs angle), so the two
-   * tweens compose freely. Kill-restart discipline like playSwingFx: a held-E
-   * cadence re-punches before the last settled, so the old tween dies and the
-   * sprite snaps back to its exact rest scale first (re-derived, never read
-   * mid-tween — see nodeRestScale) to rule out cumulative drift.
-   */
-  private punchNode(view: NodeView): void {
-    const s = view.sprite;
-    this.settleNodePunch(view);
-    const rest = nodeRestScale(view.state);
-    const tween = this.tweens.add({
-      targets: s,
-      scaleX: rest * 1.06,
-      scaleY: rest * 0.96,
-      duration: NODE_PUNCH_MS,
-      yoyo: true,
-      ease: 'Quad.out',
-      onComplete: () => {
-        s.setScale(rest);
-        s.setData(NODE_PUNCH_KEY, null);
-      },
-    });
-    s.setData(NODE_PUNCH_KEY, tween);
-  }
-
-  /** kill an in-flight punch and restore rest scale (no-op when none is running) */
-  private settleNodePunch(view: NodeView): void {
-    // Phaser's getData lazily ALLOCATES a DataManager on first touch, and this
-    // runs for every map-wide depletion event — most on sprites only remote
-    // Players ever hit, which can never hold a punch (punchNode is local-only).
-    // A punch implies punchNode's setData already built the manager, so a
-    // data-less sprite provably has no punch: bail before allocating.
-    if (!view.sprite.data) return;
-    const prev = view.sprite.getData(NODE_PUNCH_KEY) as Phaser.Tweens.Tween | null | undefined;
-    if (!prev) return;
-    prev.remove();
-    view.sprite.setScale(nodeRestScale(view.state));
-    view.sprite.setData(NODE_PUNCH_KEY, null);
-  }
-
-  /**
-   * Damage pips over a partially-damaged node: one 2px cell per max HP, lit
-   * for remaining hp — the mob HP bar's job in a quieter voice (no bright
-   * green, no outline; a whisper of UI fitting the restrained art direction).
-   * Draws from view.state.hp, which updateNode has just set from the
-   * authoritative event, so pips can never show a stale value. The display is
-   * created lazily, redrawn (kill-restart on its fade) while hits keep
-   * landing, and destroys ITSELF after hold+fade — steady state holds zero
-   * pip objects, satisfying the no-standing-overhead constraint.
-   */
-  private showNodePips(view: NodeView): void {
-    const st = view.state;
-    const max = NODE_TYPES[st.type].maxHp;
-    if (st.hp <= 0 || st.hp >= max) {
-      this.hideNodePips(st.id);
-      return;
-    }
-    if (!this.nodeFxVisible(view)) return;
-    let pip = this.nodePips.get(st.id);
-    if (!pip) {
-      pip = { gfx: this.add.graphics(), tween: null };
-      this.nodePips.set(st.id, pip);
-    }
-    const g = pip.gfx;
-    const w = max * (NODE_PIP_SIZE + NODE_PIP_GAP) - NODE_PIP_GAP;
-    // integer world position keeps the 2px cells on whole pixels at integer zoom
-    g.setPosition(Math.round(view.sprite.x - w / 2), Math.round(view.sprite.y - view.sprite.displayHeight) - 6);
-    g.setDepth(view.sprite.depth + 2);
-    g.setAlpha(1);
-    g.clear();
-    g.fillStyle(0x000000, 0.35); // faint backing so pips read on bright foliage
-    g.fillRect(-1, -1, w + 2, NODE_PIP_SIZE + 2);
-    for (let i = 0; i < max; i++) {
-      g.fillStyle(i < st.hp ? NODE_PIP_FILL : NODE_PIP_LOST, 1);
-      g.fillRect(i * (NODE_PIP_SIZE + NODE_PIP_GAP), 0, NODE_PIP_SIZE, NODE_PIP_SIZE);
-    }
-    // hold, then fade and self-destruct; another hit inside the window simply
-    // kill-restarts the countdown (the ~1.5s window measures from the LAST hit)
-    pip.tween?.remove();
-    pip.tween = this.tweens.add({
-      targets: g,
-      alpha: 0,
-      delay: NODE_PIP_HOLD_MS,
-      duration: NODE_PIP_FADE_MS,
-      onComplete: () => {
-        g.destroy();
-        this.nodePips.delete(st.id);
-      },
-    });
-  }
-
-  /** drop a node's pip display immediately (depletion payoff, regrowth) */
-  private hideNodePips(nodeId: string): void {
-    const pip = this.nodePips.get(nodeId);
-    if (!pip) return;
-    pip.tween?.remove();
-    pip.gfx.destroy();
-    this.nodePips.delete(nodeId);
   }
 
   /**
@@ -3078,155 +2687,13 @@ export class GameScene extends Phaser.Scene {
     const wild = this.wildlifeAction();
     if (wild) return wild;
 
-    let best: NodeView | null = null;
-    let bestDist = INTERACT_RANGE;
-    for (const view of this.nodes.values()) {
-      if (view.depletedShown) continue;
-      const d = Phaser.Math.Distance.Between(px, py, view.sprite.x, view.sprite.y - TILE / 2);
-      if (d < bestDist) {
-        bestDist = d;
-        best = view;
-      }
-    }
+    // the nearest live Resource Node in reach (fishing cast / gates / swing) —
+    // HarvestSystem.nodeAction; nothing in reach falls through to the Bow
+    const nodeAct = this.harvest.nodeAction(px, py);
+    if (nodeAct) return nodeAct;
     // nothing else in reach: a held Bow still shoots toward the cursor (the
     // trailing fallback — every verb above keeps its priority)
-    if (!best) return this.bowFallbackAction();
-    const view = best;
-    // fishing spots use the cast-and-wait rhythm when the rod is IN HAND;
-    // without it the server refusal (TOOL_REQUIRED) falls through below
-    if (view.state.type === 'fishing_spot' && this.heldItem === 'fishing_rod') {
-      return { swing: false, run: () => this.fishingSystem.startFishing(view) };
-    }
-    // ADR-0017 rung 1: the Tide gates the salt-reed banks — a reed is harvestable
-    // only while the ebb exposes it (validated within ±slack of the clock, the
-    // eyeOpenWithin idiom). A submerged reed refuses the swing (swing:false, like
-    // the pack cap) so it never mimes a chop to friends.
-    if (this.reedSubmerged(view)) {
-      return { swing: false, run: () => this.tideSubmergedToast() };
-    }
-    // ADR-0017 rung 3: Cultivation gates the wildgrain beds — a bed is reapable
-    // only in its ripe window (validated within ±slack of the clock, the same
-    // reed-exposure idiom). A still-growing bed refuses the swing (swing:false).
-    if (this.wildgrainUnripe(view)) {
-      return { swing: false, run: () => this.wildgrainGrowingToast(view) };
-    }
-    // ADR-0013 pack cap, resolved BEFORE the verb: a client-refused swing must
-    // not read as one — swing:false skips the cadence stamp, the pose/arc AND
-    // the peers' swing echo, so a full pack never mimes chopping to friends.
-    if (this.packWouldOverflow(view)) {
-      return { swing: false, run: () => this.packFullToast() };
-    }
-    return { swing: true, run: () => this.swingAtNode(view) };
-  }
-
-  /** true when a tide-gated Mire reed is currently submerged (un-harvestable) */
-  private reedSubmerged(view: NodeView): boolean {
-    if (view.state.type !== 'salt_reed_bed') return false;
-    return !tideExposedWithin(Date.now(), TIDE_PERIOD_MS, TIDE_EXPOSURE_SLACK_MS);
-  }
-
-  /** the tide-submerged refusal toast, throttled so repeats don't spam it */
-  private tideSubmergedToast(): void {
-    const now = Date.now();
-    if (now - this.tideToastAt > 1500) {
-      bus.emit('toast', t.toast.reedSubmerged, 'info');
-      this.tideToastAt = now;
-    }
-  }
-
-  /** true when a Cultivation-gated wildgrain bed is still growing (not yet ripe).
-   *  The bed's phase seed is a deterministic hash of its node id (idHash), stable
-   *  per node, so every client derives the identical ripeness (ADR-0001/0002). */
-  private wildgrainUnripe(view: NodeView): boolean {
-    if (view.state.type !== 'wildgrain_bed') return false;
-    return !wildgrainRipeWithin(Date.now(), idHash(view.state.id), CULTIVATION_PERIOD_MS, CULTIVATION_SLACK_MS);
-  }
-
-  /** the still-growing wildgrain refusal toast, throttled so repeats don't spam it;
-   *  shows the "ripens in Ns" countdown when known, else the plain growing hint */
-  private wildgrainGrowingToast(view: NodeView): void {
-    const now = Date.now();
-    if (now - this.cultivationToastAt > 1500) {
-      const ms = msToNextRipe(now, idHash(view.state.id), CULTIVATION_PERIOD_MS);
-      bus.emit('toast', ms > 0 ? t.cultivation.ripensIn(Math.ceil(ms / 1000)) : t.cultivation.bedGrowing, 'info');
-      this.cultivationToastAt = now;
-    }
-  }
-
-  /**
-   * ADR-0013: true when the Node's yield needs a NEW pack slot we lack room
-   * for (stacks of kinds already held always grow — a full pack leaves the
-   * resource in the world, no held item is ever lost). A pure read, safe
-   * inside the side-effect-free resolveEAction.
-   */
-  private packWouldOverflow(view: NodeView): boolean {
-    const cap = inventoryCapacity(this.villageSystem.village.tier);
-    const yields = Object.keys(NODE_TYPES[view.state.type]?.yield ?? {});
-    return yields.some((it) => !canAcceptItem(this.inventory, it, cap));
-  }
-
-  /** the pack-full refusal toast, throttled so repeats don't spam it */
-  private packFullToast(): void {
-    const now = Date.now();
-    if (now - this.packFullToastAt > 1500) {
-      bus.emit('toast', t.toast.packFull, 'bad');
-      this.packFullToastAt = now;
-    }
-  }
-
-  private swingAtNode(view: NodeView): void {
-    // pack-cap backstop: resolveEAction already resolves a full pack to
-    // swing:false, but the cap is CLIENT-side (ADR-0005) — a hit slipping
-    // through here would reach hitNode and overfill the pack, so keep the net.
-    if (this.packWouldOverflow(view)) {
-      this.packFullToast();
-      return;
-    }
-    // tide backstop (ADR-0017 rung 1): the exposure gate is client-side (ADR-0001),
-    // so keep the net here too — a submerged reed never reaches hitNode
-    if (this.reedSubmerged(view)) {
-      this.tideSubmergedToast();
-      return;
-    }
-    // cultivation backstop (ADR-0017 rung 3): the ripeness gate is client-side too,
-    // so keep the net here — a still-growing wildgrain bed never reaches hitNode
-    if (this.wildgrainUnripe(view)) {
-      this.wildgrainGrowingToast(view);
-      return;
-    }
-    this.tweens.add({ targets: view.sprite, angle: { from: -3, to: 3 }, duration: 60, yoyo: true, repeat: 1, onComplete: () => view.sprite.setAngle(0) });
-    // J3: debris chips + the squash punch ride the same optimism as the
-    // wobble/sfx above — fired on the swing, not the roundtrip (a server-
-    // refused hit still sparks, exactly as it already thunks). The pips and
-    // the yield float stay on the authoritative result, byte-identical.
-    this.nodeChipBurst(view, false);
-    this.punchNode(view);
-    const nodeType = view.state.type;
-    const swingSfx = nodeType === 'tree' || nodeType === 'hardwood_tree' ? 'chop' : nodeType === 'rock' || nodeType === 'obsidian_rock' ? 'pick' : 'harvest';
-    this.sfx(swingSfx, 0.5);
-    void this.backend.hitNode(view.state.id, this.heldTool()).then((result) => {
-      if (!result.ok) {
-        if (result.reason === 'TOOL_REQUIRED') {
-          bus.emit('toast', t.toast.needToolFor(ITEMS[result.requiredTool as StructureId]?.name ?? result.requiredTool), 'bad');
-        } else if (result.reason === 'DEPLETED') {
-          bus.emit('toast', t.toast.yieldTaken, 'bad');
-        }
-        return;
-      }
-      if (result.finishing && result.gained) {
-        const text = Object.entries(result.gained)
-          .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
-          .join('  ');
-        this.floatText(view.sprite.x, view.sprite.y - TILE, text, '#ffd166');
-        this.sfx('harvest', 0.6);
-        this.useHint('gather');
-        if (result.gained.wood) this.tickJourney('gather_wood');
-        if (result.gained.stone) this.tickJourney('harvest_stone');
-      }
-      if (result.inventory) {
-        this.setInv(result.inventory);
-      }
-    });
+    return this.bowFallbackAction();
   }
 
   // ------------------------------------------------------------ structures
@@ -3466,7 +2933,7 @@ export class GameScene extends Phaser.Scene {
   private tileBlockReason(item: StructureId, fx: number, fy: number): 'oob' | 'structure' | 'node' | 'terrain' | null {
     if (fx < 0 || fy < 0 || fx >= MAP_W || fy >= MAP_H) return 'oob';
     if (this.structuresByTile.has(`${fx},${fy}`)) return 'structure';
-    if (this.nodesByTile.has(`${fx},${fy}`)) return 'node';
+    if (this.harvest.nodesByTile.has(`${fx},${fy}`)) return 'node';
     const b = this.world.blocked[fy * MAP_W + fx];
     const onWater = !!ITEMS[item].onWater;
     if (onWater ? b !== 1 : b !== 0) return 'terrain';
@@ -3491,8 +2958,8 @@ export class GameScene extends Phaser.Scene {
     const { w, h } = footprint(item);
     for (let dy = 0; dy < h; dy++) {
       for (let dx = 0; dx < w; dx++) {
-        const id = this.nodesByTile.get(`${tx + dx},${ty + dy}`);
-        const view = id ? this.nodes.get(id) : undefined;
+        const id = this.harvest.nodesByTile.get(`${tx + dx},${ty + dy}`);
+        const view = id ? this.harvest.nodes.get(id) : undefined;
         if (view) return NODE_TYPES[view.state.type].name;
       }
     }
@@ -3999,7 +3466,7 @@ export class GameScene extends Phaser.Scene {
     // J3: the sealed shaft is not a Resource Node (its 4 hits live only in
     // this.rubbleHits), but it IS rock being picked — so it borrows the rock
     // debris from the harvest impact kit for a consistent read
-    this.burstChips(this.delveEntrance.x, this.delveEntrance.y - 6, this.delveEntrance.y + 2, CHIP_TINTS.rock, false);
+    this.harvest.burstChips(this.delveEntrance.x, this.delveEntrance.y - 6, this.delveEntrance.y + 2, CHIP_TINTS.rock, false);
     if (++this.rubbleHits < 4) return;
     this.rubbleHits = 0;
     void this.backend.openDelve().then((res) => {
