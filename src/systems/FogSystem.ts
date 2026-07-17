@@ -16,6 +16,7 @@ import { t, zoneName } from '../i18n';
 import type { AtmosphereSystem } from './AtmosphereSystem';
 import type { GameContext } from './context';
 import type { SealSystem } from './SealSystem';
+import type { VillageSystem } from './VillageSystem';
 import type { ElevationRegion, GameSystem } from './types';
 
 /**
@@ -54,6 +55,7 @@ export class FogSystem implements GameSystem {
 
   /** cross-system refs, wired by GameScene right after construction (ADR-0018 §3) */
   seal!: SealSystem;
+  village!: VillageSystem;
 
   constructor(
     private ctx: GameContext,
@@ -280,7 +282,7 @@ export class FogSystem implements GameSystem {
       ctx.bus.emit('warden-altar-near', nearVerdant ? 'verdant' : null);
     }
     // the Village Hall shows the tier/pool panel on approach (ADR-0010)
-    const hall = host.village.hall;
+    const hall = this.village.village.hall;
     const nearHall =
       !!hall &&
       Phaser.Math.Distance.Between(player.x, player.y, (hall.tx + 1) * TILE, (hall.ty + 1) * TILE) < TILE * 7;

@@ -187,6 +187,7 @@ import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
 import { SealSystem } from '../systems/SealSystem';
+import { VillageSystem } from '../systems/VillageSystem';
 import {
   addBlockerBody,
   addShadow,
@@ -461,24 +462,20 @@ export class GameScene extends Phaser.Scene {
   private atmosphere!: AtmosphereSystem;
   private fishingSystem!: FishingSystem;
   private sealSystem!: SealSystem;
+  private villageSystem!: VillageSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
    * the position stream (PlayerPos.swings) so peers can echo my swings.
    */
-  private swingCount = 0;
+  swingCount = 0;
   private quest: QuestState | null = null;
   private tabletSpots: { id: string; x: number; y: number }[] = [];
   private altarPos = { x: 0, y: 0 };
   private gateParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
   private digMarker: Phaser.GameObjects.Text | null = null;
-  // A3 (ADR-0010): the communal Village. `village` mirrors the backend record;
-  // the aura/banner render its automatic grandeur around the founded Hall.
-  village: VillageRecord = emptyVillage();
-  private villageAura?: Phaser.GameObjects.Graphics;
-  private villageBanner?: Phaser.GameObjects.Text;
   // ---- v2: the Guardian
-  private fight: FightState | null = null;
+  fight: FightState | null = null;
   /** per-Warden altar/gate progress (ADR-0017) — mirrors the backend's view */
   private wardens: Record<string, WardenWorldState> = {};
   private guardianSprite!: Phaser.GameObjects.Sprite;
@@ -678,8 +675,6 @@ export class GameScene extends Phaser.Scene {
   private hintText: Phaser.GameObjects.Text | null = null;
   // ---- v2: fishing, cooking, intro
   private buffUntil = 0;
-  /** the standing Hall's sprite, re-textured to match the Village tier (ADR-0013) */
-  private hallImg?: Phaser.GameObjects.Image;
   /** throttle for the "pack full" harvest toast (ADR-0013) */
   private packFullToastAt = 0;
   /** throttle for the tide-submerged reed refusal toast (ADR-0017 rung 1) */
@@ -1301,14 +1296,16 @@ export class GameScene extends Phaser.Scene {
       .setDepth(999_998)
       .setVisible(false);
     this.tweens.add({ targets: this.hintText, alpha: { from: 1, to: 0.55 }, duration: 700, yoyo: true, repeat: -1 });
-    this.bakeVillageTextures(); // A3: generate the Village Buildings' sprites (no PNG assets)
+    this.villageSystem = new VillageSystem(this.ctx, this);
+    this.systems.push(this.villageSystem);
+    this.villageSystem.create(); // bakes the Village textures + wires its listeners
     this.wireBackend();
     this.wireBus();
     this.recomputeWildHost(); // ADR-0012: elect the creature host now (re-run on every presence sync)
     bus.emit('journey', this.journey);
 
     void this.backend.loadWorld().then((snap) => {
-      this.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
+      this.villageSystem.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
       for (const n of snap.nodes) this.addNode(n);
       for (const s of snap.structures) this.addStructure(s);
       for (const p of snap.players) this.upsertRemote(p);
@@ -1347,6 +1344,7 @@ export class GameScene extends Phaser.Scene {
     this.atmosphere.create();
     this.fogSystem = new FogSystem(this.ctx, this, this.atmosphere);
     this.fogSystem.seal = this.sealSystem;
+    this.fogSystem.village = this.villageSystem;
     this.systems.push(this.fogSystem);
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
@@ -1507,7 +1505,6 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('presence', (players: PlayerPos[]) => this.reconcilePresence(players));
     this.backend.on('quest', (q: QuestState) => this.applyQuest(q));
     this.backend.on('gateOpened', () => this.openGateVisual());
-    this.backend.on('villageChanged', (v: VillageRecord) => this.applyVillage(v));
     this.backend.on('guardianSummoned', (f: FightState) => this.startFight(f, true));
     this.backend.on('guardianEngaged', (f: FightState) => this.engageFight(f));
     this.backend.on('guardianHit', (hp: number) => {
@@ -1560,158 +1557,6 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
     this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
     this.backend.on('creatures', (msg: CreatureMsg) => this.onCreatureMsg(msg));
-  }
-
-  // ------------------------------------------------------------ A3: the Village (ADR-0010)
-
-  /** bake a sprite for every Village Building + Wildlife decor from its art spec — no PNGs */
-  private bakeVillageTextures(): void {
-    for (const [id, art] of Object.entries({ ...VILLAGE_ART, ...WILDLIFE_ART, ...FORGE_ART, ...KILN_ART, ...CHIME_KILN_ART, ...VERDANT_LOOM_ART, ...RELIQUARY_ART })) {
-      if (!art) continue;
-      const key = `st_${id}`;
-      if (this.textures.exists(key)) continue;
-      const { w, h } = footprint(id as StructureId);
-      const W = w * TILE;
-      // buildings/monuments stand a tile (or two) taller than their footprint so
-      // the roof pokes up like every other object; decor stays low. `rise` overrides
-      // (the bell-towered hall rises 3 tiles so it out-scales the houses).
-      const extra = art.rise ?? (art.shape === 'monument' ? 2 : 1);
-      const H = (h + extra) * TILE;
-      const tex = this.textures.createCanvas(key, W, H);
-      if (!tex) continue;
-      drawStructureArt(tex.context, W, H, art);
-      tex.refresh();
-    }
-    // ADR-0013: the Hall re-sprites per Village tier (hut → grand bell-tower).
-    // Bake one texture per tier at the SAME size as st_village_hall so the
-    // standing sprite can be swapped in refreshVillageVisuals without moving.
-    const hallArt = VILLAGE_ART.village_hall;
-    if (hallArt) {
-      const { w, h } = footprint('village_hall');
-      const W = w * TILE;
-      const H = (h + (hallArt.rise ?? 1)) * TILE;
-      for (let tier = 1; tier <= VILLAGE_MAX_TIER; tier++) {
-        const key = `st_village_hall_${tier}`;
-        if (this.textures.exists(key)) continue;
-        const tex = this.textures.createCanvas(key, W, H);
-        if (!tex) continue;
-        drawStructureArt(tex.context, W, H, hallArt, tier);
-        tex.refresh();
-      }
-    }
-  }
-
-  private applyVillage(v: VillageRecord): void {
-    const wasFestival = festivalActive(this.village, Date.now());
-    this.village = { ...v, hall: v.hall ? { ...v.hall } : null };
-    const nowFestival = festivalActive(this.village, Date.now());
-    // a Dorffest can start from anyone's wish — announce the transition + drive the HUD badge
-    if (nowFestival && !wasFestival) bus.emit('toast', t.toast.festivalStarted, 'good');
-    bus.emit('festival', nowFestival ? this.village.festivalUntil ?? 0 : 0);
-    bus.emit('village', this.village);
-    this.refreshVillageVisuals();
-  }
-
-  /**
-   * The Village's automatic grandeur (ADR-0010 §3): a warm aura that grows and
-   * brightens each tier around the founded Hall, the fainter ring marking the
-   * village zone (where builds advance the tier), and a tier banner overhead.
-   */
-  private refreshVillageVisuals(): void {
-    const hall = this.village.hall;
-    if (!hall) {
-      this.villageAura?.destroy();
-      this.villageAura = undefined;
-      this.villageBanner?.destroy();
-      this.villageBanner = undefined;
-      this.hallImg = undefined;
-      return;
-    }
-    const { w, h } = footprint('village_hall');
-    const cx = (hall.tx + w / 2) * TILE;
-    const cy = (hall.ty + h / 2) * TILE;
-    const tier = Math.max(1, this.village.tier);
-    // ADR-0013: the standing Hall re-sprites to match the current tier
-    if (this.hallImg?.active) this.hallImg.setTexture(`st_village_hall_${Math.min(VILLAGE_MAX_TIER, tier)}`);
-    const warm = 0xffca7a;
-    if (!this.villageAura) this.villageAura = this.add.graphics().setDepth(-3);
-    const g = this.villageAura;
-    g.clear();
-    const radius = (5 + tier * 2.5) * TILE; // grows each tier — visible grandeur
-    g.fillStyle(warm, 0.04 + tier * 0.012);
-    g.fillCircle(cx, cy, radius);
-    g.lineStyle(2, warm, 0.3 + tier * 0.04);
-    g.strokeCircle(cx, cy, radius);
-    g.lineStyle(1, 0xffe9c9, 0.18); // the village zone: only in-zone builds advance the tier
-    g.strokeCircle(cx, cy, VILLAGE_ZONE_RADIUS * TILE);
-    const label = `🏛 ${this.village.name?.trim() || t.village.tierName(tier)}`;
-    const by = hall.ty * TILE - 6;
-    if (!this.villageBanner) {
-      this.villageBanner = this.add
-        .text(cx, by, label, { fontSize: '9px', color: '#ffe9c9', stroke: '#3a2a18', strokeThickness: 3 })
-        .setOrigin(0.5, 1)
-        .setResolution(4)
-        .setDepth(890_000);
-    } else {
-      this.villageBanner.setText(label).setPosition(cx, by);
-    }
-  }
-
-  /**
-   * E at the Hall opens the contribution panel (the HUD builds a slider per
-   * qualifying Resource from the current inventory). If nothing carried qualifies
-   * there is nothing to choose, so skip straight to the "nothing to give" toast.
-   */
-  private openVillageContribute(): void {
-    // the pool stops at the next tier's threshold until the milestone stands —
-    // a full pool refuses the panel outright so nothing can be taken
-    if (villagePoolCap(this.village.tier) - this.village.pool <= 0) {
-      bus.emit('toast', t.toast.villagePoolFull, 'bad');
-      return;
-    }
-    if (villageContribution(this.inventory).points <= 0) {
-      bus.emit('toast', t.toast.villageNothingToGive, 'bad');
-      return;
-    }
-    bus.emit('village-give-open', { ...this.inventory });
-  }
-
-  /**
-   * Pour the chosen amounts into the communal pool (the panel's Give button).
-   * `amounts` caps each item; omitted means "give it all" (kept for safety).
-   */
-  private contributeVillage(amounts?: Inventory): void {
-    // pre-clamp to the pool's remaining room so even the CURRENT live (cap-less)
-    // server can never over-fill — the explicit clamped amounts are what we send
-    const room = villagePoolCap(this.village.tier) - this.village.pool;
-    const clamped = villageContribution(this.inventory, amounts, Math.max(0, room));
-    if (clamped.points <= 0) {
-      bus.emit('toast', room <= 0 ? t.toast.villagePoolFull : t.toast.villageNothingToGive, 'bad');
-      bus.emit('village-give-close');
-      return;
-    }
-    void this.backend.contributeVillage(clamped.taken).then((res) => {
-      if (!res.ok) {
-        if (res.reason === 'NOTHING_TO_GIVE') bus.emit('toast', t.toast.villageNothingToGive, 'bad');
-        if (res.reason === 'POOL_FULL') bus.emit('toast', t.toast.villagePoolFull, 'bad');
-        return;
-      }
-      this.setInv(res.inventory);
-      const h = this.village.hall;
-      if (h) this.floatText((h.tx + 1) * TILE, h.ty * TILE - 8, `+${res.gained}`, '#ffca7a');
-      bus.emit('toast', t.toast.villageContributed(res.gained), 'good');
-      this.sfx('place', 0.6);
-      bus.emit('village-give-close');
-    });
-  }
-
-  /** true if a Village Hall may be raised now — only one may stand at a time (re-found by dismantling) */
-  private canFoundHall(): boolean {
-    if (this.village.hall) {
-      bus.emit('toast', t.toast.hallAlreadyStands, 'bad');
-      return false;
-    }
-    return true;
   }
 
   // ------------------------------------------------------------ v2: the Guardian fight
@@ -2986,7 +2831,7 @@ export class GameScene extends Phaser.Scene {
   private moveSpeedFactor(): number {
     const cooked = Date.now() < this.buffUntil ? SPEED_BUFF_FACTOR : 1;
     // ADR-0013: a running Dorffest (Wishing Well) speeds everyone in the World
-    const festival = festivalActive(this.village, Date.now()) ? FESTIVAL_SPEED_FACTOR : 1;
+    const festival = festivalActive(this.villageSystem.village, Date.now()) ? FESTIVAL_SPEED_FACTOR : 1;
     // ADR-0017 rung 1: the Tide's flood slows wading inside the Sunken Mire — a
     // pure f(clock), whole-district; the Mirefang's bearer ignores it (realm
     // synergy). Keyed on CARRYING the Mirefang (its item text promises the effect
@@ -2997,13 +2842,13 @@ export class GameScene extends Phaser.Scene {
         ? WADE_SLOW_FACTOR
         : 1;
     // ADR-0017 §3: the Tideglass Boots add their +8% beside the Village bonus
-    return cooked * festival * wade * (1 + villageBuff(this.village.tier).moveSpeed + armorBuff(this.equipped).moveSpeed);
+    return cooked * festival * wade * (1 + villageBuff(this.villageSystem.village.tier).moveSpeed + armorBuff(this.equipped).moveSpeed);
   }
 
   /** combat swing cadence with the Village's attack-speed buff folded in
    *  (ADR-0013) + the worn Gloves' bonus (ADR-0017 §3) */
   private atkCadence(baseMs: number): number {
-    return baseMs / (1 + villageBuff(this.village.tier).attackSpeed + armorBuff(this.equipped).attackSpeed);
+    return baseMs / (1 + villageBuff(this.villageSystem.village.tier).attackSpeed + armorBuff(this.equipped).attackSpeed);
   }
 
   /** the worn-Armor band raise of WHOEVER landed the hit (ADR-0017 §3): mine
@@ -3076,118 +2921,6 @@ export class GameScene extends Phaser.Scene {
     this.player.setTexture(myTexture, AVATAR_IDLE[this.lastDir]);
   }
 
-  /**
-   * The Victory Arch recalls the Player to the Village Hall — reuses the wake
-   * relocation position-write + a presence broadcast, with a camera fade so it
-   * reads as a ritual. Blocked while you are rostered in an ENGAGED Guardian
-   * fight, so it is never a combat escape. (The Arch is an overworld Structure
-   * and the Delve uses its own interaction resolver, so recall is unreachable
-   * from inside a Dungeon.)
-   */
-  private recallHome(): void {
-    const hall = this.village.hall;
-    if (!hall) {
-      bus.emit('toast', t.toast.recallNoHome, 'bad');
-      return;
-    }
-    if (this.fight?.roster.includes(this.me.name)) {
-      bus.emit('toast', t.toast.recallNoFight, 'bad');
-      return;
-    }
-    const { w, h } = footprint('village_hall');
-    const tx = hall.tx + Math.floor(w / 2);
-    const ty = hall.ty + h; // stand just below the Hall footprint
-    const cam = this.cameras.main;
-    cam.fadeOut(200, 0, 0, 0, (_c: Phaser.Cameras.Scene2D.Camera, progress: number) => {
-      if (progress < 1) return;
-      this.player.setVelocity(0, 0);
-      this.player.setPosition((tx + 0.5) * TILE, (ty + 0.5) * TILE);
-      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined, this.swingCount);
-      cam.fadeIn(200, 0, 0, 0);
-      this.sfx('blip', 0.5);
-      bus.emit('toast', t.toast.recalled, 'good');
-    });
-  }
-
-  /** the Stone Keep's bell — a broadcast rally to every online Player (reuses chat, ADR-0013) */
-  private ringBell(): void {
-    void this.backend.sendChat(`🔔 ${this.me.name} rings the bell — gather at the Village!`);
-    this.sfx('blip', 0.6);
-    bus.emit('toast', t.toast.bellRung, 'good');
-  }
-
-  /** the Market Square Trade Post (ADR-0013): open the resource-exchange panel */
-  private openTradePost(): void {
-    bus.emit('trade-open', { inventory: { ...this.inventory }, tier: this.village.tier });
-  }
-
-  private doTrade(give: ItemId, count: number, get: ItemId): void {
-    void this.backend.tradeMarket(give, count, get).then((res) => {
-      if (!res.ok) {
-        bus.emit('toast', t.toast.tradeFailed, 'bad');
-        return;
-      }
-      this.setInv(res.inventory);
-      bus.emit('toast', t.toast.traded(res.got.count, ITEMS[res.got.item]?.name ?? res.got.item), 'good');
-      this.sfx('craft', 0.6);
-      bus.emit('trade-close');
-    });
-  }
-
-  /** the Banner names the Village + picks a crest hue (ADR-0013) */
-  private setVillageName(name: string, crest: number): void {
-    void this.backend.setVillageName(name, crest).then((res) => {
-      this.applyVillage(res.village);
-      bus.emit('toast', t.toast.villageNamed(res.village.name ?? ''), 'good');
-    });
-  }
-
-  /** the Well's Chronicle: auto-seeded tier lines (derived) + persisted player notes */
-  private openChronicle(): void {
-    const auto = VILLAGE_TIERS.filter((d) => d.tier >= 1 && d.tier <= this.village.tier).map(
-      (d) => t.chron.became(t.village.tierName(d.tier)),
-    );
-    bus.emit('chronicle-open', { lines: [...auto, ...(this.village.chronicle ?? [])] });
-  }
-
-  private addVillageNote(text: string): void {
-    if (!text.trim()) return;
-    void this.backend.addVillageNote(text).then((res) => {
-      this.applyVillage(res.village);
-      this.openChronicle();
-    });
-  }
-
-  /** the Fountain Wishing Well (ADR-0013): open the Dorffest contribution panel */
-  private openFountain(): void {
-    bus.emit('fountain-open', {
-      have: this.inventory[FOUNTAIN_WISH_ITEM as ItemId] ?? 0,
-      wishes: this.village.wishes ?? 0,
-      threshold: FOUNTAIN_WISH_THRESHOLD,
-      festivalUntil: this.village.festivalUntil ?? 0,
-    });
-  }
-
-  private doWish(count: number): void {
-    void this.backend.wishFountain(count).then((res) => {
-      if (!res.ok) {
-        bus.emit('toast', res.reason === 'FESTIVAL_ACTIVE' ? t.toast.festivalRunning : t.toast.wishFailed, 'bad');
-        return;
-      }
-      this.setInv(res.inventory);
-      this.applyVillage(res.village); // emits the 🎉 toast on the start transition
-      this.sfx('blip', 0.5);
-      if (!res.festivalStarted) bus.emit('toast', t.toast.wished(count), 'good');
-      this.openFountain(); // refresh the panel with the new meter
-    });
-  }
-
-  /** the Flower Bed: tend it (cosmetic bloom) */
-  private tendFlowers(): void {
-    this.sfx('harvest', 0.4);
-    bus.emit('toast', t.toast.flowersTended, 'good');
-  }
-
   private wireBus(): void {
     // v4: the HUD Loadout bar reports which single item is in-hand (keys 1–5)
     bus.on('held', (id: ItemId | null) => {
@@ -3235,12 +2968,6 @@ export class GameScene extends Phaser.Scene {
     // the legacy gear weapon slots: only the HUD migration's CLEAR path fires now
     bus.on('weapon-slot-set', (slot: WeaponSlot, item: ItemId | null) => this.setWeaponSlot(slot, item));
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
-    // the Village contribution panel's Give button: pour the chosen amounts in
-    bus.on('village-give', (amounts: Inventory) => this.contributeVillage(amounts));
-    bus.on('trade-do', (o: { give: ItemId; count: number; get: ItemId }) => this.doTrade(o.give, o.count, o.get));
-    bus.on('fountain-wish', (count: number) => this.doWish(count));
-    bus.on('village-name-set', (o: { name: string; crest: number }) => this.setVillageName(o.name, o.crest));
-    bus.on('village-note-add', (text: string) => this.addVillageNote(text));
     // crate storage / Sawmill ops requested by the HUD panels
     bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
       void this.backend.crateDeposit(crateId, item, count).then((res) => {
@@ -3824,24 +3551,24 @@ export class GameScene extends Phaser.Scene {
     // the Village Hall: E opens the contribution panel — per-resource sliders let
     // the Player choose how much of each qualifying Resource/loot to give (ADR-0010)
     const hall = this.nearbyStructure(['village_hall']);
-    if (hall) return { swing: false, run: () => this.openVillageContribute() };
+    if (hall) return { swing: false, run: () => this.villageSystem.openVillageContribute() };
 
     // ADR-0013 building functions: the Victory Arch recalls you home; the Stone
     // Keep rings the muster bell to call everyone to the Village.
     const arch = this.nearbyStructure(['victory_arch']);
-    if (arch) return { swing: false, run: () => this.recallHome() };
+    if (arch) return { swing: false, run: () => this.villageSystem.recallHome() };
     const keep = this.nearbyStructure(['stone_keep']);
-    if (keep) return { swing: false, run: () => this.ringBell() };
+    if (keep) return { swing: false, run: () => this.villageSystem.ringBell() };
     const market = this.nearbyStructure(['market_square']);
-    if (market) return { swing: false, run: () => this.openTradePost() };
+    if (market) return { swing: false, run: () => this.villageSystem.openTradePost() };
     const banner = this.nearbyStructure(['village_banner']);
-    if (banner) return { swing: false, run: () => bus.emit('village-name-open', { name: this.village.name ?? '', crest: this.village.crest ?? 0 }) };
+    if (banner) return { swing: false, run: () => bus.emit('village-name-open', { name: this.villageSystem.village.name ?? '', crest: this.villageSystem.village.crest ?? 0 }) };
     const well = this.nearbyStructure(['village_well']);
-    if (well) return { swing: false, run: () => this.openChronicle() };
+    if (well) return { swing: false, run: () => this.villageSystem.openChronicle() };
     const fountain = this.nearbyStructure(['fountain']);
-    if (fountain) return { swing: false, run: () => this.openFountain() };
+    if (fountain) return { swing: false, run: () => this.villageSystem.openFountain() };
     const flowerBed = this.nearbyStructure(['flower_bed']);
-    if (flowerBed) return { swing: false, run: () => this.tendFlowers() };
+    if (flowerBed) return { swing: false, run: () => this.villageSystem.tendFlowers() };
     // ADR-0015: the Grand Monument — until now the one interaction-less Building —
     // is the Depth Record stone: E opens the engraved record board
     const monument = this.nearbyStructure(['grand_monument']);
@@ -3973,7 +3700,7 @@ export class GameScene extends Phaser.Scene {
    * inside the side-effect-free resolveEAction.
    */
   private packWouldOverflow(view: NodeView): boolean {
-    const cap = inventoryCapacity(this.village.tier);
+    const cap = inventoryCapacity(this.villageSystem.village.tier);
     const yields = Object.keys(NODE_TYPES[view.state.type]?.yield ?? {});
     return yields.some((it) => !canAcceptItem(this.inventory, it, cap));
   }
@@ -4157,7 +3884,7 @@ export class GameScene extends Phaser.Scene {
     if (!def) return;
     const key =
       s.type === 'village_hall'
-        ? `st_village_hall_${Math.max(1, Math.min(VILLAGE_MAX_TIER, this.village.tier))}`
+        ? `st_village_hall_${Math.max(1, Math.min(VILLAGE_MAX_TIER, this.villageSystem.village.tier))}`
         : `st_${s.type}`;
     const x = (s.tx + w / 2) * TILE;
     const baseY = (s.ty + h) * TILE;
@@ -4169,7 +3896,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const objects: Phaser.GameObjects.GameObject[] = [img];
-    if (s.type === 'village_hall') this.hallImg = img;
+    if (s.type === 'village_hall') this.villageSystem.hallImg = img;
     const bodies: Phaser.GameObjects.Rectangle[] = [];
     let glowImg: Phaser.GameObjects.Image | null = null;
     if (s.type === 'bridge') {
@@ -4270,7 +3997,7 @@ export class GameScene extends Phaser.Scene {
   private enterPlaceMode(item: StructureId): void {
     if (this.inDelve) return; // no building inside the ephemeral Delve
     if ((this.inventory[item] ?? 0) <= 0) return;
-    if (item === 'village_hall' && !this.canFoundHall()) return; // only one Hall stands at a time (ADR-0010)
+    if (item === 'village_hall' && !this.villageSystem.canFoundHall()) return; // only one Hall stands at a time (ADR-0010)
     this.placing = item;
     this.ghost?.destroy();
     this.ghost = this.objImage(0, 0, `st_${item}`);
@@ -4465,7 +4192,7 @@ export class GameScene extends Phaser.Scene {
 
   /** place `item` on a specific tile — signposts prompt for their line first */
   private placeAtTile(item: StructureId, tx: number, ty: number): void {
-    if (item === 'village_hall' && !this.canFoundHall()) return; // backstop for drag-place (ADR-0010)
+    if (item === 'village_hall' && !this.villageSystem.canFoundHall()) return; // backstop for drag-place (ADR-0010)
     if (item === 'signpost') {
       // the signpost line prompt freezes movement through the same chat-focus
       // wiring as the chat box
@@ -4556,7 +4283,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private doPlace(item: StructureId, tx: number, ty: number, text?: string): void {
-    const foundingHall = item === 'village_hall' && !this.village.hall; // first founding for the celebratory toast
+    const foundingHall = item === 'village_hall' && !this.villageSystem.village.hall; // first founding for the celebratory toast
     void this.backend.placeStructure(item, tx, ty, text).then((result) => {
       if (result.ok) {
         this.setInv(result.inventory);
@@ -5285,7 +5012,7 @@ export class GameScene extends Phaser.Scene {
    *  as amended: Village Hall > World spawn; the Hammock rung is retired), shared
    *  by every Exhaustion path */
   private villageWakeTile(): { tx: number; ty: number } | null {
-    const hall = this.village?.hall;
+    const hall = this.villageSystem.village?.hall;
     return hall ? { tx: hall.tx, ty: hall.ty + footprint('village_hall').h } : null;
   }
 
@@ -5565,7 +5292,7 @@ export class GameScene extends Phaser.Scene {
     const m = this.mobs.get(mobId);
     if (!m || m.st === 'dead') return;
     if (!this.delveHitInRange(by, m)) return; // loose trusted-friends range check (ADR-0005)
-    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance, this.armorBandOf(by));
+    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.villageSystem.village.tier).critChance, this.armorBandOf(by));
     this.delveParticipants.add(by);
     if (by === this.me.name) this.delveHitLanded = true;
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
@@ -6490,7 +6217,7 @@ export class GameScene extends Phaser.Scene {
    * predators only ever spawn/roam on a tile whose Zone carries `dangerous`.
    */
   private dangerAt(tx: number, ty: number): boolean {
-    if (inVillageZone(this.village, tx, ty)) return false; // the Village never has teeth
+    if (inVillageZone(this.villageSystem.village, tx, ty)) return false; // the Village never has teeth
     for (const z of this.world.zones) {
       if (tx >= z.x && tx < z.x + z.w && ty >= z.y && ty < z.y + z.h) return !!z.dangerous;
     }
@@ -6585,12 +6312,12 @@ export class GameScene extends Phaser.Scene {
       const rage = this.wildRage.get(m.id);
       if (rage) {
         const quarry = now < rage.until ? this.wildPlayerPos(rage.by) : null;
-        const quarrySafe = !quarry || inVillageZone(this.village, Math.floor(quarry.x), Math.floor(quarry.y));
+        const quarrySafe = !quarry || inVillageZone(this.villageSystem.village, Math.floor(quarry.x), Math.floor(quarry.y));
         if (quarry && !quarrySafe) {
-          const mobInVillage = inVillageZone(this.village, Math.floor(m.x), Math.floor(m.y));
+          const mobInVillage = inVillageZone(this.villageSystem.village, Math.floor(m.x), Math.floor(m.y));
           const ev = stepMob(m, {
             targets: [quarry],
-            isWall: (tx, ty) => !this.wildWalkable(tx, ty) || (!mobInVillage && inVillageZone(this.village, tx, ty)),
+            isWall: (tx, ty) => !this.wildWalkable(tx, ty) || (!mobInVillage && inVillageZone(this.villageSystem.village, tx, ty)),
             dt: delta,
             rng: Math.random,
             profile: RAGE_PROFILES[m.kind as WildKind],
@@ -6908,7 +6635,7 @@ export class GameScene extends Phaser.Scene {
   private applyWildHit(id: string, tool: ToolId | undefined, by: string): void {
     const m = this.wildMobs.get(id);
     if (!m || m.st === 'dead') return;
-    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.village.tier).critChance, this.armorBandOf(by));
+    const roll = applyMobHit(m, tool, Math.random, villageBuff(this.villageSystem.village.tier).critChance, this.armorBandOf(by));
     const prof = profileOf(m.kind);
     const fx = m.x * TILE + Phaser.Math.Between(-6, 6);
     const fy = m.y * TILE - prof.radius * TILE - 8;
