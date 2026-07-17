@@ -15,6 +15,7 @@ import type { GameScene } from '../scenes/GameScene';
 import { t, zoneName } from '../i18n';
 import type { AtmosphereSystem } from './AtmosphereSystem';
 import type { GameContext } from './context';
+import type { SealSystem } from './SealSystem';
 import type { ElevationRegion, GameSystem } from './types';
 
 /**
@@ -50,6 +51,9 @@ export class FogSystem implements GameSystem {
     this.worldLabelScale = mult;
     this.applyWorldLabelScale();
   };
+
+  /** cross-system refs, wired by GameScene right after construction (ADR-0018 §3) */
+  seal!: SealSystem;
 
   constructor(
     private ctx: GameContext,
@@ -244,7 +248,7 @@ export class FogSystem implements GameSystem {
     this.leavesActive = zone === 'Dense Grove' || zone === 'Hidden Grove' || zone === 'Deep Jungle';
     // the Seal monument shows its progress on approach
     const nearMon =
-      Phaser.Math.Distance.Between(player.x, player.y, host.monumentPos.x, host.monumentPos.y) < TILE * 6;
+      Phaser.Math.Distance.Between(player.x, player.y, this.seal.monumentPos.x, this.seal.monumentPos.y) < TILE * 6;
     if (nearMon !== this.nearMonument) {
       this.nearMonument = nearMon;
       ctx.bus.emit('seal-near', nearMon);

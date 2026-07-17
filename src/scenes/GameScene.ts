@@ -186,6 +186,7 @@ import type { GameContext } from '../systems/context';
 import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
+import { SealSystem } from '../systems/SealSystem';
 import {
   addBlockerBody,
   addShadow,
@@ -438,7 +439,7 @@ export class GameScene extends Phaser.Scene {
   private sawmillBlades = new Map<string, { blade: Phaser.GameObjects.Image; x: number; y: number; baseY: number; nextPuff: number }>();
   /** per-Sawmill "milling until" timestamp — derived from its last observed state */
   private sawmillMillingUntil = new Map<string, number>();
-  private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
+  blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
   /** the worn gear (ADR-0017 §4) — armor bakes into my sheet; the legacy weapon
@@ -459,6 +460,7 @@ export class GameScene extends Phaser.Scene {
   private fogSystem!: FogSystem;
   private atmosphere!: AtmosphereSystem;
   private fishingSystem!: FishingSystem;
+  private sealSystem!: SealSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
@@ -470,10 +472,6 @@ export class GameScene extends Phaser.Scene {
   private altarPos = { x: 0, y: 0 };
   private gateParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
   private digMarker: Phaser.GameObjects.Text | null = null;
-  // ---- v2: the Seal
-  private seal: SealState | null = null;
-  monumentPos = { x: 0, y: 0 };
-  private sealBarrierParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
   // A3 (ADR-0010): the communal Village. `village` mirrors the backend record;
   // the aura/banner render its automatic grandeur around the founded Hall.
   village: VillageRecord = emptyVillage();
@@ -871,17 +869,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // ---- v2 landmarks
-    // Seal monument outside the arena entrance (E to contribute Offerings)
-    {
-      const m = this.world.sealMonument;
-      const x = (m.tx + 1) * TILE;
-      const y = (m.ty + 1) * TILE;
-      this.objImage(x, y, 'seal_monument');
-      this.addBlockerBody(m.tx, m.ty);
-      this.addBlockerBody(m.tx + 1, m.ty);
-      this.addShadow(x, y - 1, 28);
-      this.monumentPos = { x, y };
-    }
+    // Seal monument outside the arena entrance — SealSystem.create (ADR-0018)
+    this.sealSystem = new SealSystem(this.ctx, this);
+    this.systems.push(this.sealSystem);
+    this.sealSystem.create();
     // arena altar (E with a Summoning Totem)
     {
       const a = this.world.guardianAltar;
@@ -1325,8 +1316,8 @@ export class GameScene extends Phaser.Scene {
       this.emitPresence();
       this.applyQuest(snap.quest);
       if (!snap.quest.gateOpen) this.buildGate();
-      this.applySeal(snap.seal);
-      if (!snap.seal.broken) this.buildSealBarrier();
+      this.sealSystem.applySeal(snap.seal);
+      if (!snap.seal.broken) this.sealSystem.buildSealBarrier();
       // ADR-0017: per-Warden altar/gate progress — re-dress gates already open
       this.wardens = snap.wardens ?? {};
       for (const [id, w] of Object.entries(this.wardens)) bus.emit('warden-altar', id, w.altar);
@@ -1355,6 +1346,7 @@ export class GameScene extends Phaser.Scene {
     // leaves, and the elevation/waterfall world dressing (ADR-0009).
     this.atmosphere.create();
     this.fogSystem = new FogSystem(this.ctx, this, this.atmosphere);
+    this.fogSystem.seal = this.sealSystem;
     this.systems.push(this.fogSystem);
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
@@ -1515,8 +1507,6 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('presence', (players: PlayerPos[]) => this.reconcilePresence(players));
     this.backend.on('quest', (q: QuestState) => this.applyQuest(q));
     this.backend.on('gateOpened', () => this.openGateVisual());
-    this.backend.on('sealChanged', (s: SealState) => this.applySeal(s));
-    this.backend.on('sealBroken', () => this.epicSealBreak());
     this.backend.on('villageChanged', (v: VillageRecord) => this.applyVillage(v));
     this.backend.on('guardianSummoned', (f: FightState) => this.startFight(f, true));
     this.backend.on('guardianEngaged', (f: FightState) => this.engageFight(f));
@@ -1570,18 +1560,6 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
     this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
     this.backend.on('creatures', (msg: CreatureMsg) => this.onCreatureMsg(msg));
-  }
-
-  // ------------------------------------------------------------ v2: the Seal
-
-  private applySeal(seal: SealState): void {
-    this.seal = seal;
-    bus.emit('seal', seal);
-    // The Seal breaks once, forever — a Player joining after the break can never
-    // lay an Offering (contributeSeal is toast-only then), which would deadlock
-    // the Journey's last step and the tracker handover. The World's broken Seal
-    // counts as this Player's Offering; tickJourney is idempotent.
-    if (seal.broken) this.tickJourney('first_offering');
   }
 
   // ------------------------------------------------------------ A3: the Village (ADR-0010)
@@ -1734,51 +1712,6 @@ export class GameScene extends Phaser.Scene {
       return false;
     }
     return true;
-  }
-
-  private buildSealBarrier(): void {
-    for (const g of this.world.sealGate) {
-      const x = (g.tx + 0.5) * TILE;
-      const y = (g.ty + 1) * TILE;
-      const sprite = this.add.image(x, y, 'seal-barrier');
-      sprite.setOrigin(0.5, 1);
-      sprite.setDepth(y);
-      sprite.setAlpha(0.85);
-      this.tweens.add({ targets: sprite, alpha: 0.6, duration: 900, yoyo: true, repeat: -1, ease: 'sine.inout' });
-      const body = this.addBlockerBody(g.tx, g.ty);
-      this.sealBarrierParts.push({ sprite, body });
-    }
-  }
-
-  /** the one-time, forever moment */
-  private epicSealBreak(): void {
-    this.sfx('seal_gong', 0.8);
-    this.cameras.main.shake(600, 0.008);
-    this.cameras.main.flash(500, 180, 140, 255);
-    for (const part of this.sealBarrierParts) {
-      this.tweens.killTweensOf(part.sprite);
-      this.add
-        .particles(part.sprite.x, part.sprite.y - 12, 'glow', {
-          scale: { start: 0.14, end: 0 },
-          tint: 0xb478ff,
-          blendMode: 'ADD',
-          speed: { min: 20, max: 70 },
-          lifespan: 900,
-          quantity: 14,
-          emitting: false,
-        })
-        .explode(14);
-      this.tweens.add({
-        targets: part.sprite,
-        alpha: 0,
-        y: part.sprite.y - 14,
-        duration: 900,
-        onComplete: () => part.sprite.destroy(),
-      });
-      part.body.destroy();
-    }
-    this.sealBarrierParts = [];
-    bus.emit('toast', t.toast.sealBroken, 'good');
   }
 
   // ------------------------------------------------------------ v2: the Guardian fight
@@ -2394,7 +2327,7 @@ export class GameScene extends Phaser.Scene {
     const range = bow ? TILE * 8 : INTERACT_RANGE + TILE * 2;
     if (d > range) return null;
     if (!this.fight) {
-      if (this.seal?.broken) {
+      if (this.sealSystem.seal?.broken) {
         return {
           swing: false,
           run: () => bus.emit('toast', t.toast.guardianSlumbersLay, 'info'),
@@ -2701,33 +2634,6 @@ export class GameScene extends Phaser.Scene {
             bus.emit('toast', t.toast.fightAlreadyRaging, 'bad');
           } else if (res.reason === 'NO_TOTEM') {
             bus.emit('toast', t.toast.wardenAwaitsTotem(ITEMS[def.totem].name), 'bad');
-          }
-        });
-      },
-    };
-  }
-
-  private contributeSealAction(): EAction | null {
-    const d = Phaser.Math.Distance.Between(this.player.x, this.player.y - 4, this.monumentPos.x, this.monumentPos.y - 8);
-    if (d > INTERACT_RANGE + 8) return null;
-    if (this.seal?.broken) {
-      return { swing: false, run: () => bus.emit('toast', t.toast.sealBrokenArenaOpen, 'info') };
-    }
-    return {
-      swing: false,
-      run: () => {
-        void this.backend.contributeSeal().then((res) => {
-          if (res.ok) {
-            this.setInv(res.inventory);
-            const text = Object.entries(res.taken)
-              .map(([item, n]) => `-${n} ${item}`)
-              .join('  ');
-            this.floatText(this.monumentPos.x, this.monumentPos.y - 20, text, '#b478ff');
-            bus.emit('toast', t.toast.laidOfferings, 'good');
-            this.sfx('place', 0.6);
-            this.tickJourney('first_offering');
-          } else if (res.reason === 'NOTHING_TO_GIVE') {
-            bus.emit('toast', t.toast.offerNothingNeeded, 'bad');
           }
         });
       },
@@ -3864,7 +3770,7 @@ export class GameScene extends Phaser.Scene {
         };
       }
     }
-    const special = this.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.echoAltarAction() ?? this.verdantAltarAction() ?? this.guardianAction();
+    const special = this.sealSystem.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.echoAltarAction() ?? this.verdantAltarAction() ?? this.guardianAction();
     if (special) return special;
     if (Phaser.Math.Distance.Between(px, py, this.altarPos.x, this.altarPos.y - 8) < INTERACT_RANGE + 8) {
       return {
