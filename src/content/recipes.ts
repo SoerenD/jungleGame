@@ -108,16 +108,14 @@ export const RECIPES: Recipe[] = [
   // verdant fibre on the generic kernel). A 2×2 Building; its cost ties to the
   // Hushdark tier (hushsteel), as the Chime Kiln's ties to the Mire's tideglass.
   { id: 'verdant_loom', output: 'verdant_loom', count: 1, cost: { plank: 4, stone: 6, hushsteel: 2 }, requiresTool: 'hammer', kind: 'structure' },
-  // ...and the new functional Structures + decor consume its planks
-  { id: 'hammock', output: 'hammock', count: 1, cost: { plank: 2, fiber: 3 }, kind: 'structure' },
+  // ...and the new functional Structures consume its planks (the hammock and
+  // table were retired in the 2026-07 playtest batch — the fence/hut_wall pattern)
   { id: 'signpost', output: 'signpost', count: 1, cost: { plank: 1, fiber: 1 }, kind: 'structure' },
-  { id: 'table', output: 'table', count: 1, cost: { plank: 3 }, kind: 'structure' },
 
   // v2 tier-2 structures ("tier 2 builds on refined wood": planks replace raw wood)
   { id: 'obsidian_statue', output: 'obsidian_statue', count: 1, cost: { obsidian: 4 }, kind: 'structure' },
   { id: 'hardwood_arch', output: 'hardwood_arch', count: 1, cost: { hardwood: 4, plank: 2 }, requiresTool: 'hammer', kind: 'structure' },
   { id: 'guardian_trophy', output: 'guardian_trophy', count: 1, cost: { guardian_scale: 5, obsidian: 2 }, kind: 'structure' },
-  { id: 'obsidian_path', output: 'obsidian_path', count: 1, cost: { obsidian: 2 }, kind: 'structure' },
   { id: 'brazier', output: 'brazier', count: 1, cost: { obsidian: 2, plank: 2 }, kind: 'structure' },
 
   // ADR-0012 — decor forged from Wildlife loot (no power; cozy expression only)

@@ -42,7 +42,7 @@ A crafted item a Player equips and holds to act. Gathering Tools (axe, pickaxe, 
 _Avoid_: gear ("equip" and "equipment" are now first-class — see Loadout)
 
 **Loadout**:
-The three quick-slots holding a Player's ready Tools. Exactly one slot is in-hand at a time (number keys 1–3 switch); only the in-hand Tool acts, and it renders in the Player's hand, synced so every Player sees what everyone is holding. Which Tools fill the slots is a Player's choice.
+The hotbar of a Player's ready gear: three quick-slots for Tools (keys 1–3) plus two dedicated weapon slots (keys 4–5). Exactly one cell is in-hand at a time; only the in-hand item acts, and it renders in the Player's hand, synced so every Player sees what everyone is holding. Tools sit in quick-slots by reference; slotting a weapon MOVES it out of the pack into the persisted gear record (the Armor pattern) and unequipping returns it.
 _Avoid_: hotbar, belt, equipment slot (informal UI words for the same thing)
 
 **Hand Torch**:

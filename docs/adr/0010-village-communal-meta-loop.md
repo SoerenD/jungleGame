@@ -32,7 +32,8 @@ never-finished** progression on top of the Buildings system (ADR-0008): the Vill
    system for a trusted group); that spot **becomes** the Village (zone = a radius around the Hall).
    The Hall can be **re-founded** elsewhere (deliberate); the tier/pool belong to the **group, never
    the tile**, so moving or dismantling the Hall **never resets progress**. Founding makes the Hall
-   the **communal wake/spawn point** — priority **Hammock > Village Hall > World spawn** — so wherever
+   the **communal wake/spawn point** — priority **Village Hall > World spawn** (amended 2026-07: the
+   Hammock rung is retired with the Hammock itself; migration 0019) — so wherever
    the Village is founded becomes *home*, which is what keeps a bigger World (ADR-0009) from spreading
    the group thin. Build-anywhere still holds; only **village-zone** builds advance the tier.
 5. **Cozy guardrails.** **No decay / no upkeep** (only grows; permanent, additive); **optional &
@@ -66,7 +67,8 @@ never-finished** progression on top of the Buildings system (ADR-0008): the Vill
   backends.
 - **The Hall is a special Structure:** founding structure + contribution UI + tier/pool display +
   communal spawn anchor.
-- **Spawn resolution gains a tier:** Hammock > Village Hall > World spawn.
+- **Spawn resolution gains a tier:** Village Hall > World spawn (amended 2026-07 — the Hammock rung
+  retired with the Hammock structure).
 - **Depends on ADR-0008 (Buildings)** — build footprints + dismantle first; the milestone builds and
   unlockable building types *are* Buildings.
 - **Tuning surface:** a "what counts" contribution table (resources + loot) and tier thresholds tuned

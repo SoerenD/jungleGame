@@ -460,7 +460,7 @@ export const CREATURE_NIGHT_MULT = 1.6;
 export const CREATURE_NIGHT_THRESHOLD = 0.55;
 /** rolling window for open-world knockdowns → Exhaustion (distinct from the Guardian's per-fight count) */
 export const WILD_EXHAUST_WINDOW_MS = 45_000;
-/** open-world knockdowns within the window before Exhaustion (wake at Hammock/spawn) */
+/** open-world knockdowns within the window before Exhaustion (wake at the Village Hall/spawn) */
 export const WILD_EXHAUSTION_KNOCKDOWNS = 3;
 /** the host's ONE batched `creatures` broadcast cadence (ms) — matches the position stream budget */
 export const WILD_BROADCAST_MS = 200;

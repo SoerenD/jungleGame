@@ -52,12 +52,13 @@ import {
   TRADEABLE,
   tradeYield,
   villageContribution,
+  villagePoolCap,
   VILLAGE_MAX_TIER,
   type VillageRecord,
   type VillageTier,
 } from '../content/village';
 import { legacyAppearance, sanitizeAppearance } from '../avatars';
-import { armorBuff, ARMOR_BUFFS, ARMOR_SLOTS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { armorBuff, ARMOR_BUFFS, ARMOR_SLOTS, gearOwns, sanitizeEquipped, WEAPON_SLOTS, type EquippedGear, type GearSlot } from '../content/armor';
 import { kitOf, wardenDef } from '../content/wardens';
 import { asset } from '../paths';
 import { normalizeWorldId, WORLD_ID_DEFAULT } from '../world';
@@ -166,14 +167,14 @@ interface DbPlayer {
   introSeen?: boolean;
   /** Journey onboarding progress + hint use counts (persisted like introSeen) */
   journey?: JourneyState;
-  /** the Player's Hammock tile — Exhaustion and login wake here (one per Player) */
+  /** legacy Hammock wake tile — hammocks are retired; the load sweep clears it */
   wakePoint?: { tx: number; ty: number };
   /** fog-of-war chunk indices this Player has explored (persisted like journey) */
   explored?: number[];
   /** the row-stride the `explored` indices were saved under (fog-of-war remap) */
   exploredStride?: number;
   /** worn Armor (ADR-0017 §4) — persisted like wakePoint, moved out of the bag when worn */
-  equipped?: EquippedArmor;
+  equipped?: EquippedGear;
 }
 
 /** a live fight; the private fields never leave the server */
@@ -335,6 +336,8 @@ export class MockBackend implements Backend {
       for (const k of Object.keys(p.inventory)) {
         if (!ITEMS[k as ItemId]) delete p.inventory[k as ItemId];
       }
+      // hammocks are retired — a stale wake point would strand logins at a ghost tile
+      delete p.wakePoint;
     }
     for (const contents of Object.values(this.db.crates ?? {})) {
       for (const k of Object.keys(contents)) {
@@ -585,12 +588,9 @@ export class MockBackend implements Backend {
     }
     this.normalizeJourney(name, p);
     this.startBots();
-    // login position (ADR-0010 §4): Hammock > Village Hall > last spot. A founded
-    // Hall makes the Village home; without a Hammock a Player wakes there.
-    if (p.wakePoint) {
-      p.x = (p.wakePoint.tx + 0.5) * TILE;
-      p.y = (p.wakePoint.ty + 0.5) * TILE;
-    } else if (this.db.world!.village?.hall) {
+    // login position (ADR-0010 §4 as amended): a founded Hall makes the Village
+    // home — a Player wakes there; unfounded keeps the last spot.
+    if (this.db.world!.village?.hall) {
       const w = this.wakeTileFor(p);
       p.x = (w.tx + 0.5) * TILE;
       p.y = (w.ty + 0.5) * TILE;
@@ -612,30 +612,43 @@ export class MockBackend implements Backend {
   }
 
   /**
-   * wear/unwear Armor (ADR-0017 §4): MOVE the piece between the bag and the slot.
-   * A slot the client wants filled is honoured when the piece is already worn OR
-   * available in the pack; then every changed slot transacts the inventory (a
-   * newly worn piece is decremented out, a newly bared one returned).
+   * wear/unwear gear (ADR-0017 §4 + weapon slots): MOVE the piece between the bag
+   * and the slot. Slots are honoured against a WORKING ledger (already-worn
+   * instances + bag copies, consumed as slots claim them) — so the same weapon in
+   * both slots genuinely needs two copies; then every changed slot transacts the
+   * inventory (a newly worn piece is decremented out, a newly bared one returned).
    */
-  async equip(equipped: EquippedArmor): Promise<EquipResult> {
+  async equip(equipped: EquippedGear): Promise<EquipResult> {
     await this.lag();
     const p = this.me ? this.db.players[this.me] : null;
     if (!p) return { equipped: {}, inventory: {} };
     const prev = p.equipped ?? {};
     const want = sanitizeEquipped(equipped); // shape only
-    const next: EquippedArmor = {};
-    for (const slot of ARMOR_SLOTS) {
-      const item = want[slot];
-      if (!item) continue;
-      // already worn there, or a copy is sitting in the bag to take
-      if (prev[slot] === item || (p.inventory[item] ?? 0) > 0) next[slot] = item;
+    const next: EquippedGear = {};
+    const gearSlots: GearSlot[] = [...ARMOR_SLOTS, ...WEAPON_SLOTS];
+    const avail: Partial<Record<string, number>> = {};
+    for (const slot of gearSlots) {
+      const it = prev[slot];
+      if (it) avail[it] = (avail[it] ?? 0) + 1;
     }
-    for (const slot of ARMOR_SLOTS) {
+    for (const [it, n] of Object.entries(p.inventory)) avail[it] = (avail[it] ?? 0) + (n ?? 0);
+    for (const slot of gearSlots) {
+      const item = want[slot];
+      if (!item || (avail[item] ?? 0) <= 0) continue;
+      avail[item] = (avail[item] ?? 0) - 1;
+      next[slot] = item;
+    }
+    // ALL unequip credits land before ANY equip debit: a cross-slot move
+    // (weapon2 → weapon1) debits the covering copy's slot first in fixed slot
+    // order, and the zero-clamped bag would silently lose the debit — minting
+    // a duplicate once the credit lands after it
+    for (const slot of gearSlots) {
       const before = prev[slot];
+      if (before && before !== next[slot]) p.inventory[before] = (p.inventory[before] ?? 0) + 1; // unequip → bag
+    }
+    for (const slot of gearSlots) {
       const after = next[slot];
-      if (before === after) continue;
-      if (before) p.inventory[before] = (p.inventory[before] ?? 0) + 1; // unequip → bag
-      if (after) {
+      if (after && after !== prev[slot]) {
         p.inventory[after] = (p.inventory[after] ?? 0) - 1; // equip → out of bag
         if ((p.inventory[after] ?? 0) <= 0) delete p.inventory[after];
       }
@@ -762,12 +775,12 @@ export class MockBackend implements Backend {
   }
 
   /**
-   * Where a Player wakes/appears (ADR-0010 §4): priority Hammock > Village Hall >
-   * World spawn. The Hall tile is just south of its footprint (the footprint
-   * itself is solid). Used by both login and Exhaustion.
+   * Where a Player wakes/appears (ADR-0010 §4 as amended — the Hammock rung is
+   * retired): priority Village Hall > World spawn. The Hall tile is just south
+   * of its footprint (the footprint itself is solid). Used by both login and
+   * Exhaustion.
    */
-  private wakeTileFor(p: DbPlayer): { tx: number; ty: number } {
-    if (p.wakePoint) return { ...p.wakePoint };
+  private wakeTileFor(_p: DbPlayer): { tx: number; ty: number } {
     const hall = this.db.world!.village?.hall;
     if (hall) return { tx: hall.tx, ty: hall.ty + footprint('village_hall').h };
     return { ...this.world.spawn };
@@ -1019,7 +1032,8 @@ export class MockBackend implements Backend {
     if (state.hp <= 0) return { ok: false, reason: 'DEPLETED' };
     const inv = who ? this.db.players[who]?.inventory ?? {} : {};
     // trust the claimed in-hand Tool only as far as the Player actually owns it
-    const owned = withTool && (inv[withTool] ?? 0) > 0 ? withTool : undefined;
+    // (a slotted weapon lives in players.equipped, not the bag — gearOwns covers both)
+    const owned = withTool && gearOwns(inv, who ? this.db.players[who]?.equipped : null, withTool) ? withTool : undefined;
     // a `requiredTool` Node needs that Tool (or its tier-2 upgrade) IN HAND;
     // the `bonusTool` ×2 likewise applies only when the matching Tool is in hand
     if (t.requiredTool && !toolSatisfies(owned, t.requiredTool)) {
@@ -1107,10 +1121,6 @@ export class MockBackend implements Backend {
       placedAt: Date.now(),
     };
     if (item === 'signpost') structure.text = (text ?? '').trim().slice(0, 40);
-    if (item === 'hammock') {
-      // one active Hammock per Player — placing a new one retires the old point
-      p.wakePoint = { tx, ty };
-    }
     this.db.structures[key] = structure; // keyed by the anchor tile
     for (const k of this.footprintTiles(structure)) this.structTiles.set(k, structure);
     // A3 (ADR-0010): the Hall founds/relocates the Village; a milestone Building
@@ -1150,9 +1160,6 @@ export class MockBackend implements Backend {
     // the generic Refiner kernel is type-blind (keyed by structure id alone),
     // so ANY Refiner's queue dies here — no per-type case ever needed
     delete this.db.refiners?.[id];
-    if (s.type === 'hammock' && p.wakePoint && p.wakePoint.tx === s.tx && p.wakePoint.ty === s.ty) {
-      delete p.wakePoint; // its wake point retires with it
-    }
     // A3 (ADR-0010): dismantling THE Hall un-homes the Village (spawn falls back
     // to World spawn) but PRESERVES tier/pool/milestones — progress is
     // tile-independent, re-founding never resets it.
@@ -1465,8 +1472,11 @@ export class MockBackend implements Backend {
     const p = this.me ? this.db.players[this.me] : null;
     if (!v.hall) return { ok: false, reason: 'NO_HALL' };
     if (!p) return { ok: false, reason: 'NOTHING_TO_GIVE' };
-    const { taken, points } = villageContribution(p.inventory, amounts);
-    if (points <= 0) return { ok: false, reason: 'NOTHING_TO_GIVE' };
+    // the pool stops at the next tier's threshold until its milestone stands —
+    // refused at cap, nothing deducted (the no-loss contract)
+    const room = villagePoolCap(v.tier) - v.pool;
+    const { taken, points } = villageContribution(p.inventory, amounts, Math.max(0, room));
+    if (points <= 0) return { ok: false, reason: room <= 0 ? 'POOL_FULL' : 'NOTHING_TO_GIVE' };
     for (const [item, n] of Object.entries(taken)) {
       p.inventory[item as ItemId] = (p.inventory[item as ItemId] ?? 0) - n;
       if ((p.inventory[item as ItemId] ?? 0) <= 0) delete p.inventory[item as ItemId];
@@ -1915,7 +1925,7 @@ export class MockBackend implements Backend {
     // trust the claimed in-hand Tool only if owned; the SERVER rolls the weapon
     // band + crit (ADR-0006 §2/§3), supplying Math.random as the rng. The worn
     // Helm's flat band raise rides in like the Village crit buff (ADR-0017 §3).
-    const owned = withTool && (p.inventory[withTool] ?? 0) > 0 ? withTool : undefined;
+    const owned = withTool && gearOwns(p.inventory, p.equipped, withTool) ? withTool : undefined;
     const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.villageState().tier).critChance, armorBuff(p.equipped));
     f.hp = Math.max(0, f.hp - dmg);
     if (!f.participants.includes(me)) f.participants.push(me);
@@ -1973,16 +1983,16 @@ export class MockBackend implements Backend {
     if (!inSlam && !inRing) {
       return { ok: false, reason: 'NOT_IN_DANGER' };
     }
-    // Exhaustion wakes a Player at their Hammock, else the Village Hall, else the
-    // World spawn (ADR-0010 §4: Hammock > Village Hall > World spawn)
-    const atHammock = !!p.wakePoint;
+    // Exhaustion wakes a Player at the Village Hall, else the World spawn
+    // (ADR-0010 §4 as amended — the Hammock rung is retired)
+    const atVillage = !!this.db.world!.village?.hall;
     const wake = this.wakeTileFor(p);
     // the slam window (incl. slack) never crosses a wave boundary, so the
     // wave at the report's server time is the wave that hit
     const wave = waveInfoAt(elapsed, GUARDIAN_AWAKE_MS, kit).index;
     if (f.lastKnockdownWave[me] === wave) {
       // duplicate report for the same slam — count it once
-      return { ok: true, knockdowns: f.knockdowns[me] ?? 0, exhausted: false, wake, atHammock };
+      return { ok: true, knockdowns: f.knockdowns[me] ?? 0, exhausted: false, wake, atVillage };
     }
     f.lastKnockdownWave[me] = wave;
     f.knockdowns[me] = (f.knockdowns[me] ?? 0) + 1;
@@ -1997,7 +2007,7 @@ export class MockBackend implements Backend {
       p.y = (wake.ty + 0.5) * TILE;
       this.pushChat({
         from: t.system.sender,
-        text: t.system.exhaustionCollapse(me, atHammock),
+        text: t.system.exhaustionCollapse(me, atVillage),
         ts: Date.now(),
       });
       // this Player is now Exhausted + teleported out; if that empties the arena
@@ -2006,7 +2016,7 @@ export class MockBackend implements Backend {
       this.evaluateArenaOccupancy();
     }
     this.saveSoon();
-    return { ok: true, knockdowns, exhausted, wake, atHammock };
+    return { ok: true, knockdowns, exhausted, wake, atVillage };
   }
 
   // ------------------------------------------------------------ v2: fishing & cooking

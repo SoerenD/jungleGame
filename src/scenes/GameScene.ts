@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { OBJECTS, TILESET } from '../assetConfig';
 import { AVATAR_H, AVATAR_IDLE, AVATAR_SWING, AVATAR_W, ensureAvatarTexture } from '../avatars';
-import { armorBuff, armorDef, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { armorBuff, armorDef, gearOwns, isWeapon, sanitizeEquipped, type EquippedArmor, type EquippedGear, type WeaponSlot } from '../content/armor';
 import { kitOf, wardenDef, wardenForRealm, WARDENS } from '../content/wardens';
 import {
   ghostPoseAt,
@@ -161,6 +161,7 @@ import {
   inVillageZone,
   villageBuff,
   villageContribution,
+  villagePoolCap,
   VILLAGE_ART,
   VILLAGE_MAX_TIER,
   VILLAGE_TIERS,
@@ -591,10 +592,10 @@ export class GameScene extends Phaser.Scene {
   private blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   private remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
-  /** the worn Armor (ADR-0017 §4) — baked into my sheet, applied to my stats */
-  private equipped: EquippedArmor = {};
+  /** the worn gear (ADR-0017 §4 + weapon slots) — armor bakes into my sheet, weapons select via keys 4/5 */
+  private equipped: EquippedGear = {};
   /** un-sent equip intent (rapid toggles coalesce here) + the send serializer */
-  private desiredEquip: EquippedArmor | null = null;
+  private desiredEquip: EquippedGear | null = null;
   private equipChain: Promise<void> = Promise.resolve();
   private lastDir: Dir = 'down';
   private chatFocused = false;
@@ -1453,6 +1454,7 @@ export class GameScene extends Phaser.Scene {
       // ADR-0017: per-Warden altar/gate progress — re-dress gates already open
       this.wardens = snap.wardens ?? {};
       for (const [id, w] of Object.entries(this.wardens)) bus.emit('warden-altar', id, w.altar);
+      bus.emit('wardens', this.wardens); // the Chapter-2 tracker phases tick off altar.broken/gateOpen
       this.rebuildRealmGates();
       // joining mid-fight: dormant or engaged, the state derives from the fight
       // row (engagedAt), not from having witnessed the summon/engage events
@@ -1678,7 +1680,9 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('nodeChanged', (n: NodeState) => this.updateNode(n));
     this.backend.on('structurePlaced', (s: Structure) => {
       this.addStructure(s);
-      if (s.placedBy !== this.me.name) bus.emit('toast', t.builtBy(s.placedBy, ITEMS[s.type].name), 'info');
+      // guarded like addStructure: an old client can still place a retired type
+      // (hammock/table/obsidian_path) during a rollout window
+      if (s.placedBy !== this.me.name) bus.emit('toast', t.builtBy(s.placedBy, ITEMS[s.type]?.name ?? s.type), 'info');
       if (s.type === 'sawmill') this.emitSawmillBuilt();
     });
     this.backend.on('structureRemoved', (id: string) => {
@@ -1732,12 +1736,14 @@ export class GameScene extends Phaser.Scene {
       const w = (this.wardens[id] ??= { altar, gateOpen: false });
       w.altar = altar;
       bus.emit('warden-altar', id, altar);
+      bus.emit('wardens', this.wardens);
       if (altar.broken) bus.emit('toast', t.toast.wardenAwaitsTotem(ITEMS[wardenDef(id)?.totem ?? 'summon_totem'].name), 'good');
     });
     // ADR-0017: a Realm gate opened — one-time, forever; re-dress its arches
     this.backend.on('realmOpened', (id: string) => {
       const w = (this.wardens[id] ??= { altar: { broken: false, contributed: {}, quotas: {} }, gateOpen: true });
       w.gateOpen = true;
+      bus.emit('wardens', this.wardens);
       bus.emit('toast', t.toast.realmGateKeyTurn(t.warden.realmName(id)), 'good');
       this.sfx('seal_gong', 0.6);
       this.rebuildRealmGates();
@@ -1860,6 +1866,12 @@ export class GameScene extends Phaser.Scene {
    * there is nothing to choose, so skip straight to the "nothing to give" toast.
    */
   private openVillageContribute(): void {
+    // the pool stops at the next tier's threshold until the milestone stands —
+    // a full pool refuses the panel outright so nothing can be taken
+    if (villagePoolCap(this.village.tier) - this.village.pool <= 0) {
+      bus.emit('toast', t.toast.villagePoolFull, 'bad');
+      return;
+    }
     if (villageContribution(this.inventory).points <= 0) {
       bus.emit('toast', t.toast.villageNothingToGive, 'bad');
       return;
@@ -1872,9 +1884,19 @@ export class GameScene extends Phaser.Scene {
    * `amounts` caps each item; omitted means "give it all" (kept for safety).
    */
   private contributeVillage(amounts?: Inventory): void {
-    void this.backend.contributeVillage(amounts).then((res) => {
+    // pre-clamp to the pool's remaining room so even the CURRENT live (cap-less)
+    // server can never over-fill — the explicit clamped amounts are what we send
+    const room = villagePoolCap(this.village.tier) - this.village.pool;
+    const clamped = villageContribution(this.inventory, amounts, Math.max(0, room));
+    if (clamped.points <= 0) {
+      bus.emit('toast', room <= 0 ? t.toast.villagePoolFull : t.toast.villageNothingToGive, 'bad');
+      bus.emit('village-give-close');
+      return;
+    }
+    void this.backend.contributeVillage(clamped.taken).then((res) => {
       if (!res.ok) {
         if (res.reason === 'NOTHING_TO_GIVE') bus.emit('toast', t.toast.villageNothingToGive, 'bad');
+        if (res.reason === 'POOL_FULL') bus.emit('toast', t.toast.villagePoolFull, 'bad');
         return;
       }
       this.inventory = res.inventory;
@@ -2458,13 +2480,13 @@ export class GameScene extends Phaser.Scene {
     if (res.exhausted) {
       // HARD Exhaustion (ADR-0004): out for this fight — the Ward now bars
       // re-entry (permeability recomputes to "blocked"), though prior hits
-      // keep loot eligibility. Wake at Hammock/spawn, pack intact.
+      // keep loot eligibility. Wake at the Village Hall/spawn, pack intact.
       this.exhaustedThisFight = true;
       this.updateWardPermeability();
       bus.emit(
         'toast',
-        res.atHammock
-          ? t.toast.exhaustionHammock
+        res.atVillage
+          ? t.toast.exhaustionVillage
           : t.toast.exhaustionSpawn,
         'bad',
       );
@@ -2564,7 +2586,7 @@ export class GameScene extends Phaser.Scene {
     }
     // each weapon carries its own COMBAT attack speed (ADR-0006 §4); harvesting
     // is untouched — resolveEAction only sets cadenceMs on Guardian swings
-    if (bow) return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.looseArrow() };
+    if (bow) return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.fireBow() };
     return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.swingAtGuardian() };
   }
 
@@ -2573,27 +2595,112 @@ export class GameScene extends Phaser.Scene {
     this.fireGuardianHit(this.heldTool(), spr.x, spr.y - 60);
   }
 
-  /** loose an arrow at the boss; the hit registers when the arrow lands */
-  private looseArrow(): void {
-    if (!this.fight) return;
-    const spr = this.activeBoss().sprite;
-    const gx = spr.x;
-    const gy = spr.y - TILE * 3; // aim at the eye / upper body
-    const arrow = this.add.image(this.player.x, this.player.y - AVATAR_H / 2, 'arrow');
+  /** the mouse-aimed unit vector from the player's chest (the arrow's origin) */
+  private aimDir(): { x: number; y: number } {
+    const p = this.input.activePointer;
+    p.updateWorldPoint(this.cameras.main); // fresh even if the mouse hasn't moved since a camera scroll
+    const dx = p.worldX - this.player.x;
+    const dy = p.worldY - (this.player.y - AVATAR_H / 2);
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: dx / len, y: dy / len };
+  }
+
+  /** fly the arrow sprite along the aimed ray at constant speed; `onLand` fires
+   *  where the ray met a body (null = a miss — full range, despawn, no call) */
+  private looseArrowRay(dirX: number, dirY: number, distPx: number, onLand: (() => void) | null): void {
+    const ox = this.player.x;
+    const oy = this.player.y - AVATAR_H / 2;
+    const arrow = this.add.image(ox, oy, 'arrow');
     arrow.setDepth(999_990);
-    arrow.setRotation(Phaser.Math.Angle.Between(arrow.x, arrow.y, gx, gy));
+    arrow.setRotation(Math.atan2(dirY, dirX));
     this.sfx('blip', 0.4); // bowstring twang
     this.tweens.add({
       targets: arrow,
-      x: gx,
-      y: gy,
-      duration: 240,
+      x: ox + dirX * distPx,
+      y: oy + dirY * distPx,
+      duration: Math.max(60, distPx / 0.9), // ~0.9 px/ms ≈ the old boss arrow's 240 ms at 8 tiles
       onComplete: () => {
         arrow.destroy();
-        // adjudicate on landing (server re-checks the Eye Window at its own time)
-        this.fireGuardianHit(this.heldTool(), gx, gy);
+        onLand?.();
       },
     });
+  }
+
+  /** distance along the aimed segment where it first meets the circle, or null */
+  private rayHitPx(ox: number, oy: number, dx: number, dy: number, maxPx: number, cx: number, cy: number, rPx: number): number | null {
+    const t = Phaser.Math.Clamp((cx - ox) * dx + (cy - oy) * dy, 0, maxPx);
+    return Math.hypot(ox + dx * t - cx, oy + dy * t - cy) <= rPx + 4 ? t : null; // +4px forgiveness
+  }
+
+  /**
+   * The one bow verb for every context (the 2026-07 batch): the arrow flies
+   * toward the MOUSE, and the first body on the ray takes the hit when it lands
+   * — the active boss (Eye-Window rule intact via fireGuardianHit), a Delve
+   * Husk, or a wild predator (peaceful creatures are never shot — foraging
+   * stays a melee-reach catch). Nothing on the ray → the arrow flies its full
+   * range and despawns: a miss, the cadence still spent. Damage attribution is
+   * unchanged — the same host-/server-authoritative messages as melee. Arrows
+   * stay a local cosmetic (peers see the swing echo), the status quo.
+   */
+  private fireBow(): void {
+    const dir = this.aimDir();
+    const ox = this.player.x;
+    const oy = this.player.y - AVATAR_H / 2;
+    const maxPx = TILE * (this.inDelve ? 6 : 8); // matches the old per-context reaches
+    // re-face the shot so the pose matches the aim, not the last walk direction
+    // (playSwingFx kill-restarts safely; markSwing already fired the first one)
+    const d: Dir = Math.abs(dir.x) > Math.abs(dir.y) ? (dir.x > 0 ? 'right' : 'left') : dir.y > 0 ? 'down' : 'up';
+    if (d !== this.lastDir) {
+      this.lastDir = d;
+      this.playSwingFx(this.player, this.heldSprite, d);
+    }
+    const tool = this.heldTool();
+    let bestT: number | null = null;
+    let onLand: (() => void) | null = null;
+    const consider = (t: number | null, land: () => void): void => {
+      if (t !== null && (bestT === null || t < bestT)) {
+        bestT = t;
+        onLand = land;
+      }
+    };
+    if (this.inDelve) {
+      for (const m of this.mobs.values()) {
+        if (m.st === 'dead') continue;
+        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, maxPx, m.x * TILE, m.y * TILE, profileOf(m.kind).radius * TILE);
+        consider(t0, () => {
+          // landing-time re-check: applyDelveHit guards dead/missing mobs
+          if (this.isDelveHost) this.applyDelveHit(m.id, tool, this.me.name);
+          else if (this.delveRunId) {
+            this.backend.sendDungeon({ t: 'hit', runId: this.delveRunId, mobId: m.id, by: this.me.name, tool });
+            this.delveHitLanded = true;
+          }
+        });
+      }
+    } else {
+      if (this.fight) {
+        const spr = this.activeBoss().sprite;
+        // the colossus body: a generous 3x3-tile circle at its lower mass
+        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, maxPx, spr.x, spr.y - TILE * 1.5, TILE * 1.8);
+        consider(t0, () => this.fireGuardianHit(tool, spr.x, spr.y - TILE * 3));
+      }
+      for (const m of this.wildMobs.values()) {
+        if (m.st === 'dead') continue;
+        if (!isWildKind(m.kind) || !isPredator(m.kind as WildKind)) continue;
+        const t0 = this.rayHitPx(ox, oy, dir.x, dir.y, maxPx, m.x * TILE, m.y * TILE, profileOf(m.kind).radius * TILE);
+        consider(t0, () => {
+          if (this.isWildHost) this.applyWildHit(m.id, tool, this.me.name);
+          else this.backend.sendCreatures({ t: 'hit', id: m.id, by: this.me.name, tool });
+        });
+      }
+    }
+    this.looseArrowRay(dir.x, dir.y, bestT ?? maxPx, onLand);
+  }
+
+  /** LMB/E with a bow and nothing else in reach still shoots toward the cursor
+   *  (placed LAST in resolveEAction so every other verb keeps priority) */
+  private bowFallbackAction(): EAction | null {
+    if (!this.isBow()) return null;
+    return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.fireBow() };
   }
 
   /**
@@ -2994,11 +3101,23 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ Realm districts (ADR-0017 §2)
 
-  /** the Realm district containing tile (tx,ty), or null in the World proper */
+  /**
+   * The Realm district containing tile (tx,ty), or null in the World proper.
+   * Every district reserves its OWN 1-tile cliff ring inside its outer rect
+   * (the void-filler cliff the generator never overwrites — tools/generate-map.ts
+   * fills each district's interior at rect+1..rect+size-2, generate-map.ts:947/
+   * 1091/1171); that ring is still solid wall, not the room. Checking the outer
+   * rect inclusively meant a Player walking up to the World's south edge and
+   * getting stopped by that very wall (their tile position resting exactly on
+   * the rect's boundary row/col) still counted as "inside" — the camera would
+   * immediately snap to the district's bounds and reveal the whole interior
+   * through the wall (the "I can see the hidden Hushdark" clipping report).
+   * The inset below excludes the ring, matching the carved interior exactly.
+   */
   private districtOf(tx: number, ty: number): DistrictDef | null {
     for (const d of this.world.districts ?? []) {
       const r = d.rect;
-      if (tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h) return d;
+      if (tx > r.x && tx < r.x + r.w - 1 && ty > r.y && ty < r.y + r.h - 1) return d;
     }
     return null;
   }
@@ -3470,7 +3589,7 @@ export class GameScene extends Phaser.Scene {
     // "carried", not in-hand), so it holds while a machete cuts the reeds. Client-
     // side positional slow, stacked like the other move factors.
     const wade =
-      this.activeDistrict?.id === 'sunken_mire' && tideFloods(Date.now(), TIDE_PERIOD_MS) && (this.inventory['mirefang'] ?? 0) <= 0
+      this.activeDistrict?.id === 'sunken_mire' && tideFloods(Date.now(), TIDE_PERIOD_MS) && !gearOwns(this.inventory, this.equipped, 'mirefang')
         ? WADE_SLOW_FACTOR
         : 1;
     // ADR-0017 §3: the Tideglass Boots add their +8% beside the Village bonus
@@ -3503,9 +3622,30 @@ export class GameScene extends Phaser.Scene {
   private toggleArmor(item: ItemId): void {
     const def = armorDef(item);
     if (!def) return;
-    const next: EquippedArmor = { ...(this.desiredEquip ?? this.equipped) };
+    const next: EquippedGear = { ...(this.desiredEquip ?? this.equipped) };
     if (next[def.slot] === item) delete next[def.slot];
     else next[def.slot] = item;
+    this.sendGear(next);
+  }
+
+  /** seat/clear one weapon slot (keys 4/5's gear; same MOVE semantics as armor).
+   *  Seating clears the same item from the OTHER slot unless the bag holds a
+   *  second copy (the backend would refuse the double anyway — this keeps the
+   *  optimistic record honest). */
+  private setWeaponSlot(slot: WeaponSlot, item: ItemId | null): void {
+    if (item && !isWeapon(item)) return;
+    const next: EquippedGear = { ...(this.desiredEquip ?? this.equipped) };
+    if (!item) delete next[slot];
+    else {
+      const other: WeaponSlot = slot === 'weapon1' ? 'weapon2' : 'weapon1';
+      if (next[other] === item && (this.inventory[item] ?? 0) < 1) delete next[other];
+      next[slot] = item;
+    }
+    this.sendGear(next);
+  }
+
+  /** the serialized, coalesced equip send shared by armor toggles and weapon slots */
+  private sendGear(next: EquippedGear): void {
     this.desiredEquip = next;
     this.equipChain = this.equipChain.then(async () => {
       const want = this.desiredEquip;
@@ -3706,6 +3846,8 @@ export class GameScene extends Phaser.Scene {
     });
     // ADR-0017 §4: the inventory's Equip button toggles one Armor piece
     bus.on('equip-toggle', (item: ItemId) => this.toggleArmor(item));
+    // the two weapon slots (keys 4/5): seat/clear MOVES the weapon like armor
+    bus.on('weapon-slot-set', (slot: WeaponSlot, item: ItemId | null) => this.setWeaponSlot(slot, item));
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
     // the Village contribution panel's Give button: pour the chosen amounts in
     bus.on('village-give', (amounts: Inventory) => this.contributeVillage(amounts));
@@ -4385,7 +4527,9 @@ export class GameScene extends Phaser.Scene {
         best = view;
       }
     }
-    if (!best) return null;
+    // nothing else in reach: a held Bow still shoots toward the cursor (the
+    // trailing fallback — every verb above keeps its priority)
+    if (!best) return this.bowFallbackAction();
     const view = best;
     // fishing spots use the cast-and-wait rhythm when the rod is IN HAND;
     // without it the server refusal (TOOL_REQUIRED) falls through below
@@ -4658,7 +4802,7 @@ export class GameScene extends Phaser.Scene {
     if (s.type === 'village_hall') this.hallImg = img;
     const bodies: Phaser.GameObjects.Rectangle[] = [];
     let glowImg: Phaser.GameObjects.Image | null = null;
-    if (s.type === 'bridge' || s.type === 'obsidian_path') {
+    if (s.type === 'bridge') {
       img.setDepth(-2); // floor
     } else {
       img.setDepth(baseY);
@@ -5052,7 +5196,6 @@ export class GameScene extends Phaser.Scene {
         this.sfx('place', 0.6);
         this.useHint('place');
         if (item === 'campfire') this.tickJourney('place_campfire');
-        if (item === 'hammock') bus.emit('toast', t.toast.hammockSet, 'info');
         if (foundingHall) bus.emit('toast', t.toast.villageFoundedYou, 'good');
         this.exitPlaceMode();
       } else if (result.reason === 'OCCUPIED') {
@@ -5923,14 +6066,19 @@ export class GameScene extends Phaser.Scene {
     this.stunMarker = null;
   }
 
-  /** tear down the instance and return to the World entrance (broadcasts are at call sites) */
+  /** the tile just south of the founded Village Hall — THE wake point (ADR-0010 §4
+   *  as amended: Village Hall > World spawn; the Hammock rung is retired), shared
+   *  by every Exhaustion path */
+  private villageWakeTile(): { tx: number; ty: number } | null {
+    const hall = this.village?.hall;
+    return hall ? { tx: hall.tx, ty: hall.ty + footprint('village_hall').h } : null;
+  }
+
   /** where an involuntary Delve exit drops you: the founded Village Hall, else the
    *  World spawn — a known, safe home, never the far-off shaft (issue: Exhaustion
    *  used to strand you at the Cavern Mouth) */
   private delveWakeTile(): { tx: number; ty: number } {
-    const hall = this.village?.hall;
-    if (hall) return { tx: hall.tx, ty: hall.ty + footprint('village_hall').h };
-    return { tx: this.world.spawn.tx, ty: this.world.spawn.ty };
+    return this.villageWakeTile() ?? { tx: this.world.spawn.tx, ty: this.world.spawn.ty };
   }
 
   /** leave the Delve. `wake` overrides the exit tile (Exhaustion/collapse wake you
@@ -6163,7 +6311,12 @@ export class GameScene extends Phaser.Scene {
       }
     }
     if (this.delveExhausted) return null;
-    const reach = this.isBow() ? 6 : 1.7; // the Bow strikes mobs from range
+    // the Bow always fires in the Delve — mouse-aimed, misses fly (the leave/
+    // descend one-shots above keep priority)
+    if (this.isBow()) {
+      return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.fireBow() };
+    }
+    const reach = 1.7; // melee closes to arm's length
     const ptx = this.player.x / TILE;
     const pty = (this.player.y - 4) / TILE;
     let best: MobState | null = null;
@@ -6183,7 +6336,7 @@ export class GameScene extends Phaser.Scene {
 
   private delveSwing(m: MobState): void {
     const tool = this.heldTool();
-    this.sfx(this.isBow() ? 'blip' : 'chop', 0.5);
+    this.sfx('chop', 0.5);
     if (this.isDelveHost) {
       this.applyDelveHit(m.id, tool, this.me.name);
     } else if (this.delveRunId) {
@@ -7429,10 +7582,10 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Exhaustion in the wilds → wake at Hammock/spawn, inventory FULLY intact (only position + time lost) */
+  /** Exhaustion in the wilds → wake at the Village Hall/spawn, inventory FULLY intact (only position + time lost) */
   private wildExhaust(): void {
     const wake = this.wildWakePoint();
-    bus.emit('toast', wake.atHammock ? t.toast.wildExhaustionHammock : t.toast.wildExhaustionSpawn, 'bad');
+    bus.emit('toast', wake.atVillage ? t.toast.wildExhaustionVillage : t.toast.wildExhaustionSpawn, 'bad');
     this.cameras.main.fadeOut(400, 0, 0, 0);
     this.time.delayedCall(450, () => {
       this.player.setPosition((wake.tx + 0.5) * TILE, (wake.ty + 0.5) * TILE);
@@ -7443,28 +7596,28 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** where Exhaustion wakes me: my own Hammock, else the Village Hall, else World spawn */
-  private wildWakePoint(): { tx: number; ty: number; atHammock: boolean } {
-    for (const s of this.structuresByTile.values()) {
-      if (s.type === 'hammock' && s.placedBy === this.me.name) return { tx: s.tx, ty: s.ty, atHammock: true };
-    }
-    if (this.village.hall) {
-      return { tx: this.village.hall.tx, ty: this.village.hall.ty + footprint('village_hall').h, atHammock: false };
-    }
-    return { tx: this.world.spawn.tx, ty: this.world.spawn.ty, atHammock: false };
+  /** where Exhaustion wakes me: the Village Hall, else World spawn */
+  private wildWakePoint(): { tx: number; ty: number; atVillage: boolean } {
+    const v = this.villageWakeTile();
+    if (v) return { ...v, atVillage: true };
+    return { tx: this.world.spawn.tx, ty: this.world.spawn.ty, atVillage: false };
   }
 
   /** in the World, E on the nearest creature in reach: hunt a predator (swing) or forage a peaceful (catch) */
   private wildlifeAction(): EAction | null {
-    const reach = this.isBow() ? 6 : 1.9;
+    const bow = this.isBow();
     const ptx = this.player.x / TILE;
     const pty = (this.player.y - 4) / TILE;
     let best: MobState | null = null;
-    let bd = reach;
+    let bd = Infinity;
     for (const m of this.wildMobs.values()) {
       if (m.st === 'dead') continue;
+      // the Bow hunts predators from range; foraging is ALWAYS an arm's-length
+      // catch (the old 6-tile bow forage was a latent oddity)
+      const predator = isWildKind(m.kind) && isPredator(m.kind as WildKind);
+      const allowed = predator && bow ? 6 : 1.9;
       const d = Math.hypot(m.x - ptx, m.y - pty) - profileOf(m.kind).radius;
-      if (d < bd) {
+      if (d < allowed && d < bd) {
         bd = d;
         best = m;
       }
@@ -7472,8 +7625,8 @@ export class GameScene extends Phaser.Scene {
     if (!best) return null;
     const target = best;
     if (isWildKind(target.kind) && isPredator(target.kind as WildKind)) {
-      // hunt: a repeatable weapon swing (Bow reaches; melee must close)
-      return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => this.wildSwing(target) };
+      // hunt: a repeatable weapon swing (the Bow fires mouse-aimed; melee must close)
+      return { swing: true, cadenceMs: this.atkCadence(weaponCombat(this.heldTool()).attackMs), run: () => (bow ? this.fireBow() : this.wildSwing(target)) };
     }
     // forage: a one-shot catch (bare hands fine — it is a moving Node, not a fight)
     return { swing: false, run: () => this.forageWild(target) };
@@ -7481,7 +7634,7 @@ export class GameScene extends Phaser.Scene {
 
   private wildSwing(m: MobState): void {
     const tool = this.heldTool();
-    this.sfx(this.isBow() ? 'blip' : 'chop', 0.5);
+    this.sfx('chop', 0.5);
     if (this.isWildHost) this.applyWildHit(m.id, tool, this.me.name);
     else this.backend.sendCreatures({ t: 'hit', id: m.id, by: this.me.name, tool });
   }

@@ -18,12 +18,26 @@ import {
   type AudioChannel,
 } from '../config';
 import { GUARDIAN_DISPLAY_SCALE, WEAPON_COMBAT, weaponStatLine, weaponStatParts } from '../content/guardian';
-import { armorDef, type ArmorSlot, type EquippedArmor } from '../content/armor';
+import { armorDef, isWeapon, type ArmorSlot, type EquippedGear, type WeaponSlot } from '../content/armor';
 import { characterSheet } from '../content/stats';
 import { drawBlockheadSheet, AVATAR_W, AVATAR_H } from '../avatars';
-import type { Appearance, WardenAltarState } from '../backend/types';
+import type { Appearance, WardenAltarState, WardenWorldState } from '../backend/types';
 import { itemIcon } from './icons';
-import { delveQuestComplete, DELVE_QUEST_STEPS, hintRetired, journeyComplete, JOURNEY_STEPS } from '../content/journey';
+import {
+  delveQuestComplete,
+  DELVE_QUEST_STEPS,
+  hintRetired,
+  hushdarkQuestComplete,
+  HUSHDARK_QUEST_STEPS,
+  journeyComplete,
+  JOURNEY_STEPS,
+  legacyQuestComplete,
+  LEGACY_QUEST_STEPS,
+  mireQuestComplete,
+  MIRE_QUEST_STEPS,
+  terraceQuestComplete,
+  TERRACE_QUEST_STEPS,
+} from '../content/journey';
 import { RECIPES } from '../content/recipes';
 import { inventoryCapacity, milestoneForTier, tierThreshold, TRADEABLE, tradeUnitCost, tradeYield, VILLAGE_CONTRIB, VILLAGE_MAX_TIER, type VillageRecord } from '../content/village';
 import type {
@@ -61,11 +75,14 @@ let village: VillageRecord | null = null;
 let villageTier = 0;
 /** standing beside a Forge — the heavy forged gear is only craftable then */
 let nearForge = false;
-/** the worn Armor (ADR-0017 §4) — mirrors GameScene's record via the 'equipped' event */
-let equippedArmor: EquippedArmor = {};
+/** the worn gear (ADR-0017 §4 + the two weapon slots) — mirrors GameScene's record via the 'equipped' event */
+let equippedGear: EquippedGear = {};
 /** per-Warden altar Offering state + which altar panel is showing (ADR-0017) */
 const wardenAltars: Record<string, WardenAltarState> = {};
 let wardenPanelId: string | null = null;
+/** the full per-Warden altar/gate record — the Chapter-2 tracker phases (Mire/
+ *  Hushdark/Terraces) tick off altar.broken + gateOpen (ADR-0017) */
+let wardens: Record<string, WardenWorldState> | null = null;
 /** a Warden fight re-titles the fight panel; null = the Guardian */
 let fightTitle: string | null = null;
 let journey: JourneyState | null = null;
@@ -481,8 +498,8 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
       // M opens the full-screen world map (find "The Cavern Mouth" & every region).
       // Mute lives on the bottom-bar button + the settings checkbox.
       setWorldMapOpen(!el('worldmap-overlay').classList.contains('open'));
-    } else if (k === '1' || k === '2' || k === '3') {
-      selectLoadout(Number(k) - 1);
+    } else if (k >= '1' && k <= '5') {
+      selectLoadout(Number(k) - 1); // 1–3 tool quick-slots, 4–5 the weapon slots
     }
   });
   // dim backdrop click closes the world map
@@ -500,18 +517,26 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     renderJourney(); // Delve-quest steps tick off inventory (Scales, pickaxe, drops)
     if (openCrateId) renderCrate();
   });
-  // ADR-0017 §4: the worn Armor changed (join restore or an equip round-trip)
-  bus.on('equipped', (eq: EquippedArmor) => {
-    equippedArmor = eq;
+  // ADR-0017 §4: the worn gear changed (join restore or an equip round-trip)
+  bus.on('equipped', (eq: EquippedGear) => {
+    equippedGear = eq;
     renderInventory(); // the ⛨ badge + the detail bar's Equip/Unequip label
     renderCharacter(); // re-dress the paperdoll + its slots + attributes
+    renderJourney(); // the Legacy's Reverberant step accepts the epic helm WORN
+    renderLoadout(); // the weapon cells (keys 4/5) render off the gear record
+    emitHeld(); // a slotted/unequipped weapon changes what key 4/5 holds
+    restoreWeaponSlots(); // pre-0021 server: re-seat the locally saved weapons once
   });
   bus.on('chat', (msg: ChatMsg) => appendChat(msg));
   bus.on('chatlog', (msgs: ChatMsg[]) => {
     el('chat-messages').innerHTML = '';
     msgs.forEach(appendChat);
   });
-  bus.on('zone', (zone: string) => setZone(zone));
+  bus.on('zone', (zone: string) => {
+    setZone(zone);
+    // the atlas bakes the "you are here" label tint — re-bake on region crossing
+    if (el('worldmap-overlay').classList.contains('open')) drawWorldMap?.();
+  });
   bus.on('presence', (names: string[]) => {
     el('online').innerHTML =
       `<b>${t.online(names.length)}</b><br>` +
@@ -538,6 +563,8 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     quest = q;
     renderQuestLabel();
     renderJourney(); // the 'shaft cleared' step ticks off quest.delveOpen
+    // the treasure ✕ is baked into the atlas — re-bake while it is open
+    if (el('worldmap-overlay').classList.contains('open')) drawWorldMap?.();
   });
   bus.on('sawmill-built', (built: boolean) => {
     sawmillBuilt = built;
@@ -557,6 +584,11 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     wardenAltars[id] = altar;
     if (wardenPanelId === id) renderWardenBars();
   });
+  // the full altar/gate record — the Chapter-2 tracker phases tick off it
+  bus.on('wardens', (w: Record<string, WardenWorldState>) => {
+    wardens = w;
+    renderJourney();
+  });
   bus.on('warden-altar-near', (id: string | null) => {
     wardenPanelId = id;
     el('warden-panel').classList.toggle('open', !!id);
@@ -570,6 +602,8 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     renderRecipes(); // tier-locked Buildings unlock as the Village grows (villageMin)
     renderCharacter(); // the Village's collective buffs feed the attributes block
     renderJourney(); // the Into-the-Delve 'Found a Village' step ticks off hall!==null
+    // the Hall pin is baked into the atlas — re-bake while it is open
+    if (el('worldmap-overlay').classList.contains('open')) drawWorldMap?.();
   });
   bus.on('village-near', (near: boolean) => {
     el('village-panel').classList.toggle('open', near);
@@ -1295,16 +1329,49 @@ async function initMinimap(): Promise<void> {
     6: [176, 162, 138], 7: [190, 176, 150], 17: [156, 148, 126], // rock/stone
     12: [140, 122, 78], 13: [140, 122, 78], 14: [140, 122, 78], // mire peat
   };
+  // biome CLASS per gid, so same-biome shade variants never dither against each
+  // other: 0 grass/land, 1 water, 2 dirt/path, 3 rock, 4 mire peat
+  const classOf = (gid: number): number =>
+    gid === 2 || gid === 15 ? 1
+    : gid === 3 || gid === 4 || gid === 16 ? 2
+    : gid === 6 || gid === 7 || gid === 17 ? 3
+    : gid === 12 || gid === 13 || gid === 14 ? 4
+    : 0;
   const parch = document.createElement('canvas');
   parch.width = W;
   parch.height = H;
   const parchImg = parch.getContext('2d')!.createImageData(W, H);
   const pd0 = parchImg.data;
   const cl0 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  const baseAt = (x: number, y: number): [number, number, number] => parchCol[ground[y * W + x]] ?? [201, 168, 98];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const c = parchCol[ground[y * W + x]] ?? [201, 168, 98];
-      const n = ((((x * 73856093) ^ (y * 19349663)) >>> 0) % 15) - 7; // deterministic ±7 grain
+      const h = (((x * 73856093) ^ (y * 19349663)) >>> 0); // the bake's deterministic hash
+      let c = baseAt(x, y);
+      // hand-inked coastlines: a tile bordering another biome class dithers into
+      // the neighbour's colour (full swap or 50/50 blend, hash-chosen), so every
+      // straight fillRect border wobbles once the bake is smoothed up to screen
+      // scale. A lower-rate second rank widens the wobble to ~2 tiles.
+      const myClass = classOf(ground[y * W + x]);
+      const pick = (h >> 4) & 3;
+      let nb: [number, number, number] | null = null;
+      for (let k = 0; k < 4 && !nb; k++) {
+        const [nx, ny] = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]][(k + pick) % 4];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        if (classOf(ground[ny * W + nx]) !== myClass) nb = baseAt(nx, ny);
+      }
+      if (nb) {
+        if (h % 3 === 0) c = nb;
+        else if (h % 3 === 1) c = [(c[0] + nb[0]) >> 1, (c[1] + nb[1]) >> 1, (c[2] + nb[2]) >> 1];
+      } else if (h % 5 === 0) {
+        for (let k = 0; k < 4 && !nb; k++) {
+          const [nx, ny] = [[x - 2, y], [x + 2, y], [x, y - 2], [x, y + 2]][(k + pick) % 4];
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          if (classOf(ground[ny * W + nx]) !== myClass) nb = baseAt(nx, ny);
+        }
+        if (nb) c = [(c[0] + nb[0]) >> 1, (c[1] + nb[1]) >> 1, (c[2] + nb[2]) >> 1];
+      }
+      const n = (h % 15) - 7; // deterministic ±7 grain
       const i4 = (y * W + x) * 4;
       pd0[i4] = cl0(c[0] + n);
       pd0[i4 + 1] = cl0(c[1] + n);
@@ -1396,53 +1463,107 @@ async function initMinimap(): Promise<void> {
   // "The Cavern Mouth" lies even before discovering it.
   const big = el<HTMLCanvasElement>('worldmap-canvas');
   const bctx2 = big.getContext('2d')!;
-  const drawLarge = (): void => {
+  // the atlas splits into a STATIC bake (parchment, labels, landmark pins) and a
+  // cheap LIVE layer (teammates + you), so the player dot glides at the 'pos'
+  // stream's 300 ms cadence without re-rendering the parchment each tick
+  const largeBase = document.createElement('canvas');
+  const lbctx = largeBase.getContext('2d')!;
+  let lToX = (wx: number): number => wx;
+  let lToY = (wy: number): number => wy;
+  let lView: MiniView = worldView;
+  let baked = false; // the live layer must never draw off identity transforms
+  /** landmark/player pin — small sepia-ringed dot (bake passes lbctx, live bctx2) */
+  const pin = (c: CanvasRenderingContext2D, wx: number, wy: number, fill: string, rOuter = 4.5, rInner = 3) => {
+    const x = lToX(wx);
+    const y = lToY(wy);
+    c.beginPath();
+    c.arc(x, y, rOuter, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(58,38,18,0.92)';
+    c.fill();
+    c.beginPath();
+    c.arc(x, y, rInner, 0, Math.PI * 2);
+    c.fillStyle = fill;
+    c.fill();
+  };
+  /** does world-px (wx,wy) lie inside the baked view? (a Realm-district position doesn't) */
+  const pinInView = (wx: number, wy: number) =>
+    wx / 16 >= lView.x && wx / 16 < lView.x + lView.w && wy / 16 >= lView.y && wy / 16 < lView.y + lView.h;
+  const bakeLarge = (): void => {
     const side = Math.max(240, Math.min(window.innerWidth - 64, window.innerHeight - 140));
-    big.width = side;
+    big.width = side; // (clears the canvas — sizes live only here, never in the live blit)
     big.height = side;
-    const view: MiniView = { x: 0, y: 0, w: W, h: H }; // the whole grid (incl. Realm districts)
+    largeBase.width = side;
+    largeBase.height = side;
+    // the World proper only — the Realm districts (Sunken Mire, Hushdark, Green
+    // Terraces) are their own small maps behind their gates (ADR-0017 §2) and
+    // must never leak onto the atlas (the locked-Hushdark playtest report)
+    const view = worldView;
+    lView = view;
     const scale = Math.min(side / view.w, side / view.h);
     const offX = (side - view.w * scale) / 2;
     const offY = (side - view.h * scale) / 2;
     const toX = (wx: number) => offX + (wx / 16 - view.x) * scale;
     const toY = (wy: number) => offY + (wy / 16 - view.y) * scale;
+    lToX = toX;
+    lToY = toY;
     // 1) the parchment "ocean" base
-    bctx2.fillStyle = '#d8c6a0';
-    bctx2.fillRect(0, 0, side, side);
-    // 2) the land — the parchment terrain bake, shown in FULL (an atlas, not fogged)
-    bctx2.imageSmoothingEnabled = true;
-    bctx2.drawImage(parch, view.x, view.y, view.w, view.h, offX, offY, view.w * scale, view.h * scale);
+    lbctx.fillStyle = '#d8c6a0';
+    lbctx.fillRect(0, 0, side, side);
+    // 2) the land — the parchment terrain bake (an atlas, not fogged)
+    lbctx.imageSmoothingEnabled = true;
+    lbctx.drawImage(parch, view.x, view.y, view.w, view.h, offX, offY, view.w * scale, view.h * scale);
+    // 2b) scattered terrain glyphs — classic-atlas texture (carets on rock, waves
+    // on water, tufts on jungle) so the eye reads terrain fill, not border lines.
+    // Hash-scattered on a coarse grid, only where a 2x2 patch is one biome class.
+    lbctx.strokeStyle = 'rgba(74,47,22,0.30)';
+    lbctx.lineWidth = 1;
+    for (let gy = view.y; gy < view.y + view.h - 1; gy += 7) {
+      for (let gx = view.x; gx < view.x + view.w - 1; gx += 7) {
+        const h = (((gx * 73856093) ^ (gy * 19349663)) >>> 0);
+        if (h % 4 !== 0) continue;
+        const cls = classOf(ground[gy * W + gx]);
+        if (
+          classOf(ground[gy * W + gx + 1]) !== cls ||
+          classOf(ground[(gy + 1) * W + gx]) !== cls ||
+          classOf(ground[(gy + 1) * W + gx + 1]) !== cls
+        ) continue;
+        const px = toX(gx * 16) + (((h >> 8) % 3) - 1);
+        const py = toY(gy * 16) + (((h >> 10) % 3) - 1);
+        lbctx.beginPath();
+        if (cls === 3) { // rock: a caret peak
+          lbctx.moveTo(px - 3, py + 2); lbctx.lineTo(px, py - 3); lbctx.lineTo(px + 3, py + 2);
+        } else if (cls === 1) { // water: a short wave
+          lbctx.moveTo(px - 3, py); lbctx.quadraticCurveTo(px, py - 3, px + 3, py);
+        } else if (cls === 4) { // mire peat: a flat dash
+          lbctx.moveTo(px - 2, py); lbctx.lineTo(px + 2, py);
+        } else if (cls === 0) { // jungle: two tuft ticks
+          lbctx.moveTo(px - 2, py + 2); lbctx.lineTo(px - 1, py - 1);
+          lbctx.moveTo(px + 1, py + 2); lbctx.lineTo(px + 2, py - 1);
+        } else {
+          continue; // dirt/path stays clean
+        }
+        lbctx.stroke();
+      }
+    }
     // 3) faint horizontal striations — that aged-map paper grain
-    bctx2.strokeStyle = 'rgba(84,56,26,0.045)';
-    bctx2.lineWidth = 1;
+    lbctx.strokeStyle = 'rgba(84,56,26,0.045)';
+    lbctx.lineWidth = 1;
     for (let y = 2; y < side; y += 3) {
-      bctx2.beginPath();
-      bctx2.moveTo(0, y + 0.5);
-      bctx2.lineTo(side, y + 0.5);
-      bctx2.stroke();
+      lbctx.beginPath();
+      lbctx.moveTo(0, y + 0.5);
+      lbctx.lineTo(side, y + 0.5);
+      lbctx.stroke();
     }
     // 4) vignette — worn, darkened edges
-    const vg = bctx2.createRadialGradient(side / 2, side / 2, side * 0.34, side / 2, side / 2, side * 0.74);
+    const vg = lbctx.createRadialGradient(side / 2, side / 2, side * 0.34, side / 2, side / 2, side * 0.74);
     vg.addColorStop(0, 'rgba(52,34,14,0)');
     vg.addColorStop(1, 'rgba(44,28,10,0.5)');
-    bctx2.fillStyle = vg;
-    bctx2.fillRect(0, 0, side, side);
+    lbctx.fillStyle = vg;
+    lbctx.fillRect(0, 0, side, side);
     // 5) landmark pins — small sepia-ringed dots (Seal, Guardian, Hall)
-    const pin = (wx: number, wy: number, fill: string, rOuter = 4.5, rInner = 3) => {
-      const x = toX(wx);
-      const y = toY(wy);
-      bctx2.beginPath();
-      bctx2.arc(x, y, rOuter, 0, Math.PI * 2);
-      bctx2.fillStyle = 'rgba(58,38,18,0.92)';
-      bctx2.fill();
-      bctx2.beginPath();
-      bctx2.arc(x, y, rInner, 0, Math.PI * 2);
-      bctx2.fillStyle = fill;
-      bctx2.fill();
-    };
-    pin(worldData.sealMonument.tx * 16, worldData.sealMonument.ty * 16, '#8a5fc0');
-    pin((worldData.guardianHome.tx + 1.5) * 16, (worldData.guardianHome.ty + 1.5) * 16, '#b23a2b');
-    if (village?.hall) pin((village.hall.tx + 1) * 16, (village.hall.ty + 1) * 16, '#e6c063');
+    pin(lbctx, worldData.sealMonument.tx * 16, worldData.sealMonument.ty * 16, '#8a5fc0');
+    pin(lbctx, (worldData.guardianHome.tx + 1.5) * 16, (worldData.guardianHome.ty + 1.5) * 16, '#b23a2b');
+    if (village?.hall) pin(lbctx, (village.hall.tx + 1) * 16, (village.hall.ty + 1) * 16, '#e6c063');
     // 6) region names — elegant serif "small-caps" (uppercased) in sepia ink on a
     //    cream halo, no boxes (a fantasy atlas). Long names wrap to two balanced
     //    lines; colliding labels nudge down so every region stays legible.
@@ -1450,18 +1571,18 @@ async function initMinimap(): Promise<void> {
     const pty = lastPos ? lastPos.y / 16 : -1;
     const font = Math.max(11, Math.round(side / 40));
     const lineH = font * 1.04;
-    bctx2.textAlign = 'center';
-    bctx2.textBaseline = 'middle';
-    bctx2.font = `600 ${font}px Georgia, 'Times New Roman', serif`;
-    bctx2.lineJoin = 'round';
+    lbctx.textAlign = 'center';
+    lbctx.textBaseline = 'middle';
+    lbctx.font = `600 ${font}px Georgia, 'Times New Roman', serif`;
+    lbctx.lineJoin = 'round';
     try {
-      (bctx2 as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${Math.max(1, Math.round(font * 0.1))}px`;
+      (lbctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${Math.max(1, Math.round(font * 0.1))}px`;
     } catch {
       /* letterSpacing unsupported on this canvas — harmless */
     }
     const maxW = side * 0.24;
     const splitLabel = (txt: string): string[] => {
-      if (bctx2.measureText(txt).width <= maxW) return [txt];
+      if (lbctx.measureText(txt).width <= maxW) return [txt];
       const words = txt.split(' ');
       if (words.length < 2) return [txt];
       let best = 1;
@@ -1469,7 +1590,7 @@ async function initMinimap(): Promise<void> {
       for (let i = 1; i < words.length; i++) {
         const a = words.slice(0, i).join(' ');
         const b = words.slice(i).join(' ');
-        const diff = Math.abs(bctx2.measureText(a).width - bctx2.measureText(b).width);
+        const diff = Math.abs(lbctx.measureText(a).width - lbctx.measureText(b).width);
         if (diff < bestDiff) { bestDiff = diff; best = i; }
       }
       return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
@@ -1478,9 +1599,13 @@ async function initMinimap(): Promise<void> {
     const overlaps = (r: { x0: number; y0: number; x1: number; y1: number }) =>
       placed.some((p) => r.x0 < p.x1 && r.x1 > p.x0 && r.y0 < p.y1 && r.y1 > p.y0);
     for (const z of worldData.zones) {
+      // an off-view zone (a Realm district below the World) must be SKIPPED, not
+      // clamped — the edge clamp below would otherwise pin "THE HUSHDARK" onto
+      // the bottom border and leak the locked Realm's existence
+      if (z.x >= view.x + view.w || z.y >= view.y + view.h || z.x + z.w <= view.x || z.y + z.h <= view.y) continue;
       const here = ptx >= z.x && ptx < z.x + z.w && pty >= z.y && pty < z.y + z.h;
       const lines = splitLabel(zoneName(z.name).toUpperCase());
-      const tw = Math.max(...lines.map((l) => bctx2.measureText(l).width));
+      const tw = Math.max(...lines.map((l) => lbctx.measureText(l).width));
       const th = lines.length * lineH;
       const halfW = tw / 2 + 3;
       const halfH = th / 2 + 2;
@@ -1492,35 +1617,54 @@ async function initMinimap(): Promise<void> {
       placed.push(rect());
       lines.forEach((line, i) => {
         const y = ly - th / 2 + lineH / 2 + i * lineH;
-        bctx2.strokeStyle = 'rgba(245,233,203,0.92)'; // cream halo
-        bctx2.lineWidth = 4;
-        bctx2.strokeText(line, lx, y);
-        bctx2.fillStyle = here ? '#7c3d12' : z.dangerous ? '#6b3018' : '#4a2f16'; // sepia ink
-        bctx2.fillText(line, lx, y);
+        lbctx.strokeStyle = 'rgba(245,233,203,0.92)'; // cream halo
+        lbctx.lineWidth = 4;
+        lbctx.strokeText(line, lx, y);
+        lbctx.fillStyle = here ? '#7c3d12' : z.dangerous ? '#6b3018' : '#4a2f16'; // sepia ink
+        lbctx.fillText(line, lx, y);
       });
     }
     try {
-      (bctx2 as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
+      (lbctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
     } catch {
       /* */
     }
-    // 7) the treasure ✕, then teammates (gold pins) and you (a ringed white dot)
+    // 7) the treasure ✕ (bake-time, like the landmark pins)
     if (treasureLoc) {
       const cx = toX(treasureLoc.tx * 16);
       const cy = toY(treasureLoc.ty * 16);
-      bctx2.strokeStyle = '#a52a1a';
-      bctx2.lineWidth = 3;
-      bctx2.beginPath();
-      bctx2.moveTo(cx - 6, cy - 6); bctx2.lineTo(cx + 6, cy + 6);
-      bctx2.moveTo(cx + 6, cy - 6); bctx2.lineTo(cx - 6, cy + 6);
-      bctx2.stroke();
-    }
-    if (lastPos) {
-      for (const o of lastPos.others) pin(o.x, o.y, '#e0b64a', 4, 2.6);
-      pin(lastPos.x, lastPos.y, '#ffffff', 5, 3.3);
+      lbctx.strokeStyle = '#a52a1a';
+      lbctx.lineWidth = 3;
+      lbctx.beginPath();
+      lbctx.moveTo(cx - 6, cy - 6); lbctx.lineTo(cx + 6, cy + 6);
+      lbctx.moveTo(cx + 6, cy - 6); lbctx.lineTo(cx - 6, cy + 6);
+      lbctx.stroke();
     }
   };
+  // the live layer: blit the bake, then teammates (gold pins) and you (a ringed
+  // white dot). Runs on every 'pos' tick while the map is open — one drawImage +
+  // a few arcs. Positions inside a Realm district fall outside the cropped view
+  // and are skipped (the atlas charts the World only).
+  const drawLargeLive = (): void => {
+    if (!baked) return;
+    bctx2.drawImage(largeBase, 0, 0);
+    if (!lastPos) return;
+    for (const o of lastPos.others) if (pinInView(o.x, o.y)) pin(bctx2, o.x, o.y, '#e0b64a', 4, 2.6);
+    if (pinInView(lastPos.x, lastPos.y)) pin(bctx2, lastPos.x, lastPos.y, '#ffffff', 5, 3.3);
+  };
+  const drawLarge = (): void => {
+    bakeLarge();
+    baked = true;
+    drawLargeLive();
+  };
   drawWorldMap = drawLarge;
+  // the overlay may already be open (M pressed while the map JSONs were still
+  // fetching — drawWorldMap was null then and the canvas stayed blank)
+  if (el('worldmap-overlay').classList.contains('open')) drawLarge();
+  // the 300 ms 'pos' stream drives the live dot while the map is open
+  bus.on('pos', () => {
+    if (el('worldmap-overlay').classList.contains('open')) drawLargeLive();
+  });
   window.addEventListener('resize', () => {
     if (el('worldmap-overlay').classList.contains('open')) drawLarge();
   });
@@ -1567,11 +1711,12 @@ function renderSettings(): void {
 }
 
 /**
- * The HUD objective tracker. It shows **The Journey** (onboarding) until that is
- * done, then hands the panel over to **Into the Delve** — the post-onboarding
- * quest that guides the Player to and into the first Dungeon (ADR-0007), ticking
- * off Seal/Guardian/pickaxe/shaft/descent from state. When the Delve quest is
- * also complete the panel disappears for good.
+ * The HUD objective tracker: a chain of phases, each shown until complete, all
+ * ticking purely off state the HUD already holds (no new persistence, ADR-0001):
+ * **The Journey** (onboarding) → **Into the Delve** (ADR-0007) → the Warden
+ * ladder rungs **Mire → Hushdark → Terraces** (ADR-0017) → **The Legacy**
+ * (Village growth, the Deep's boss, the Reverberant). Only when every phase is
+ * complete does the panel disappear.
  */
 function renderTrackerRows(steps: { id: string; label: string }[], done: (i: number) => boolean): void {
   const box = el('journey-steps');
@@ -1600,14 +1745,45 @@ function renderJourney(): void {
     return;
   }
   // Phase 2 — the road to the Delve, once The Journey is done
-  const prog = { seal, inventory: inv, quest, sawmillBuilt, village };
+  const prog = { seal, inventory: inv, quest, sawmillBuilt, village, equipped: equippedGear };
   if (journey && !delveQuestComplete(prog)) {
     panel.classList.add('open');
     title.textContent = t.panels.intoDelve;
     renderTrackerRows(DELVE_QUEST_STEPS, (i) => DELVE_QUEST_STEPS[i].done(prog));
     return;
   }
-  panel.classList.remove('open'); // both quests done (or not joined yet)
+  // Phases 3–5 (ADR-0017) — the Warden ladder, one rung at a time. The chain
+  // itself gates Chapter 2: these only appear once Into the Delve is complete
+  // (Guardian bested + descended). Steps proven by held items can un-tick if
+  // the item is pooled/crated — the accepted best_guardian idiom.
+  const wprog = { inventory: inv, wardens, equipped: equippedGear };
+  if (journey && !mireQuestComplete(wprog)) {
+    panel.classList.add('open');
+    title.textContent = t.panels.mire;
+    renderTrackerRows(MIRE_QUEST_STEPS, (i) => MIRE_QUEST_STEPS[i].done(wprog));
+    return;
+  }
+  if (journey && !hushdarkQuestComplete(wprog)) {
+    panel.classList.add('open');
+    title.textContent = t.panels.hushdark;
+    renderTrackerRows(HUSHDARK_QUEST_STEPS, (i) => HUSHDARK_QUEST_STEPS[i].done(wprog));
+    return;
+  }
+  if (journey && !terraceQuestComplete(wprog)) {
+    panel.classList.add('open');
+    title.textContent = t.panels.terrace;
+    renderTrackerRows(TERRACE_QUEST_STEPS, (i) => TERRACE_QUEST_STEPS[i].done(wprog));
+    return;
+  }
+  // Phase 6 — the Legacy capstone: Village growth, the Deep's boss, the Reverberant
+  const lprog = { inventory: inv, village, equipped: equippedGear };
+  if (journey && !legacyQuestComplete(lprog)) {
+    panel.classList.add('open');
+    title.textContent = t.panels.legacy;
+    renderTrackerRows(LEGACY_QUEST_STEPS, (i) => LEGACY_QUEST_STEPS[i].done(lprog));
+    return;
+  }
+  panel.classList.remove('open'); // every arc done (or not joined yet)
 }
 
 /** 📜 read/total (derived from world data) · 🗺 pieces · ⛩ Seal progress */
@@ -1812,25 +1988,47 @@ function saveInvOrder(): void {
 
 // ---------------------------------------------------------------- v4: the Loadout
 
-/** three quick-slots holding ready Tools; exactly one is in-hand (keys 1–3) */
+/** three quick-slots holding ready TOOLS (keys 1–3); weapons live in the two
+ *  dedicated weapon slots behind keys 4–5 (the gear record, MOVE semantics) */
 const LOADOUT_SLOTS = 3;
+/** total selectable hotbar cells: 3 tool quick-slots + 2 weapon slots */
+const HOTBAR_SLOTS = LOADOUT_SLOTS + 2;
 let loadout: (ItemId | null)[] = [null, null, null];
 let loadoutSel = 0;
+/**
+ * The weapon slots as last saved locally. Against the CURRENT live server
+ * (pre-0021 jw_equip) weapon slots are never persisted server-side — they run
+ * in reference mode — so without this stash every login would wipe them. A
+ * one-shot restore re-seats saved weapons the bag still holds; once 0021 is
+ * live the server record arrives non-empty and the restore never fires.
+ */
+let savedWeapons: (ItemId | null)[] = [null, null];
+let weaponRestoreDone = false;
+
+/** the weapon slot behind hotbar index 3/4, or null for a tool cell */
+function weaponSlotAt(i: number): WeaponSlot | null {
+  return i === 3 ? 'weapon1' : i === 4 ? 'weapon2' : null;
+}
 
 const loadoutKey = () => `jungle-world:loadout:${meName}`;
 
 function loadLoadout(): void {
   loadout = [null, null, null];
   loadoutSel = 0;
+  savedWeapons = [null, null];
+  weaponRestoreDone = false;
   try {
     const parsed = JSON.parse(localStorage.getItem(loadoutKey()) ?? 'null') as
-      | { slots?: (ItemId | null)[]; sel?: number }
+      | { slots?: (ItemId | null)[]; sel?: number; weapons?: (ItemId | null)[] }
       | null;
     if (parsed && Array.isArray(parsed.slots)) {
       for (let i = 0; i < LOADOUT_SLOTS; i++) loadout[i] = parsed.slots[i] ?? null;
     }
+    if (parsed && Array.isArray(parsed.weapons)) {
+      savedWeapons = [parsed.weapons[0] ?? null, parsed.weapons[1] ?? null];
+    }
     if (parsed && Number.isInteger(parsed.sel)) {
-      loadoutSel = Math.max(0, Math.min(LOADOUT_SLOTS - 1, parsed.sel!));
+      loadoutSel = Math.max(0, Math.min(HOTBAR_SLOTS - 1, parsed.sel!));
     }
   } catch {
     /* corrupt entry — start empty */
@@ -1838,16 +2036,38 @@ function loadLoadout(): void {
 }
 
 function saveLoadout(): void {
-  localStorage.setItem(loadoutKey(), JSON.stringify({ slots: loadout, sel: loadoutSel }));
+  // until the one-shot restore has run the gear record is still weapon-less
+  // (boot renders fire before 'equipped' arrives) — keep the loaded stash
+  // instead of clobbering it with empties
+  const weapons = weaponRestoreDone ? [equippedGear.weapon1 ?? null, equippedGear.weapon2 ?? null] : savedWeapons;
+  localStorage.setItem(loadoutKey(), JSON.stringify({ slots: loadout, sel: loadoutSel, weapons }));
 }
 
-/** only Tools are equippable; drop unowned Tools and auto-seat newly-owned ones */
+/**
+ * One-shot after join: the pre-0021 server never persists weapon slots, so the
+ * gear record arrives weapon-less every login — re-seat the locally saved
+ * weapons the bag still holds (reference mode re-arms them). A 0021 server
+ * returns them in the record itself, and this never fires.
+ */
+function restoreWeaponSlots(): void {
+  if (weaponRestoreDone || !invReady) return;
+  weaponRestoreDone = true;
+  if (equippedGear.weapon1 || equippedGear.weapon2) return; // the server record wins
+  (['weapon1', 'weapon2'] as WeaponSlot[]).forEach((slot, i) => {
+    const id = savedWeapons[i];
+    if (id && isWeapon(id) && (inv[id] ?? 0) > 0) bus.emit('weapon-slot-set', slot, id);
+  });
+}
+
+/** only non-weapon Tools sit in quick-slots (weapons live in the gear slots);
+ *  drop unowned ones and auto-seat newly-owned ones. Legacy saved loadouts with
+ *  weapons in them are cleaned by the same filter. */
 function reconcileLoadout(): void {
   // Before the first inventory snapshot the inv is empty; reconciling now would drop every
   // saved slot (nothing looks owned) and the following renderLoadout would persist the wipe.
   if (!invReady) return;
   const ownedTools = (Object.entries(inv) as [ItemId, number][])
-    .filter(([id, n]) => (n ?? 0) > 0 && ITEMS[id]?.kind === 'tool')
+    .filter(([id, n]) => (n ?? 0) > 0 && ITEMS[id]?.kind === 'tool' && !isWeapon(id))
     .map(([id]) => id);
   for (let i = 0; i < LOADOUT_SLOTS; i++) {
     if (loadout[i] && !ownedTools.includes(loadout[i]!)) loadout[i] = null;
@@ -1859,8 +2079,12 @@ function reconcileLoadout(): void {
   }
 }
 
-/** the currently in-hand item, or null when the selected slot is empty/unowned */
+/** the currently in-hand item, or null when the selected slot is empty/unowned.
+ *  Hotbar 3/4 are the weapon slots — the slot itself IS ownership (the weapon
+ *  was moved out of the bag), so there is no inv check for them. */
 function heldItem(): ItemId | null {
+  const wslot = weaponSlotAt(loadoutSel);
+  if (wslot) return equippedGear[wslot] ?? null;
   const id = loadout[loadoutSel];
   return id && (inv[id] ?? 0) > 0 ? id : null;
 }
@@ -1871,35 +2095,29 @@ function emitHeld(): void {
 }
 
 function selectLoadout(i: number): void {
-  if (i < 0 || i >= LOADOUT_SLOTS) return;
+  if (i < 0 || i >= HOTBAR_SLOTS) return;
   loadoutSel = i;
   saveLoadout();
   renderLoadout();
   emitHeld();
 }
 
-/**
- * Seat a Tool from the character panel's weapon slot into the loadout and hold
- * it: it goes into the selected quick-slot (clearing any duplicate) and becomes
- * the in-hand item — the paperdoll's weapon slot IS the selected loadout slot.
- */
-function equipWeaponToLoadout(toolId: ItemId): void {
-  if (ITEMS[toolId]?.kind !== 'tool') return;
-  for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === toolId) loadout[k] = null;
-  loadout[loadoutSel] = toolId;
-  selectLoadout(loadoutSel); // saves, re-renders the bar, emits held (→ renderCharacter)
-}
-
 function renderLoadout(): void {
   reconcileLoadout();
   saveLoadout();
-  renderCharacter(); // the paperdoll's weapon slot + attributes track the held Tool
+  renderCharacter(); // the paperdoll's weapon slots + attributes track the held item
   const bar = el('loadout-bar');
   bar.innerHTML = '';
-  for (let i = 0; i < LOADOUT_SLOTS; i++) {
-    const id = loadout[i];
+  for (let i = 0; i < HOTBAR_SLOTS; i++) {
+    const wslot = weaponSlotAt(i);
+    const id = wslot ? equippedGear[wslot] ?? null : loadout[i];
     const slot = document.createElement('div');
-    slot.className = 'loadout-slot' + (i === loadoutSel ? ' selected' : '') + (id ? ' filled' : '');
+    slot.className =
+      'loadout-slot' +
+      (i === loadoutSel ? ' selected' : '') +
+      (id ? ' filled' : '') +
+      (wslot ? ' weapon' : '') +
+      (i === LOADOUT_SLOTS ? ' divider' : ''); // visual split: tools | weapons
     slot.setAttribute('data-testid', `loadout-${i}`);
     const key = document.createElement('span');
     key.className = 'loadout-key';
@@ -1912,13 +2130,15 @@ function renderLoadout(): void {
       icon.alt = ITEMS[id].name;
       icon.draggable = false;
       slot.appendChild(icon);
-      slot.title = t.inv.slotHold(ITEMS[id].name, i + 1);
+      slot.title = wslot ? t.inv.weaponSlotHold(ITEMS[id].name, i + 1) : t.inv.slotHold(ITEMS[id].name, i + 1);
     } else {
-      slot.title = t.inv.slotEmpty(i + 1);
+      slot.title = wslot ? t.inv.weaponSlotEmpty(i + 1) : t.inv.slotEmpty(i + 1);
     }
-    // accept a Tool dragged from the inventory grid
+    // accept the matching drag payload from the inventory grid: plain Tools onto
+    // quick-slots, weapons onto the gear cells (an equip = MOVE, via GameScene)
+    const payload = wslot ? 'application/x-jw-weapon' : 'application/x-jw-tool';
     slot.addEventListener('dragover', (e) => {
-      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('application/x-jw-tool')) {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(payload)) {
         e.preventDefault();
         slot.classList.add('drop');
       }
@@ -1927,11 +2147,16 @@ function renderLoadout(): void {
     slot.addEventListener('drop', (e) => {
       e.preventDefault();
       slot.classList.remove('drop');
-      const toolId = e.dataTransfer?.getData('application/x-jw-tool') as ItemId;
-      if (!toolId) return;
-      // no duplicates — clear the Tool from any other slot first
-      for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === toolId) loadout[k] = null;
-      loadout[i] = toolId;
+      const dropped = e.dataTransfer?.getData(payload) as ItemId;
+      if (!dropped) return;
+      if (wslot) {
+        bus.emit('weapon-slot-set', wslot, dropped);
+        selectLoadout(i); // hold the newly slotted weapon at once
+        return;
+      }
+      // no duplicates — clear the Tool from any other quick-slot first
+      for (let k = 0; k < LOADOUT_SLOTS; k++) if (loadout[k] === dropped) loadout[k] = null;
+      loadout[i] = dropped;
       saveLoadout();
       renderLoadout();
       emitHeld();
@@ -2044,12 +2269,22 @@ function invUse(id: ItemId): void {
   if (kind === 'structure') bus.emit('request-place', id as StructureId);
   else if (kind === 'food') bus.emit('eat', id);
   else if (kind === 'armor') bus.emit('equip-toggle', id);
+  else if (isWeapon(id)) {
+    // already slotted? select that hotbar cell instead of re-equipping — on the
+    // pre-0021 server the bag copy is a reference-mode mirage, and equipping it
+    // into the OTHER slot would double-seat the single owned copy
+    if (equippedGear.weapon1 === id) return selectLoadout(3);
+    if (equippedGear.weapon2 === id) return selectLoadout(4);
+    // seat the weapon into the first free weapon slot (or replace slot 1)
+    const slot: WeaponSlot = !equippedGear.weapon1 ? 'weapon1' : !equippedGear.weapon2 ? 'weapon2' : 'weapon1';
+    bus.emit('weapon-slot-set', slot, id);
+  }
 }
 
 /** is this Armor piece currently worn in its slot? */
 function isEquipped(id: ItemId): boolean {
   const def = armorDef(id);
-  return !!def && equippedArmor[def.slot] === id;
+  return !!def && equippedGear[def.slot] === id;
 }
 
 function renderInventory(): void {
@@ -2118,8 +2353,9 @@ function renderInventory(): void {
         hideItemTooltip(); // don't leave the popup floating over a drag
         e.dataTransfer!.setData('text/plain', String(i));
         // extra payloads so the item can also be dropped onto the Loadout bar
-        // (Tools) or the game canvas to place it (Structures)
-        if (ITEMS[id].kind === 'tool') e.dataTransfer!.setData('application/x-jw-tool', id);
+        // (Tools/weapons) or the game canvas to place it (Structures)
+        if (isWeapon(id)) e.dataTransfer!.setData('application/x-jw-weapon', id);
+        else if (ITEMS[id].kind === 'tool') e.dataTransfer!.setData('application/x-jw-tool', id);
         else if (ITEMS[id].kind === 'structure') e.dataTransfer!.setData('application/x-jw-structure', id);
         else if (ITEMS[id].kind === 'armor') e.dataTransfer!.setData('application/x-jw-armor', id);
         e.dataTransfer!.effectAllowed = 'move';
@@ -2156,7 +2392,7 @@ function renderInventory(): void {
 // equipment slots you drag Items into, and the attributes those Items grant.
 
 /** the four paperdoll slots: three Armor slots + the in-hand weapon */
-type EquipSlotKind = ArmorSlot | 'weapon';
+type EquipSlotKind = ArmorSlot | WeaponSlot;
 
 /** redraw the whole character block (paperdoll + slots + attributes) */
 function renderCharacter(): void {
@@ -2171,7 +2407,7 @@ function renderPaperdoll(): void {
   if (!canvas) return;
   // the 20-frame sheet already bakes the Armor overlays (drawBlockheadSheet);
   // the down-idle frame sits at the sheet's top-left (AVATAR_W×AVATAR_H)
-  const sheet = drawBlockheadSheet(myAppearance, equippedArmor);
+  const sheet = drawBlockheadSheet(myAppearance, equippedGear);
   const scale = 5;
   canvas.width = AVATAR_W * scale;
   canvas.height = AVATAR_H * scale;
@@ -2181,9 +2417,10 @@ function renderPaperdoll(): void {
   ctx.drawImage(sheet, 0, 0, AVATAR_W, AVATAR_H, 0, 0, canvas.width, canvas.height);
 }
 
-/** the item currently seated in an equipment slot (weapon = the in-hand Tool) */
+/** the item currently seated in an equipment slot (armor + the two weapon slots
+ *  all read straight off the persisted gear record) */
 function slotItem(kind: EquipSlotKind): ItemId | null {
-  return kind === 'weapon' ? heldItem() : equippedArmor[kind] ?? null;
+  return equippedGear[kind] ?? null;
 }
 
 /** line-art empty-slot icons for the slots whose emoji render as solid shapes
@@ -2211,13 +2448,12 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
     slot.appendChild(icon);
     slot.addEventListener('mouseenter', () => showItemTooltip(id, slot));
     slot.addEventListener('mouseleave', hideItemTooltip);
-    // armor slots unequip on click; the weapon slot mirrors the loadout (read-only)
-    if (kind !== 'weapon') {
-      slot.title = `${ITEMS[id].name} — ${t.character.unequipHint}`;
-      slot.onclick = () => bus.emit('equip-toggle', id);
-    } else {
-      slot.title = ITEMS[id].name;
-    }
+    // every filled slot unequips on click — the piece MOVES back to the bag
+    slot.title = `${ITEMS[id].name} — ${t.character.unequipHint}`;
+    slot.onclick = () => {
+      if (kind === 'weapon1' || kind === 'weapon2') bus.emit('weapon-slot-set', kind, null);
+      else bus.emit('equip-toggle', id);
+    };
   } else {
     const ghost = document.createElement('span');
     ghost.className = 'equip-ghost';
@@ -2229,8 +2465,9 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
     slot.appendChild(ghost);
     slot.title = t.character.emptySlot(label);
   }
-  // drop target: armor slots take the matching Armor; the weapon slot takes any Tool
-  const dropType = kind === 'weapon' ? 'application/x-jw-tool' : 'application/x-jw-armor';
+  // drop target: armor slots take the matching Armor; a weapon slot takes a weapon
+  const isWeaponSlot = kind === 'weapon1' || kind === 'weapon2';
+  const dropType = isWeaponSlot ? 'application/x-jw-weapon' : 'application/x-jw-armor';
   slot.addEventListener('dragover', (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(dropType)) {
       e.preventDefault();
@@ -2243,8 +2480,8 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
     slot.classList.remove('drop');
     const dropped = e.dataTransfer?.getData(dropType) as ItemId | undefined;
     if (!dropped) return;
-    if (kind === 'weapon') {
-      equipWeaponToLoadout(dropped);
+    if (isWeaponSlot) {
+      bus.emit('weapon-slot-set', kind, dropped);
     } else {
       const def = armorDef(dropped);
       if (def && def.slot === kind && !isEquipped(dropped)) bus.emit('equip-toggle', dropped);
@@ -2254,7 +2491,7 @@ function buildEquipSlot(kind: EquipSlotKind): HTMLElement {
 }
 
 /** (re)lay the equipment slots: helm→chest→boots (head-to-toe) on the left,
- *  the weapon on the right */
+ *  the two weapon slots on the right */
 function renderEquipSlots(): void {
   const left = document.getElementById('char-slots-left');
   const right = document.getElementById('char-slots-right');
@@ -2263,14 +2500,15 @@ function renderEquipSlots(): void {
   right.innerHTML = '';
   const order: ArmorSlot[] = ['helm', 'chest', 'boots'];
   for (const s of order) left.appendChild(buildEquipSlot(s));
-  right.appendChild(buildEquipSlot('weapon'));
+  right.appendChild(buildEquipSlot('weapon1'));
+  right.appendChild(buildEquipSlot('weapon2'));
 }
 
 /** the attributes block: the character's effective combat profile (content/stats.ts) */
 function renderCharAttrs(): void {
   const box = document.getElementById('char-attrs');
   if (!box) return;
-  const sheet = characterSheet((heldItem() ?? undefined) as ToolId | undefined, equippedArmor, villageTier);
+  const sheet = characterSheet((heldItem() ?? undefined) as ToolId | undefined, equippedGear, villageTier);
   const rows: [string, string][] = [];
   rows.push([t.character.attrMove, sheet.moveBonus > 0 ? `+${Math.round(sheet.moveBonus * 100)}%` : '—']);
   rows.push([t.character.attrAttack, sheet.attackBonus > 0 ? `+${Math.round(sheet.attackBonus * 100)}%` : '—']);

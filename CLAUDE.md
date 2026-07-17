@@ -10,8 +10,9 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
   regrow lazily after a real-time delay.
 - **Crafting** — Recipes turn Resources into Tools (carried) or Structures (placed); tier-2
   Recipes need Guardian Scales and planks.
-- **Loadout** — three quick-slots; keys 1–3 pick the single in-hand Tool (only it acts, and it
-  shows in each Player's hand). Bare hands still harvest the basic Nodes.
+- **Loadout** — keys 1–3 pick a Tool quick-slot, keys 4–5 the two dedicated weapon slots
+  (slotting a weapon MOVES it out of the bag, like Armor); exactly one item is in-hand.
+  Bare hands still harvest the basic Nodes.
 - **Structures** — placed permanently, first claim on a tile wins; functional ones: campfire
   (cooking), crate (shared storage), signpost (player text), Hammock (personal wake point),
   Sawmill (wood → planks after a real-time delay).
@@ -20,8 +21,8 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
 - **Guardian** — a crafted Summoning Totem wakes it for ~5 min of authored, time-keyed slam
   waves, telegraphed lunges, and three fury phases; unslain, it re-slumbers at full HP and the
   totem is spent.
-- **Eye Windows** — hits count only in the short post-slam window (2 damage, 3 with an in-hand
-  axe/pickaxe, shorter each fury phase); everything else bounces off.
+- **Eye Windows** — hits count only in the short post-slam window (damage rolls from the
+  in-hand weapon's band, ADR-0006; windows shorten each fury phase); everything else bounces off.
 - **Bow** — tier-1 ranged weapon (wood/fiber/stone, no Guardian drops, craftable before the
   first fight); looses arrows for 2 in an Eye Window on a slower cadence than melee — safe but
   weaker than an axe swing.

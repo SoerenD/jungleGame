@@ -43,7 +43,7 @@ import {
   type VillageRecord,
 } from '../content/village';
 import { sanitizeAppearance } from '../avatars';
-import { armorBuff, ARMOR_BUFFS, sanitizeEquipped, type EquippedArmor } from '../content/armor';
+import { armorBuff, ARMOR_BUFFS, armorOnly, gearOwns, sanitizeEquipped, WEAPON_SLOTS, type EquippedArmor, type EquippedGear } from '../content/armor';
 import { kitOf, wardenDef } from '../content/wardens';
 import type { EchoSample, Ghost } from '../content/echoes';
 import { asset } from '../paths';
@@ -156,7 +156,7 @@ export class SupabaseBackend implements Backend {
   private worldId: string = WORLD_ID_DEFAULT;
   private appearance: Appearance = { skin: 1, hair: 1, shirt: 1, pants: 0 };
   /** the worn Armor (ADR-0017 §4) — injected into every position/presence payload */
-  private equipped: EquippedArmor = {};
+  private equipped: EquippedGear = {};
 
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
   private nodesById = new Map<string, StaticNode>();
@@ -365,13 +365,13 @@ export class SupabaseBackend implements Backend {
     this.equipped = sanitizeEquipped(res.equipped);
 
     this.village = this.villageFromJson(res.village);
-    // appear point (ADR-0010 §4): Hammock > Village Hall > server-returned spot.
-    // A founded Hall makes the Village home for anyone without a Hammock.
-    const wp = res.wakePoint as { tx: number; ty: number } | null;
-    const hallTile = !wp && this.village.hall ? this.hallWakeTile(this.village.hall) : null;
-    const x = wp ? (wp.tx + 0.5) * TILE : hallTile ? (hallTile.tx + 0.5) * TILE : (res.x as number);
-    const y = wp ? (wp.ty + 0.5) * TILE : hallTile ? (hallTile.ty + 0.5) * TILE : (res.y as number);
-    this.lastLocal = { name, appearance: appr, x, y, dir: 'down', moving: false, armor: this.equipped };
+    // appear point (ADR-0010 §4 as amended — the Hammock rung is retired):
+    // Village Hall > server-returned spot. Any legacy players.wake_point the old
+    // server still returns is deliberately ignored (migration 0019 nulls it).
+    const hallTile = this.village.hall ? this.hallWakeTile(this.village.hall) : null;
+    const x = hallTile ? (hallTile.tx + 0.5) * TILE : (res.x as number);
+    const y = hallTile ? (hallTile.ty + 0.5) * TILE : (res.y as number);
+    this.lastLocal = { name, appearance: appr, x, y, dir: 'down', moving: false, armor: armorOnly(this.equipped) };
 
     await this.connectRealtime(x, y);
 
@@ -565,7 +565,7 @@ export class SupabaseBackend implements Backend {
     // `swings` and the worn `armor` ride the SAME broadcast payload (and the
     // rare presence snapshot lastLocal already feeds) — no new channel, packet,
     // or cadence; the backend injects armor itself so no call site threads it
-    this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held, swings, armor: this.equipped };
+    this.lastLocal = { name: this.me!, appearance: this.appearance, x, y, dir, moving, held, swings, armor: armorOnly(this.equipped) };
     this.broadcastPos(false);
     // B2: my own step out of / into the arena may start/cancel the grace
     if (this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
@@ -768,7 +768,7 @@ export class SupabaseBackend implements Backend {
     const sn = this.nodesById.get(nodeId);
     if (!sn) return { ok: false, reason: 'UNKNOWN_NODE' };
     const t = NODE_TYPES[sn.type];
-    const owned = withTool && (this.inv[withTool] ?? 0) > 0 ? withTool : undefined;
+    const owned = withTool && gearOwns(this.inv, this.equipped, withTool) ? withTool : undefined;
     if (t.requiredTool && !toolSatisfies(owned, t.requiredTool)) {
       return { ok: false, reason: 'TOOL_REQUIRED', requiredTool: t.requiredTool };
     }
@@ -844,7 +844,8 @@ export class SupabaseBackend implements Backend {
       p_ty: ty,
       p_text: txt,
       p_id: id,
-      p_is_hammock: item === 'hammock',
+      // hammocks are retired; the live RPC signature still requires the param
+      p_is_hammock: false,
     };
     // pass the footprint; fall back to the pre-footprint signature if the
     // migration (0004) isn't deployed yet, so the live world keeps building
@@ -1323,7 +1324,7 @@ export class SupabaseBackend implements Backend {
     // roll the weapon band + crit here (the Backend is the server boundary,
     // ADR-0006 §3): the authoritative pool subtraction still happens in the
     // server-ordered jw_guardian_hit RPC, which just applies this p_dmg
-    const owned = withTool && (this.inv[withTool] ?? 0) > 0 ? withTool : undefined;
+    const owned = withTool && gearOwns(this.inv, this.equipped, withTool) ? withTool : undefined;
     // the worn Helm's flat band raise rides in like the Village crit buff (ADR-0017 §3)
     const { damage: dmg, crit } = rollGuardianDamage(owned, Math.random, villageBuff(this.village.tier).critChance, armorBuff(this.equipped));
     const engaging = f.engagedAt === null;
@@ -1371,11 +1372,17 @@ export class SupabaseBackend implements Backend {
     const f = this.fightState;
     if (!f || f.engagedAt === null) return { ok: false, reason: 'NO_FIGHT' };
     const wave = waveInfoAt(Date.now() - f.engagedAt, GUARDIAN_AWAKE_MS, kitOf(f.warden)).index;
+    // Wake priority Village Hall > World spawn is enforced HERE (p_spawn is the
+    // server's fallback wake tile): the live jw_knockdown only knows the legacy
+    // players.wake_point else p_spawn, so passing the Hall tile fixes the
+    // "respawn below the waterfall" bug against the old server too. Migration
+    // 0019 nulls the legacy wake_points so p_spawn always wins.
+    const hallTile = this.village.hall ? this.hallWakeTile(this.village.hall) : null;
     const res = await this.rpc<any>('jw_knockdown', {
       p_who: this.me,
       p_wave: wave,
       p_exhaustion_n: EXHAUSTION_KNOCKDOWNS,
-      p_spawn: { tx: this.wd.spawn.tx, ty: this.wd.spawn.ty },
+      p_spawn: hallTile ?? { tx: this.wd.spawn.tx, ty: this.wd.spawn.ty },
       p_tile: TILE,
       p_awake_ms: GUARDIAN_AWAKE_MS,
       p_dormant_ms: DORMANT_TIMEOUT_MS,
@@ -1384,8 +1391,15 @@ export class SupabaseBackend implements Backend {
     void tx;
     void ty;
     if (!res || res.ok === false) return { ok: false, reason: res?.reason ?? 'NOT_IN_DANGER' };
+    // atHammock on the wire means the OLD server honoured a legacy wake_point
+    // (hammocks are retired and invisible now) — with a founded Hall, override
+    // locally so every wake lands at the Village. The stale x/y the old server
+    // wrote is harmless: peers follow the live position stream, and login
+    // repositions at the Hall anyway. Migration 0019 retires wake_point for good.
+    const atVillage = !!hallTile;
+    const wake = atVillage && res.atHammock ? hallTile! : (res.wake as { tx: number; ty: number });
     if (res.exhausted) {
-      this.pushChat(t.system.sender, t.system.exhaustionCollapse(this.me ?? '', res.atHammock));
+      this.pushChat(t.system.sender, t.system.exhaustionCollapse(this.me ?? '', atVillage));
     }
     // the RPC returns emptySlumberAt when this knockdown emptied the arena (whole
     // roster Exhausted): re-anchor the local slumber timer so the wiped fight ends
@@ -1398,7 +1412,7 @@ export class SupabaseBackend implements Backend {
     // empty of live roster members (covers the case jw_knockdown's own wipe check
     // misses, e.g. others already stepped out)
     if (res.exhausted && this.fightState?.engagedAt != null) this.evaluateArenaOccupancy();
-    return { ok: true, knockdowns: res.knockdowns, exhausted: res.exhausted, wake: res.wake, atHammock: res.atHammock };
+    return { ok: true, knockdowns: res.knockdowns, exhausted: res.exhausted, wake, atVillage };
   }
 
   /** the arena rect the active fight belongs to (ADR-0017 §1): a Warden fights in
@@ -1553,20 +1567,37 @@ export class SupabaseBackend implements Backend {
   }
 
   /**
-   * Wear/unwear Armor (ADR-0017 §4, migration 0013 → 0016). jw_equip now MOVES
-   * the piece between the bag and the slot server-side (0016) and returns the
-   * mutated inventory; the new look then rides the position stream + a fresh
-   * presence snapshot so peers recompose at once. Until 0016 is live the RPC
-   * returns no `inventory` — we keep the old bag (equip still copies) so nothing
-   * breaks; pre-0013 it returns null — degrade to a local (non-persisted) equip.
+   * Wear/unwear gear (ADR-0017 §4, migrations 0013 → 0016 → 0021). jw_equip
+   * MOVES the piece between the bag and the slot server-side (0016) and returns
+   * the mutated inventory; 0021 widens the slot whitelist to the two weapon
+   * slots. The armor look rides the position stream + a fresh presence snapshot
+   * so peers recompose at once (weapon slots stay off the wire). Old-server
+   * ladder: pre-0013 returns null → local non-persisted equip; pre-0016 returns
+   * no `inventory` → keep the old bag; pre-0021 silently DROPS weapon keys →
+   * keep them client-side in REFERENCE mode (no bag move happened server-side,
+   * so the copy is still in the bag and gearOwns falls back to it).
    */
-  async equip(equipped: EquippedArmor): Promise<EquipResult> {
+  async equip(equipped: EquippedGear): Promise<EquipResult> {
     const wanted = sanitizeEquipped(equipped);
     const res = await this.rpc<any>('jw_equip', { p_who: this.me, p_equipped: wanted });
-    this.equipped = res?.equipped ? sanitizeEquipped(res.equipped) : wanted;
+    const next = res?.equipped ? sanitizeEquipped(res.equipped) : wanted;
+    if (res?.equipped && !WEAPON_SLOTS.some((s) => next[s])) {
+      // the server echoed a record without ANY weapon slot we sent — the old
+      // whitelist ate them; carry the client's weapon picks in reference mode.
+      // ONLY when the bag still accounts for the copy: a post-0021 server
+      // produces the same shape when it LEGITIMATELY refuses an unowned weapon
+      // (the piece "simply drops out"), and resurrecting that one would arm a
+      // phantom. On the old server the bag was never decremented, so the check
+      // always passes there.
+      for (const s of WEAPON_SLOTS) {
+        const w = wanted[s];
+        if (w && (this.inv[w] ?? 0) > 0) next[s] = w;
+      }
+    }
+    this.equipped = next;
     if (res?.inventory) this.inv = res.inventory as Inventory; // 0016: the bag moved
     if (this.lastLocal) {
-      this.lastLocal = { ...this.lastLocal, armor: this.equipped };
+      this.lastLocal = { ...this.lastLocal, armor: armorOnly(this.equipped) };
       this.broadcastPos(true);
       // refresh the tracked snapshot too so LATE joiners see the new armor —
       // a single re-track per equip stays far under the presence rate limit

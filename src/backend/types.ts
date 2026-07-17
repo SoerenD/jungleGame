@@ -1,7 +1,7 @@
 import type { ItemId, StructureId, ToolId } from '../content/items';
 import type { NodeTypeId } from '../content/nodeTypes';
 import type { VillageRecord } from '../content/village';
-import type { EquippedArmor } from '../content/armor';
+import type { EquippedArmor, EquippedGear } from '../content/armor';
 import type { EchoSample, Ghost } from '../content/echoes';
 
 /** legacy tint-preset id — only survives in pre-update Player rows for migration */
@@ -125,12 +125,13 @@ export type JoinResult =
        */
       exploredStride?: number;
       /**
-       * the Armor worn last session (ADR-0017 §4), persisted like `wake_point`
-       * (a jsonb column on the player row). Armor is WORN by moving the piece out
+       * the gear worn last session (ADR-0017 §4 + the two weapon slots), persisted
+       * as a jsonb column on the player row. Gear is WORN by moving the piece out
        * of the inventory, so a worn slot is kept regardless of bag count; a legacy
-       * worn-AND-in-bag save has the bag copy removed once on load.
+       * worn-AND-in-bag armor save has the bag copy removed once on load (armor
+       * slots only — weapons are craftable in multiples).
        */
-      equipped: EquippedArmor;
+      equipped: EquippedGear;
     }
   | { ok: false; reason: 'WRONG_PIN' | 'BAD_NAME' | 'BAD_PIN' };
 
@@ -279,7 +280,7 @@ export type ContributeSealResult =
  * this deposit added; `village` is the record after any tier advancement.
  */
 export type ContributeVillageResult =
-  | { ok: false; reason: 'NO_HALL' | 'NOTHING_TO_GIVE' }
+  | { ok: false; reason: 'NO_HALL' | 'NOTHING_TO_GIVE' | 'POOL_FULL' }
   | { ok: true; taken: Inventory; inventory: Inventory; village: VillageState; gained: number };
 
 /**
@@ -335,9 +336,9 @@ export type KnockdownResult =
       ok: true;
       knockdowns: number;
       exhausted: boolean;
-      /** where Exhaustion wakes this Player: their Hammock, else World spawn */
+      /** where Exhaustion wakes this Player: the Village Hall, else World spawn */
       wake: { tx: number; ty: number };
-      atHammock: boolean;
+      atVillage: boolean;
     };
 
 /** shared crate storage: current contents + the caller's inventory after the op */
@@ -394,14 +395,15 @@ export type CookResult =
   | { ok: true; inventory: Inventory };
 
 /**
- * Equipping Armor (ADR-0017 §4): the client sends the full desired slot→item
- * mapping; the backend MOVES pieces between the bag and the worn slots — a newly
- * worn piece is decremented out of `inventory`, a newly bared one is returned to
- * it — and returns both the server-sanitized worn record AND the mutated
- * inventory so the bag re-renders. Never fails outright: a piece that is neither
- * already worn nor available in the bag simply drops out.
+ * Equipping gear (ADR-0017 §4; weapons since the 2026-07 batch): the client
+ * sends the full desired slot→item mapping (armor + weapon slots); the backend
+ * MOVES pieces between the bag and the worn slots — a newly worn piece is
+ * decremented out of `inventory`, a newly bared one is returned to it — and
+ * returns both the server-sanitized worn record AND the mutated inventory so
+ * the bag re-renders. Never fails outright: a piece that is neither already
+ * worn nor available in the bag simply drops out.
  */
-export type EquipResult = { equipped: EquippedArmor; inventory: Inventory };
+export type EquipResult = { equipped: EquippedGear; inventory: Inventory };
 
 export type EatResult =
   | { ok: false; reason: 'NOTHING_TO_EAT' }
@@ -733,13 +735,13 @@ export interface Backend {
    */
   reportKnockdown(tx: number, ty: number): Promise<KnockdownResult>;
   /**
-   * wear/unwear Armor (ADR-0017 §4): persists as `players.equipped` and rides
-   * the position/presence payload from then on. The backend MOVES the piece
-   * between the bag and the slot (equip decrements `inventory`, unequip returns
-   * it); the returned record (worn set + mutated inventory) is the truth the
-   * client adopts.
+   * wear/unwear gear (ADR-0017 §4 + weapon slots): persists as `players.equipped`;
+   * the ARMOR slots ride the position/presence payload (weapon slots stay off the
+   * wire — they don't re-dress the avatar). The backend MOVES the piece between
+   * the bag and the slot (equip decrements `inventory`, unequip returns it); the
+   * returned record (worn set + mutated inventory) is the truth the client adopts.
    */
-  equip(equipped: EquippedArmor): Promise<EquipResult>;
+  equip(equipped: EquippedGear): Promise<EquipResult>;
   /** turn one carried fish into a cooked fish (client checks campfire proximity) */
   cook(): Promise<CookResult>;
   /** consume one cooked fish; the speed buff itself is client-side (ADR-0001) */

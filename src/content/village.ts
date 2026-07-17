@@ -210,6 +210,16 @@ export function milestoneForTier(tier: number): StructureId | null {
   return VILLAGE_TIERS[tier]?.milestone ?? null;
 }
 
+/**
+ * The pool ceiling at `tier`: contributions stop at the NEXT tier's threshold
+ * until that tier's milestone Building is raised — pooling past the gate would
+ * only pile up behind it (the "Vorrat 567/300" playtest confusion). Unlimited
+ * at max tier (the pool stays the endless prestige sink for sigils/trophies).
+ */
+export function villagePoolCap(tier: number): number {
+  return tier >= VILLAGE_MAX_TIER ? Infinity : tierThreshold(tier + 1);
+}
+
 /** the tier `item` is the milestone Building for (1 = Hall … 5); 0 if it is decor/none */
 export function milestoneTierOf(item: StructureId): number {
   for (const def of VILLAGE_TIERS) if (def.milestone === item) return def.tier;
@@ -298,11 +308,14 @@ export function contributionValueOf(item: string): number {
  * `amounts` optionally caps how much of each item to give (the per-resource
  * slider choice, ADR-0010) — each is clamped to what is actually held and to
  * whole units. Omitting `amounts` gives everything qualifying (the old
- * one-tap "pour it all in" behaviour).
+ * one-tap "pour it all in" behaviour). `maxPoints` caps the TOTAL points taken
+ * (the pool's remaining room, villagePoolCap) — nothing is taken beyond it, so
+ * a full pool deducts nothing (the no-loss contract).
  */
 export function villageContribution(
   inventory: Partial<Record<string, number>>,
   amounts?: Partial<Record<string, number>>,
+  maxPoints = Infinity,
 ): { taken: Record<string, number>; points: number } {
   const taken: Record<string, number> = {};
   let points = 0;
@@ -310,8 +323,10 @@ export function villageContribution(
     if (!per) continue;
     const have = inventory[item] ?? 0;
     if (have <= 0) continue;
+    const room = maxPoints - points;
+    if (room < per) continue; // not even one whole unit fits
     const want = amounts ? Math.max(0, Math.floor(amounts[item] ?? 0)) : have;
-    const give = Math.min(have, want);
+    const give = Math.min(have, want, Math.floor(room / per));
     if (give > 0) {
       taken[item] = give;
       points += give * per;

@@ -71,13 +71,10 @@ export const OBJECTS: Record<string, ObjectDef> = {
   st_obsidian_statue: { url: '/assets/objects/obsidian-statue.png' },
   st_hardwood_arch: { url: '/assets/objects/hardwood-arch.png' },
   st_guardian_trophy: { url: '/assets/objects/guardian-trophy.png' },
-  st_obsidian_path: { url: '/assets/objects/obsidian-path.png' },
   st_brazier: { url: '/assets/objects/brazier.png' },
   // v3 functional structures + plank decor
-  st_hammock: { url: '/assets/objects/hammock.png' },
   st_signpost: { url: '/assets/objects/signpost.png' },
   st_sawmill: { url: '/assets/objects/sawmill.png' },
-  st_table: { url: '/assets/objects/table.png' },
 
   // faux-3D terrain: a tall cliff face hung below raised edges, and a tileable
   // falling-water streak scrolled down the waterfall drop (drawn as objects)
@@ -99,7 +96,8 @@ export const OBJECTS: Record<string, ObjectDef> = {
   // v4: the arena Seal barrier — an authored rune-stone gate (16x32, tiles
   // horizontally; tools/compose-seal-barrier.ts)
   'seal-barrier': { url: '/assets/objects/seal-barrier.png' },
-  // v2 landmarks
+  // v2 landmarks. The Seal monument (tools/compose-seal-monument.ts); the Warden
+  // altars reuse the same texture.
   seal_monument: { url: '/assets/objects/seal-monument.png' },
   guardian_altar: { url: '/assets/objects/guardian-altar.png' },
   welcome_stone: { url: '/assets/objects/welcome-stone.png' },

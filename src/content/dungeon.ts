@@ -1397,12 +1397,19 @@ export const DEEP_ROOMS: Rect[] = [
   { x: 60, y: 2, w: 22, h: 20 }, // E — Forgeborn room   x60..81 y2..21
 ];
 
-/** 2-tile-tall corridors joining consecutive rooms along the y11..12 spine */
+/** 2-tile-tall corridors joining consecutive rooms. C↔D and D↔E dog-leg as
+ *  single L-bends (leg + riser + leg) so the back half stops reading as one
+ *  straight spine; one bend only — mob AI is axis-slide with no pathfinding.
+ *  Each rect keeps a unique origin: GameScene keys floor canvases by (x, y). */
 export const DEEP_CORRIDORS: Rect[] = [
-  { x: 10, y: 11, w: 5, h: 2 }, // A↔B (the long safe-entry buffer)
-  { x: 26, y: 11, w: 5, h: 2 }, // B↔C
-  { x: 41, y: 11, w: 4, h: 2 }, // C↔D
-  { x: 56, y: 11, w: 4, h: 2 }, // D↔E
+  { x: 10, y: 11, w: 5, h: 2 }, // A↔B (the long safe-entry buffer, straight)
+  { x: 26, y: 11, w: 5, h: 2 }, // B↔C (straight)
+  { x: 41, y: 8, w: 3, h: 2 }, //  C↔D leg A — exits C high (y8..9)
+  { x: 42, y: 10, w: 2, h: 4 }, // C↔D riser (y10..13)
+  { x: 42, y: 14, w: 3, h: 2 }, // C↔D leg B — enters D low (y14..15)
+  { x: 56, y: 15, w: 3, h: 2 }, // D↔E leg A — exits D low (y15..16)
+  { x: 57, y: 10, w: 2, h: 5 }, // D↔E riser (y10..14)
+  { x: 57, y: 8, w: 3, h: 2 }, //  D↔E leg B — enters E high (y8..9)
 ];
 
 /** where the descending party lands (Deep entry room A); its own EXIT is this tile */
@@ -1462,9 +1469,9 @@ function buildDeepProps(): DelveProp[] {
   add('basalt_pillar', 52, 11);
   add('basalt_pillar', 49, 15);
   add('ember_brazier', 47, 6);
-  add('ember_brazier', 54, 16);
+  add('ember_brazier', 54, 16); // frames the dog-legged D↔E mouth (y15..16) without sealing it
   add('slag_pile', 46, 5);
-  add('lava_vein', 43, 11); // C↔D breadcrumb
+  add('lava_vein', 43, 11); // C↔D breadcrumb — sits mid-riser now, marking the bend
   // Room E — the Forgeborn's arena: only EDGE pillars + rim braziers; the wide
   // centre stays open so players can always sprint out of an eruption
   add('basalt_pillar', 62, 4);
@@ -1774,46 +1781,75 @@ const DEPTH_HUE_STEP = 137.508;
 /**
  * The constrained layout generator: only the authored grammar comes out — a safe
  * entry chamber (the first Husk anchors sit beyond aggro range, exactly like
- * Stage 1's antechamber), 3–5 Husk rooms marching west-to-east on a 2-tile
- * corridor spine, then a boss room big enough that the eruption kit's edges are
- * always reachable. Deterministic per Depth; carved by the same carveGrid.
+ * Stage 1's antechamber), 3–5 Husk rooms marching west-to-east joined by 2-tile
+ * dog-leg corridors (one L-bend each, doorway rows rolled per room), then a boss
+ * room big enough that the eruption kit's edges are always reachable.
+ * Deterministic per Depth; carved by the same carveGrid.
  */
 function genDepthLayout(depth: number, family: 'stone' | 'molten', lightColor: number): DepthLayout {
   const rng = mulberry32((Math.imul(depth, 2654435761) ^ 0x9e3779b9) >>> 0);
   const H = 24;
-  const SPINE = 11; // corridors occupy rows SPINE..SPINE+1
   const rooms: Rect[] = [];
   const corridors: Rect[] = [];
-  const entry: Rect = { x: 2, y: 8, w: 8, h: 7 }; // safe antechamber, spans the spine
+  const entry: Rect = { x: 2, y: 8, w: 8, h: 7 }; // safe antechamber
   rooms.push(entry);
+  // the top row of a 2-tall doorway rolled inside a room's span (1-tile wall shoulder)
+  const portIn = (r: Rect): number => r.y + 1 + Math.floor(rng() * Math.max(1, r.h - 3));
+  // Exactly ONE bend per corridor, monotone in x: mob AI is axis-slide with no
+  // pathfinding (moveToward), so an S/Z corridor would strand Husks on a wall.
+  // Every rect keeps a unique origin — GameScene keys floor canvases by (x, y).
+  const pushCorridor = (x0: number, x1: number, yA: number, yB: number): void => {
+    if (yA === yB) {
+      corridors.push({ x: x0, y: yA, w: x1 - x0, h: 2 });
+      return;
+    }
+    const bx = x0 + Math.floor(rng() * Math.max(1, x1 - 2 - x0 + 1)); // bend column; leg B stays ≥2 wide
+    corridors.push({ x: x0, y: yA, w: bx - x0 + 2, h: 2 }); // leg A out of the west room's port
+    const lo = Math.min(yA, yB);
+    const hi = Math.max(yA, yB);
+    if (hi - lo > 2) corridors.push({ x: bx, y: lo + 2, w: 2, h: hi - lo - 2 }); // vertical riser
+    corridors.push({ x: bx, y: yB, w: x1 - bx, h: 2 }); // leg B into the east room's port
+  };
   const mids: Rect[] = [];
   const midCount = 3 + Math.floor(rng() * 3); // 3–5 Husk rooms
   let cursor = entry.x + entry.w;
   let corW = 6 + Math.floor(rng() * 3); // the long safe-entry buffer (≥6 tiles)
+  let west: Rect = entry;
   for (let i = 0; i < midCount; i++) {
-    corridors.push({ x: cursor, y: SPINE, w: corW, h: 2 });
+    const x0 = cursor;
     cursor += corW;
     const w = 9 + Math.floor(rng() * 5); // 9–13
     const h = 9 + Math.floor(rng() * 8); // 9–16
-    // the room must span the spine rows and stay inside the border walls
-    const yMin = Math.max(1, SPINE + 2 - h);
-    const yMax = Math.min(SPINE, H - 1 - h);
-    const y = yMin + Math.floor(rng() * Math.max(1, yMax - yMin + 1));
+    // the room floats anywhere inside the border walls — heights AND rows vary
+    const y = 1 + Math.floor(rng() * Math.max(1, H - 2 - h));
     const r: Rect = { x: cursor, y, w, h };
     rooms.push(r);
     mids.push(r);
+    pushCorridor(x0, cursor, portIn(west), portIn(r));
+    west = r;
     cursor += w;
-    corW = 3 + Math.floor(rng() * 3); // 3–5 between Husk rooms
+    corW = 4 + Math.floor(rng() * 3); // 4–6 between Husk rooms — wide enough that a bend reads
   }
-  corridors.push({ x: cursor, y: SPINE, w: corW, h: 2 });
+  const bossX0 = cursor;
   cursor += corW;
   // the boss room mirrors the Deep's arena: edges ≥9 tiles from the spawn, so
   // sprinting out of the recycled eruption kit's radius is always possible
   const boss: Rect = { x: cursor, y: 2, w: 22, h: 20 };
   rooms.push(boss);
+  pushCorridor(bossX0, cursor, portIn(west), portIn(boss));
   const w = boss.x + boss.w + 2;
   const bossSpawn = { x: boss.x + 11, y: boss.y + 10 };
   const door = { tx: boss.x + boss.w - 2, ty: boss.y + 1 }; // top-east, like Stage 1's
+
+  // every corridor tile plus a 2-tile apron into each room mouth — the apron is
+  // what keeps a doorway's approach open now that mouths sit anywhere, not on
+  // fixed spine rows
+  const corClear = new Set<number>();
+  for (const c of corridors) {
+    for (let y = c.y; y < c.y + c.h; y++) {
+      for (let x = c.x - 2; x < c.x + c.w + 2; x++) corClear.add(y * w + x);
+    }
+  }
 
   // ---- deterministic dressing from the family's authored prop kinds
   const coverKinds: PropKind[] = family === 'stone' ? ['support_beam', 'obsidian_pillar'] : ['basalt_pillar'];
@@ -1827,8 +1863,8 @@ function genDepthLayout(depth: number, family: 'stone' | 'molten', lightColor: n
   const tryAdd = (kind: PropKind, tx: number, ty: number, blockOk: boolean): boolean => {
     const k = ty * w + tx;
     if (used.has(k)) return false;
-    // blocking cover never sits on the corridor spine rows, so no mouth ever seals
-    if (!blockOk && (ty === SPINE || ty === SPINE + 1)) return false;
+    // blocking cover never sits on a corridor or in a room mouth, so no mouth ever seals
+    if (!blockOk && corClear.has(ty * w + tx)) return false;
     // keep the boss's arena centre + the eruption escape lanes clear
     if (Math.hypot(tx - bossSpawn.x, ty - bossSpawn.y) < 4) return false;
     props.push({ kind, tx, ty });
@@ -1861,15 +1897,17 @@ function genDepthLayout(depth: number, family: 'stone' | 'molten', lightColor: n
   tryAdd(lightKinds[0], boss.x + boss.w - 2, boss.y + boss.h - 2, true);
   scatter(boss, decorKinds, 3, false, 3);
 
-  // ambient light pools: the boss arena glows in the Depth's hue, breadcrumbs on the spine
+  // ambient light pools: the boss arena glows in the Depth's hue, breadcrumbs down each corridor leg
   const lights: DepthLayout['lights'] = [{ tx: bossSpawn.x, ty: bossSpawn.y, color: lightColor, scale: 5.0, alpha: 0.3 }];
-  for (const r of mids) lights.push({ tx: r.x + Math.floor(r.w / 2), ty: SPINE, color: lightColor, scale: 3.0, alpha: 0.18 });
+  for (const c of corridors) {
+    if (c.w >= 4) lights.push({ tx: c.x + Math.floor(c.w / 2), ty: c.y + Math.floor(c.h / 2), color: lightColor, scale: 3.0, alpha: 0.18 });
+  }
 
   // Husk anchors: spread across the Husk rooms (one per room first, Stage-1 style);
   // every anchor sits ≥13 tiles east of the entry tile — beyond aggro, so the
   // antechamber stays safe. Kept off walls by a 2-tile margin, and off blocking
   // cover props (with a ±1 jitter buffer) so a spawn never lands inside a pillar.
-  const entryTile = { tx: 5, ty: SPINE + 1 };
+  const entryTile = { tx: 5, ty: 12 }; // centre of the fixed antechamber
   const blocked = new Set<number>(props.filter((p) => PROP_BLOCKS[p.kind]).map((p) => p.ty * w + p.tx));
   const nearBlocked = (x: number, y: number): boolean => {
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (blocked.has((y + dy) * w + x + dx)) return true;

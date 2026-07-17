@@ -52,8 +52,6 @@ the adaptation scripts live in `tools/compose-assets.ts` (art) and `tools/make-*
       `stump.png` hue-shifted to ancient dark timber, amber sap glints added.
     - `objects/obsidian-rock.png` / `obsidian-rubble.png` — `rock.png` /
       `rock-depleted.png` recolored to violet-black volcanic glass.
-    - `objects/seal-monument.png` — twin columns cropped from
-      `ruin-pillar.png` + slab from `tablet.png`, violet-tinted, rune pixels.
     - `objects/guardian-altar.png` — slab from `tablet.png` + legs from
       `ruin-pillar.png`, amber sigil pixels.
     - `objects/welcome-stone.png` — `tablet.png` recolored to weathered gray.
@@ -119,6 +117,10 @@ v4 additions (original pixel art, no license concerns; drawn from primitives):
 - `public/assets/objects/seal-barrier.png` — the arena Seal barrier, an authored
   violet rune-stone gate composed by `tools/compose-seal-barrier.ts` (replaces
   the old runtime canvas shimmer).
+- `public/assets/objects/seal-monument.png` — the Seal monument, an authored
+  32×32 offering basin ("Die Opferschale", Village Rustic-Timber palette)
+  composed by `tools/compose-seal-monument.ts` (replaces the earlier ArMM1998
+  crop recombination).
 - `public/assets/objects/tablet.png` — the Ancient Tablet, an upright carved
   rune stele composed by `tools/compose-tablet.ts` (replaces the earlier
   parchment crop).

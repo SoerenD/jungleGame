@@ -240,8 +240,8 @@ const en = {
   character: {
     title: 'Character',
     bag: 'Bag',
-    slot: { helm: 'Helm', chest: 'Chest', boots: 'Boots', weapon: 'Weapon' },
-    slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon: '⚔' },
+    slot: { helm: 'Helm', chest: 'Chest', boots: 'Boots', weapon1: 'Weapon 1', weapon2: 'Weapon 2' },
+    slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon1: '⚔', weapon2: '🗡' },
     emptySlot: (name: string) => `${name} slot — drag ${name} here`,
     unequipHint: 'click to unequip',
     attrMove: 'Move speed',
@@ -260,6 +260,10 @@ const en = {
   panels: {
     journey: '🌱 The Journey',
     intoDelve: '⛏ Into the Delve',
+    mire: '🌊 The Sunken Mire',
+    hushdark: '🔔 The Hushdark',
+    terrace: '🌾 The Green Terraces',
+    legacy: '🏛 The Legacy',
     crafting: 'Crafting',
     inventory: 'Inventory',
     toggle: 'Collapse / expand',
@@ -331,6 +335,8 @@ const en = {
     loadoutBarTitle: 'Your Loadout — drag Tools here; press 1–3 to pick the one in your hand',
     slotHold: (name: string, i: number) => `${name} — press ${i} to hold it`,
     slotEmpty: (i: number) => `Loadout slot ${i} — drag a Tool here, press ${i} to select`,
+    weaponSlotHold: (name: string, i: number) => `${name} — press ${i} to wield it (click the paperdoll slot to unequip)`,
+    weaponSlotEmpty: (i: number) => `Weapon slot ${i} — drag a weapon here; slotting moves it out of the bag`,
     minimapTitle: 'Minimap — white: you, yellow: others · press M for the world map',
     worldmapTitle: 'World Map',
     worldmapHint: 'M or Esc to close · yellow border: where you are',
@@ -434,8 +440,8 @@ const en = {
     guardianBested: '🏆 The Guardian sinks into slumber — every fighter earns its Scales!',
     guardianUnbeaten: 'The Guardian returns to slumber, unbeaten. The totem is spent.',
     knockedDown: (n: number) => `Knocked down! (${n}/3 — the third means Exhaustion)`,
-    exhaustionHammock:
-      'Exhaustion overtakes you — out for this fight, waking in your Hammock. Prior hits still count.',
+    exhaustionVillage:
+      'Exhaustion overtakes you — out for this fight, waking at the Village Hall. Prior hits still count.',
     exhaustionSpawn:
       'Exhaustion overtakes you — out for this fight, waking at the spawn. Prior hits still count.',
     guardianSlumbersLay: 'The Guardian slumbers. Lay a Summoning Totem upon the altar to wake it.',
@@ -499,10 +505,10 @@ const en = {
     cantBuildTile: "Can't build there — the ground won't take it.",
     blockedByNode: (name: string) => `${name} is in the way — the whole footprint must be clear.`,
     placed: (name: string) => `${name} placed!`,
-    hammockSet: 'Your Hammock is set — Exhaustion and login bring you here.',
-    villageFoundedYou: 'You found the Village — this is home now. Everyone without a Hammock wakes here.',
+    villageFoundedYou: 'You found the Village — this is home now. Everyone wakes here.',
     villageContributed: (pts: number) => `You give to the Village — +${pts} to the pool!`,
     villageNothingToGive: 'You carry nothing the Village pool accepts.',
+    villagePoolFull: 'The pool is full — raise the milestone Building so the Village can grow.',
     hallAlreadyStands: 'A Hall already stands — dismantle it to re-found the Village elsewhere.',
     alreadyBuiltHere: 'Someone already built here — first placement wins. Item kept.',
     dismantled: (name: string, gained: string) => `${name} dismantled — ${gained}`,
@@ -559,7 +565,7 @@ const en = {
     foraged: (parts: string) => `You forage the wildlife — ${parts}.`,
     hunted: (parts: string) => `Felled! ${parts}.`,
     knockedInWild: (n: number, max: number) => `A predator knocks you down! (${n}/${max} — the third means Exhaustion)`,
-    wildExhaustionHammock: 'Exhaustion overtakes you in the wilds — you wake in your Hammock, pack fully intact.',
+    wildExhaustionVillage: 'Exhaustion overtakes you in the wilds — you wake at the Village Hall, pack fully intact.',
     wildExhaustionSpawn: 'Exhaustion overtakes you in the wilds — you wake at the spawn, pack fully intact.',
     // ADR-0017 — Realm gates (T2 stub; the Warden gate-key gating arrives with T4/T5)
     realmGateDormant: 'The gate is dormant — what lies beyond still slumbers.',
@@ -662,11 +668,11 @@ const en = {
     wardenNoStrike: (name: string) => `no one struck in time — ${name} loses interest and sinks back into slumber. The totem is spent.`,
     wardenUnbeaten: (name: string) => `${name} returns to slumber, unbeaten. Another Totem will wake it.`,
     realmOpened: (realm: string, who: string) => `⚡ the gate glyphs wake — ${who} has opened ${realm}, for everyone, forever!`,
-    villageFounded: (who: string) => `🏛 ${who} founded the Village! Everyone without a Hammock now wakes at the Hall.`,
+    villageFounded: (who: string) => `🏛 ${who} founded the Village! Everyone now wakes at the Hall.`,
     villageGrew: (name: string) => `🏛 the Village has grown into a ${name}!`,
     festivalStarted: '🎉 The village wishes are answered — a Dorffest begins! Everyone is swift.',
-    exhaustionCollapse: (who: string, atHammock: boolean) =>
-      `${who} collapses from Exhaustion — out for this fight, waking ${atHammock ? 'in their Hammock' : 'at the spawn'}. Hits already landed still count toward the loot.`,
+    exhaustionCollapse: (who: string, atVillage: boolean) =>
+      `${who} collapses from Exhaustion — out for this fight, waking ${atVillage ? 'at the Village Hall' : 'at the spawn'}. Hits already landed still count toward the loot.`,
   },
 
   // simulated party-mate chatter in the local single-player (Mock) backend
@@ -834,8 +840,8 @@ const de: Strings = {
   character: {
     title: 'Charakter',
     bag: 'Rucksack',
-    slot: { helm: 'Helm', chest: 'Rüstung', boots: 'Stiefel', weapon: 'Waffe' },
-    slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon: '⚔' },
+    slot: { helm: 'Helm', chest: 'Rüstung', boots: 'Stiefel', weapon1: 'Waffe 1', weapon2: 'Waffe 2' },
+    slotIcon: { helm: '🪖', chest: '🛡', boots: '👢', weapon1: '⚔', weapon2: '🗡' },
     emptySlot: (name) => `Platz „${name}“ — ${name} hierher ziehen`,
     unequipHint: 'zum Ablegen klicken',
     attrMove: 'Tempo',
@@ -854,6 +860,10 @@ const de: Strings = {
   panels: {
     journey: '🌱 Die Reise',
     intoDelve: '⛏ In den Schacht',
+    mire: '🌊 Das Versunkene Moor',
+    hushdark: '🔔 Die Grabesstille',
+    terrace: '🌾 Die Grünen Terrassen',
+    legacy: '🏛 Das Vermächtnis',
     crafting: 'Herstellung',
     inventory: 'Inventar',
     toggle: 'Ein-/Ausklappen',
@@ -923,6 +933,8 @@ const de: Strings = {
     loadoutBarTitle: 'Deine Ausrüstung — zieh Werkzeuge hierher; drücke 1–3, um eines in die Hand zu nehmen',
     slotHold: (name, i) => `${name} — drücke ${i}, um es in die Hand zu nehmen`,
     slotEmpty: (i) => `Ausrüstungsplatz ${i} — zieh ein Werkzeug hierher, drücke ${i} zum Auswählen`,
+    weaponSlotHold: (name, i) => `${name} — drücke ${i}, um sie zu führen (Klick im Charakterfenster legt sie ab)`,
+    weaponSlotEmpty: (i) => `Waffenplatz ${i} — zieh eine Waffe hierher; das Einlegen nimmt sie aus dem Beutel`,
     minimapTitle: 'Minikarte — weiß: du, gelb: andere · M für die Weltkarte',
     worldmapTitle: 'Weltkarte',
     worldmapHint: 'M oder Esc zum Schließen · gelber Rand: dein Standort',
@@ -1022,8 +1034,8 @@ const de: Strings = {
     guardianBested: '🏆 Der Wächter sinkt in den Schlummer — jeder Kämpfer erhält seine Schuppen!',
     guardianUnbeaten: 'Der Wächter kehrt in den Schlummer zurück, unbesiegt. Das Totem ist verbraucht.',
     knockedDown: (n) => `Niedergeschlagen! (${n}/3 — der dritte bedeutet Erschöpfung)`,
-    exhaustionHammock:
-      'Erschöpfung übermannt dich — raus aus diesem Kampf, du erwachst in deiner Hängematte. Frühere Treffer zählen weiter.',
+    exhaustionVillage:
+      'Erschöpfung übermannt dich — raus aus diesem Kampf, du erwachst an der Dorfhalle. Frühere Treffer zählen weiter.',
     exhaustionSpawn:
       'Erschöpfung übermannt dich — raus aus diesem Kampf, du erwachst am Startpunkt. Frühere Treffer zählen weiter.',
     guardianSlumbersLay: 'Der Wächter schlummert. Lege ein Beschwörungstotem auf den Altar, um ihn zu wecken.',
@@ -1086,10 +1098,10 @@ const de: Strings = {
     cantBuildTile: 'Hier lässt sich nicht bauen — der Boden trägt es nicht.',
     blockedByNode: (name) => `${name} ist im Weg — die ganze Grundfläche muss frei sein.`,
     placed: (name) => `${name} platziert!`,
-    hammockSet: 'Deine Hängematte steht — Erschöpfung und Anmeldung bringen dich hierher.',
-    villageFoundedYou: 'Du hast das Dorf gegründet — jetzt ist hier Heimat. Jeder ohne Hängematte erwacht hier.',
+    villageFoundedYou: 'Du hast das Dorf gegründet — jetzt ist hier Heimat. Alle erwachen hier.',
     villageContributed: (pts: number) => `Du gibst dem Dorf — +${pts} für den Vorrat!`,
     villageNothingToGive: 'Du trägst nichts, was der Dorfvorrat annimmt.',
+    villagePoolFull: 'Der Vorrat ist voll — errichte das Meilenstein-Gebäude, damit das Dorf wächst.',
     hallAlreadyStands: 'Eine Halle steht bereits — bau sie ab, um das Dorf woanders neu zu gründen.',
     alreadyBuiltHere: 'Hier hat schon jemand gebaut — die erste Platzierung gewinnt. Item behalten.',
     dismantled: (name, gained) => `${name} abgebaut — ${gained}`,
@@ -1146,7 +1158,7 @@ const de: Strings = {
     foraged: (parts) => `Du sammelst vom Wild — ${parts}.`,
     hunted: (parts) => `Erlegt! ${parts}.`,
     knockedInWild: (n, max) => `Ein Raubtier schlägt dich nieder! (${n}/${max} — der dritte bedeutet Erschöpfung)`,
-    wildExhaustionHammock: 'Erschöpfung übermannt dich in der Wildnis — du erwachst in deiner Hängematte, Rucksack unversehrt.',
+    wildExhaustionVillage: 'Erschöpfung übermannt dich in der Wildnis — du erwachst an der Dorfhalle, Rucksack unversehrt.',
     wildExhaustionSpawn: 'Erschöpfung übermannt dich in der Wildnis — du erwachst am Startpunkt, Rucksack unversehrt.',
     // ADR-0017 — Portale (T2-Stummel; die Wächter-Schlüssel-Freischaltung kommt mit T4/T5)
     realmGateDormant: 'Das Tor ruht — was dahinter liegt, schlummert noch.',
@@ -1247,11 +1259,11 @@ const de: Strings = {
     realmOpened: (realm, who) => `⚡ die Tor-Glyphen erwachen — ${who} hat ${realm} geöffnet, für alle, für immer!`,
     guardianBested: (who, scales) =>
       `🏆 DER WÄCHTER IST BEZWUNGEN! ${who} haben den Sieg errungen — ${scales} Wächterschuppen für jeden Kämpfer. Er sinkt zurück in den Schlummer.`,
-    villageFounded: (who: string) => `🏛 ${who} hat das Dorf gegründet! Jeder ohne Hängematte erwacht nun an der Halle.`,
+    villageFounded: (who: string) => `🏛 ${who} hat das Dorf gegründet! Alle erwachen nun an der Halle.`,
     villageGrew: (name: string) => `🏛 das Dorf ist zu ${name} herangewachsen!`,
     festivalStarted: '🎉 Die Dorfwünsche sind erhört — ein Dorffest beginnt! Alle sind schneller.',
-    exhaustionCollapse: (who, atHammock) =>
-      `${who} bricht vor Erschöpfung zusammen — raus aus diesem Kampf, erwacht ${atHammock ? 'in der Hängematte' : 'am Startpunkt'}. Bereits gelandete Treffer zählen weiter zur Beute.`,
+    exhaustionCollapse: (who, atVillage) =>
+      `${who} bricht vor Erschöpfung zusammen — raus aus diesem Kampf, erwacht ${atVillage ? 'an der Dorfhalle' : 'am Startpunkt'}. Bereits gelandete Treffer zählen weiter zur Beute.`,
   },
 
   botChatter: {

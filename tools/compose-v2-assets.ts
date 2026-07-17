@@ -113,36 +113,7 @@ write('public/assets/objects/fishing-spot-calm.png', ripples(false));
 const tablet = obj('tablet.png');
 const pillar = obj('ruin-pillar.png');
 
-// Seal monument: twin rune-stone columns framing a mossy slab
-const monument = new Img(32, 32);
-const column = recolor(cropScaled(pillar, 2, 2, 12, 29, 1), (r, g, b, a) => [
-  clamp(r * 0.75 + 6),
-  clamp(g * 0.68 + 4),
-  clamp(b * 0.95 + 24),
-  a,
-]);
-monument.blit(column, 0, 0, 12, 29, 0, 3);
-monument.blit(column, 0, 0, 12, 29, 20, 3, true);
-const slab = recolor(cropScaled(tablet, 8, 6, 16, 22, 1), (r, g, b, a) => [
-  clamp(r * 0.85 + 10),
-  clamp(g * 0.75 + 6),
-  clamp(b * 1.0 + 20),
-  a,
-]);
-monument.blit(slab, 0, 0, 16, 22, 8, 10);
-for (const [x, y] of [
-  [4, 8],
-  [27, 8],
-  [15, 14],
-  [16, 14],
-  [13, 19],
-  [18, 19],
-  [15, 24],
-  [16, 24],
-]) {
-  monument.px(x, y, 0xb478ffff); // the runes that fade as the Seal fills
-}
-write('public/assets/objects/seal-monument.png', monument);
+// seal-monument.png is composed by tools/compose-seal-monument.ts (3-frame sheet)
 
 // arena altar: a low stone table waiting for the Offering
 const gAltar = new Img(32, 24);

@@ -9,7 +9,8 @@
 // PURE DATA + PURE FUNCTIONS — no browser globals, no backend imports — so
 // both backends, the avatar composer, the HUD and the scene share one truth.
 
-import type { ItemId } from './items';
+import { WEAPON_COMBAT } from './guardian';
+import type { ItemId, ToolId } from './items';
 
 /**
  * The three armor slots. Rung 3's piece is a CHEST cuirass (not gloves): a
@@ -20,8 +21,40 @@ import type { ItemId } from './items';
 export type ArmorSlot = 'boots' | 'chest' | 'helm';
 export const ARMOR_SLOTS: ArmorSlot[] = ['boots', 'chest', 'helm'];
 
+/**
+ * The two dedicated weapon slots (2026-07 playtest batch): a slotted weapon is
+ * MOVED out of the bag exactly like a worn armor piece — same persisted record,
+ * same RPC, same transaction. Keys 4/5 select them as the in-hand item.
+ */
+export type WeaponSlot = 'weapon1' | 'weapon2';
+export const WEAPON_SLOTS: WeaponSlot[] = ['weapon1', 'weapon2'];
+
+export type GearSlot = ArmorSlot | WeaponSlot;
+
 /** what a Player wears: at most one piece per slot, synced like `held` */
 export type EquippedArmor = Partial<Record<ArmorSlot, ItemId>>;
+
+/** the full persisted gear record: worn Armor + the two slotted weapons */
+export type EquippedGear = Partial<Record<GearSlot, ItemId>>;
+
+/** is `item` a combat weapon (WEAPON_COMBAT membership — the canonical set)? */
+export function isWeapon(item: string | null | undefined): boolean {
+  return !!item && !!WEAPON_COMBAT[item as ToolId];
+}
+
+/**
+ * The single ownership predicate for gear-aware checks: an item counts as owned
+ * when it is in the bag OR sitting in a weapon slot (slotted weapons LEAVE the
+ * bag, so every raw `inv[weapon] > 0` consumer must go through this).
+ */
+export function gearOwns(
+  inv: Partial<Record<string, number>>,
+  gear: EquippedGear | null | undefined,
+  item: string,
+): boolean {
+  if ((inv[item] ?? 0) > 0) return true;
+  return !!gear && (gear.weapon1 === item || gear.weapon2 === item);
+}
 
 /** the combined attribute bonus a worn set grants (all zeros when bare) */
 export interface ArmorBuff {
@@ -81,8 +114,9 @@ export function armorDef(item: string | null | undefined): ArmorDef | undefined 
   return item ? ARMOR_BUFFS[item as ItemId] : undefined;
 }
 
-/** the combined buff of everything worn — safe on undefined/junk input */
-export function armorBuff(eq: EquippedArmor | undefined | null): ArmorBuff {
+/** the combined buff of everything worn — safe on undefined/junk input
+ *  (accepts the full gear record; weapon slots carry no armor attributes) */
+export function armorBuff(eq: EquippedGear | undefined | null): ArmorBuff {
   const out: ArmorBuff = { moveSpeed: 0, attackSpeed: 0, bandMin: 0, bandMax: 0 };
   if (!eq) return out;
   for (const slot of ARMOR_SLOTS) {
@@ -107,8 +141,8 @@ export function armorBuff(eq: EquippedArmor | undefined | null): ArmorBuff {
  * math now. The wire and the DB still pass through here so junk never reaches a
  * texture or a roll.
  */
-export function sanitizeEquipped(eq: unknown): EquippedArmor {
-  const out: EquippedArmor = {};
+export function sanitizeEquipped(eq: unknown): EquippedGear {
+  const out: EquippedGear = {};
   if (!eq || typeof eq !== 'object') return out;
   for (const slot of ARMOR_SLOTS) {
     const item = (eq as Record<string, unknown>)[slot];
@@ -117,5 +151,22 @@ export function sanitizeEquipped(eq: unknown): EquippedArmor {
     if (!def || def.slot !== slot) continue;
     out[slot] = item as ItemId;
   }
+  for (const slot of WEAPON_SLOTS) {
+    const item = (eq as Record<string, unknown>)[slot];
+    if (typeof item !== 'string' || !isWeapon(item)) continue;
+    // the same item in BOTH slots is legitimate only with two copies — the equip
+    // transactions enforce that against the live bag (never here: a shape-level
+    // drop would silently destroy a second copy already moved out of the bag)
+    out[slot] = item as ItemId;
+  }
+  return out;
+}
+
+/** the armor-only projection for the position/presence wire — weapon slots ride
+ *  the persisted record but must not churn peers' avatar-recompose keys */
+export function armorOnly(eq: EquippedGear | null | undefined): EquippedArmor {
+  const out: EquippedArmor = {};
+  if (!eq) return out;
+  for (const slot of ARMOR_SLOTS) if (eq[slot]) out[slot] = eq[slot];
   return out;
 }

@@ -84,17 +84,16 @@ export type StructureId =
   | 'tiki_statue'
   | 'fruit_basket'
   | 'golden_idol'
-  // v2 — tier-2 Structures
+  // v2 — tier-2 Structures (obsidian_path retired 2026-07 — legacy placed
+  // instances render as reserved-but-invisible, the fence/hut_wall pattern)
   | 'obsidian_statue'
   | 'hardwood_arch'
   | 'guardian_trophy'
-  | 'obsidian_path'
   | 'brazier'
-  // v3 — functional Structures and plank decor
-  | 'hammock'
+  // v3 — functional Structures (hammock + table retired 2026-07; the Village
+  // Hall is the wake point now)
   | 'signpost'
   | 'sawmill'
-  | 'table'
   // the Forge: a crafting station where the heavy forged tools/weapons are made
   | 'forge'
   // ADR-0017 rung 1 — the Sunken Mire's Refiner: tempers salt-reed into tideglass
@@ -218,8 +217,8 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   bow: { name: 'Bow', kind: 'tool', desc: 'Looses arrows at the Guardian from range in an Eye Window — safe but lower DPS than melee, no ammo. Craftable before the first fight.' },
   hand_torch: { name: 'Hand Torch', kind: 'tool', desc: 'Hold it to light your way with a warm orange glow at night. Distinct from the placed Torch.' },
   mirefang: { name: 'Mirefang', kind: 'tool', desc: 'A brine-forged blade pried from the fallen Mire Warden — the participation prize for everyone who struck it. A pure-combat weapon that strikes Warden, Husks and Guardian alike; carried, its bearer wades the Sunken Mire’s tide unslowed.' },
-  sword: { name: 'Sword', kind: 'tool', desc: 'The Delve’s reward: a pure-combat blade — it grants no gathering bonus and unlocks no Node, but strikes Husks, the Deep Guardian, and the Guardian with the game’s heaviest melee band.' },
-  forgebrand: { name: 'Forgebrand', kind: 'tool', desc: 'The Deep’s reward: a pure-combat molten two-hander — no gathering bonus, no Node. It swings slower than the Sword but lands a heavier per-hit band (net damage on par), and strikes Husks, both bosses, and the Guardian alike.' },
+  sword: { name: 'Sword', kind: 'tool', desc: 'The Delve’s reward: a pure-combat blade — it grants no gathering bonus and unlocks no Node, but strikes Husks, the Deep Guardian, and the Guardian a clear step harder than the Ancient Axe.' },
+  forgebrand: { name: 'Forgebrand', kind: 'tool', desc: 'The Deep’s reward: a pure-combat molten two-hander — no gathering bonus, no Node. It swings slower than the Sword but lands the heaviest crafted band in the game — the strongest forged weapon there is — and strikes Husks, both bosses, and the Guardian alike.' },
   // Fabled set — the rarest reward in the game: a ~1% drop from ANY boss, one tier
   // above every crafted weapon. Pure combat, no gathering use; each strikes Husks,
   // both Delve bosses, and the Guardian.
@@ -254,14 +253,11 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   obsidian_statue: { name: 'Obsidian Statue', kind: 'structure', desc: 'A gleaming black sentinel.', blocks: true },
   hardwood_arch: { name: 'Hardwood Arch', kind: 'structure', desc: 'A grand gateway of ancient timber.', blocks: false },
   guardian_trophy: { name: 'Guardian Trophy', kind: 'structure', desc: 'Proof the Guardian was faced — and bested.', blocks: true },
-  obsidian_path: { name: 'Obsidian Path', kind: 'structure', desc: 'A polished black paving tile.', blocks: false },
   brazier: { name: 'Brazier', kind: 'structure', desc: 'An obsidian fire bowl — glows far into the night.', blocks: true },
-  hammock: { name: 'Hammock', kind: 'structure', desc: 'Your personal wake point: Exhaustion and login place you here. One active Hammock per Player.', blocks: false },
   signpost: { name: 'Signpost', kind: 'structure', desc: 'Holds a short line of your writing, readable by everyone.', blocks: false },
   // A1 (ADR-0008): the Sawmill is the first real Building — a 2×2 workshop.
   // Any Player may dismantle any Structure for its full refund (no ownership).
   sawmill: { name: 'Sawmill', kind: 'structure', desc: 'A 2×2 timber mill: deposit wood, collect planks after its slow work. The first real Building.', blocks: true, w: 2, h: 2 },
-  table: { name: 'Table', kind: 'structure', desc: 'A sturdy plank table for the camp.', blocks: true },
   // A 2×2 workshop with a stone furnace and anvil. Stand beside it to forge the
   // heavy metal gear (Ancient Axe/Pickaxe, Sword, Forgebrand) — they can no longer
   // be made from the pack alone.
@@ -273,7 +269,7 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   // and becomes the communal wake point; the four later Buildings are each a
   // tier's milestone; the rest are per-tier decor. Contributions feed one shared,
   // permanent pool — these tiles carry no progress of their own.
-  village_hall: { name: 'Village Hall', kind: 'structure', desc: 'Raise it anywhere to found the Village and make it home: everyone without a Hammock wakes here. Stand close and press E to give resources and loot to the communal pool. Re-founding it never resets the Village.', blocks: true, w: 2, h: 2 },
+  village_hall: { name: 'Village Hall', kind: 'structure', desc: 'Raise it anywhere to found the Village and make it home: everyone wakes here. Stand close and press E to give resources and loot to the communal pool. Re-founding it never resets the Village.', blocks: true, w: 2, h: 2 },
   village_well: { name: 'Village Well', kind: 'structure', desc: 'The Hamlet milestone: raise it in the village zone, with a full pool, to grow the Village from Camp to Hamlet.', blocks: true, w: 2, h: 2 },
   market_square: { name: 'Market Square', kind: 'structure', desc: 'The Village milestone: a bustling stall that carries a Hamlet up to a full Village.', blocks: true, w: 2, h: 2 },
   stone_keep: { name: 'Stone Keep', kind: 'structure', desc: 'The Town milestone: a stout keep that raises a Village into a Town.', blocks: true, w: 2, h: 2 },
@@ -329,8 +325,8 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   bow: { name: 'Bogen', desc: 'Verschießt Pfeile aus der Ferne auf den Wächter in einem Augenfenster — sicher, aber geringere DPS als Nahkampf, keine Munition. Vor dem ersten Kampf herstellbar.' },
   hand_torch: { name: 'Handfackel', desc: 'Halte sie, um deinen Weg nachts mit warmem orangem Schein zu erleuchten. Nicht zu verwechseln mit der platzierten Fackel.' },
   mirefang: { name: 'Moorzahn', desc: 'Eine soleschmiedete Klinge, dem gefallenen Moorwächter abgerungen — die Beute für alle, die ihn trafen. Eine reine Kampfwaffe, die Wächter, Hüllen und den Wächter der Ruinen gleichermaßen trifft; getragen watet ihr Träger ungebremst durch die Gezeiten des Versunkenen Moors.' },
-  sword: { name: 'Schwert', desc: 'Der Lohn des Schachts: eine reine Kampfklinge — sie gibt keinen Ernte-Bonus und schaltet keinen Knotenpunkt frei, trifft aber Hüllen, den Tiefenwächter und den Wächter mit dem schwersten Nahkampfband des Spiels.' },
-  forgebrand: { name: 'Schmiedebrand', desc: 'Der Lohn der Tiefe: ein reiner Kampf-Zweihänder aus Magma — kein Ernte-Bonus, kein Knotenpunkt. Er schwingt langsamer als das Schwert, landet aber ein schwereres Schadensband (unterm Strich gleichauf), und trifft Hüllen, beide Bosse und den Wächter.' },
+  sword: { name: 'Schwert', desc: 'Der Lohn des Schachts: eine reine Kampfklinge — sie gibt keinen Ernte-Bonus und schaltet keinen Knotenpunkt frei, trifft aber Hüllen, den Tiefenwächter und den Wächter eine klare Stufe härter als die Uralte Axt.' },
+  forgebrand: { name: 'Schmiedebrand', desc: 'Der Lohn der Tiefe: ein reiner Kampf-Zweihänder aus Magma — kein Ernte-Bonus, kein Knotenpunkt. Er schwingt langsamer als das Schwert, landet aber das schwerste geschmiedete Schadensband des Spiels — unterm Strich die stärkste geschmiedete Waffe — und trifft Hüllen, beide Bosse und den Wächter.' },
   fabled_sword: { name: 'Sagenhaftes Schwert', desc: 'Eine legendäre Klinge, makellos zwischen den Ruinen — eine seltene Beute, die nur ein gefallener Boss hergibt (~1%). Die schärfste Nahkampfwaffe überhaupt: ein schnelles, kritstarkes Band eine Stufe über dem geschmiedeten Schwert.' },
   fabled_axe: { name: 'Sagenhafte Axt', desc: 'Eine legendäre Streitaxt, einem gefallenen Boss an den seltensten Tagen entrissen (~1%). Schwer, breit und brutal — die größten Krits pro Schlag im Spiel, eine Stufe über der Uralten Axt.' },
   fabled_bow: { name: 'Sagenhafter Bogen', desc: 'Ein legendärer Langbogen, von einem gefallenen Boss fallen gelassen (~1%). Verschießt Pfeile aus der Ferne wie der einfache Bogen, trifft aber deutlich härter und schneller — der sichere Weg, eine geschmiedete Nahkampfwaffe zu übertreffen.' },
@@ -360,17 +356,14 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   obsidian_statue: { name: 'Obsidianstatue', desc: 'Ein glänzender schwarzer Wächter.' },
   hardwood_arch: { name: 'Hartholzbogen', desc: 'Ein prächtiges Tor aus uraltem Holz.' },
   guardian_trophy: { name: 'Wächtertrophäe', desc: 'Beweis, dass der Wächter gestellt — und bezwungen — wurde.' },
-  obsidian_path: { name: 'Obsidianpfad', desc: 'Eine polierte schwarze Pflasterkachel.' },
   brazier: { name: 'Kohlenbecken', desc: 'Eine Feuerschale aus Obsidian — glüht weit in die Nacht.' },
-  hammock: { name: 'Hängematte', desc: 'Dein persönlicher Erwachungspunkt: Erschöpfung und Anmeldung setzen dich hierher. Eine aktive Hängematte pro Spieler.' },
   signpost: { name: 'Wegweiser', desc: 'Trägt eine kurze Zeile deiner Schrift, für alle lesbar.' },
   sawmill: { name: 'Sägewerk', desc: 'Eine 2×2-Holzmühle: Holz einlegen, Bretter holen, wenn ihre langsame Arbeit getan ist. Das erste echte Gebäude.' },
-  table: { name: 'Tisch', desc: 'Ein stabiler Brettertisch fürs Lager.' },
   forge: { name: 'Schmiede', desc: 'Eine 2×2-Werkstatt aus Ofen und Amboss. Stell dich nah heran, um die schweren Metallwerkzeuge und -waffen zu schmieden — Uralte Axt, Uralte Spitzhacke, Schwert und Schmiedebrand lassen sich nur hier fertigen.' },
   brine_kiln: { name: 'Sole-Ofen', desc: 'Ein 2×2-Ofen für das Versunkene Moor: Salzried einlegen und Gezeitenglas holen, wenn seine langsame, salzheiße Arbeit getan ist. Aus dem Gezeitenglas entstehen die Gezeitenglas-Stiefel.' },
   chime_kiln: { name: 'Klang-Ofen', desc: 'Ein 2×2-Ofen für die Grabesstille: Echokristall einlegen und Klangstahl holen, wenn seine langsame, klingende Arbeit getan ist. Aus dem Klangstahl entsteht der Klangstahl-Helm.' },
   verdant_loom: { name: 'Grünwebstuhl', desc: 'Ein 2×2-Webstuhl für die Grünen Terrassen: Wildkorn einlegen und Grünfaser holen, wenn seine langsame, geduldige Arbeit getan ist. Aus der Grünfaser entsteht der Grüngewebte Brustpanzer.' },
-  village_hall: { name: 'Dorfhalle', desc: 'Errichte sie irgendwo, um das Dorf zu gründen und zur Heimat zu machen: Jeder ohne Hängematte erwacht hier. Stell dich nah heran und drücke E, um Ressourcen und Beute in den gemeinsamen Vorrat zu geben. Ein Neugründen setzt das Dorf nie zurück.' },
+  village_hall: { name: 'Dorfhalle', desc: 'Errichte sie irgendwo, um das Dorf zu gründen und zur Heimat zu machen: Alle erwachen hier. Stell dich nah heran und drücke E, um Ressourcen und Beute in den gemeinsamen Vorrat zu geben. Ein Neugründen setzt das Dorf nie zurück.' },
   village_well: { name: 'Dorfbrunnen', desc: 'Der Weiler-Meilenstein: Errichte ihn in der Dorfzone bei vollem Vorrat, um aus dem Lager einen Weiler zu machen.' },
   market_square: { name: 'Marktplatz', desc: 'Der Dorf-Meilenstein: ein belebter Stand, der einen Weiler zum vollen Dorf erhebt.' },
   stone_keep: { name: 'Steinfeste', desc: 'Der Stadt-Meilenstein: eine wehrhafte Feste, die ein Dorf zur Stadt macht.' },

@@ -100,11 +100,11 @@ export const BARE_HANDS: WeaponCombat = { min: 1, max: 2, critChance: 0, critMul
  * Intended relationships (hold these when tuning integers): Bow ≈ 60% of melee
  * DPS (a safety tax for hitting from range); axe ≈ pickaxe DPS but opposite feel
  * (axe wide/swingy/high-crit, pickaxe fast/steady/narrow); ancients a ~×1.6 band
- * scale-up with the base tool's crit. The Ancient Pickaxe alone pays a small
- * cadence tax over its base tool (460 vs 400 ms) so the whole top CRAFTED melee
- * tier — ancient axe/pickaxe, Sword, Forgebrand — converges at ~9.4 net DPS:
- * the harvest key that opens the Delve must never outclass the pure-combat
- * weapons forged from its loot (only the Fabled tier sits above, ~12+).
+ * scale-up with the base tool's crit. The crafted ladder is a STRICT climb —
+ * acquisition order = power order, so every forge is worth it: ancients ~9.4 <
+ * Mirefang ~9.5 < Sword ~10.6 < Forgebrand ~11.3 net DPS. The harvest keys that
+ * open the Delve must never outclass the pure-combat weapons forged from its
+ * loot (only the Fabled tier sits above, ~12.7+).
  */
 export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   bow: { min: 2, max: 2, critChance: 0.06, critMult: 1.5, attackMs: 500 },
@@ -113,24 +113,24 @@ export const WEAPON_COMBAT: Partial<Record<ToolId, WeaponCombat>> = {
   ancient_pickaxe: { min: 3, max: 5, critChance: 0.1, critMult: 1.8, attackMs: 460 },
   ancient_axe: { min: 3, max: 6, critChance: 0.16, critMult: 2.0, attackMs: 556 },
   // The Sword (ADR-0007): the game's first PURE-COMBAT weapon — no harvest use.
-  // It sits at the top of the melee band (≈ ancient-axe DPS) with its own crit +
-  // cadence, and unlike every other weapon it strikes Husks, the Deep Guardian,
+  // A clear step above the Ancient Axe (~10.6 vs ~9.4 net DPS) with its own crit
+  // + cadence, and unlike every other weapon it strikes Husks, the Deep Guardian,
   // AND the Guardian. Crafted from Delve loot; plugs straight into this table.
-  sword: { min: 3, max: 5, critChance: 0.14, critMult: 1.9, attackMs: 480 },
+  sword: { min: 3, max: 6, critChance: 0.14, critMult: 1.9, attackMs: 480 },
   // The Mirefang (ADR-0017 rung 1): the Mire Warden's participation weapon drop —
   // a pure-combat blade on the Sword family, tuned to the same ~9.4 net DPS crafted
   // tier (a keen mid-band with a touch more crit than the Sword). Its realm-synergy
   // passive (ignoring the tide's wade-slow) lives in the scene, not this table.
   mirefang: { min: 3, max: 5, critChance: 0.15, critMult: 1.9, attackMs: 480 },
   // The Forgebrand (ADR-0011): the Deep's PURE-COMBAT reward — a molten
-  // two-hander and a true SIDEGRADE to the Sword, not an upgrade. It trades the
-  // Sword's tempo for weight: a SLOWER cadence (640 vs 480 ms) and a heavier,
-  // higher per-hit band (4–6 vs 3–5) with a punchier crit, tuned so its net DPS
-  // ~9.4 ≈ the Sword's ~9.4 — the axe-vs-pickaxe "same DPS, opposite feel" at the
-  // top melee tier. Like the Sword it strikes Husks, both bosses, and the Guardian.
-  forgebrand: { min: 4, max: 6, critChance: 0.2, critMult: 2.0, attackMs: 640 },
+  // two-hander and the TOP of the crafted ladder (~11.3 net DPS, above the
+  // Sword's ~10.6): a SLOWER cadence (640 vs 480 ms) traded for the heaviest
+  // per-hit band in the crafted tier (5–7) with a punchier crit — the Deep's
+  // boss must pay better than the Delve's. Strikes Husks, both bosses, and the
+  // Guardian alike.
+  forgebrand: { min: 5, max: 7, critChance: 0.2, critMult: 2.0, attackMs: 640 },
   // The Fabled set — rare (~1%) BOSS-ONLY world-drops, one clear tier above every
-  // crafted weapon (net DPS ~11–12 base vs the ~9.4 top of the crafted tier).
+  // crafted weapon (net DPS ~12.7+ base vs the ~11.3 top of the crafted tier).
   // fabled_sword: the Sword's keen tempo, sharper. fabled_axe: the Ancient Axe's
   // wide high-crit weight, heavier. fabled_bow: still range-taxed vs melee, but
   // roughly double the plain Bow. All three strike Husks, both bosses, and the Guardian.
