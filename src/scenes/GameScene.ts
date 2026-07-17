@@ -1,187 +1,21 @@
 import Phaser from 'phaser';
-import { OBJECTS, TILESET } from '../assetConfig';
-import { AVATAR_H, AVATAR_IDLE, AVATAR_SWING, AVATAR_W, ensureAvatarTexture } from '../avatars';
-import { armorBuff, armorDef, gearOwns, isWeapon, sanitizeEquipped, type EquippedArmor, type EquippedGear, type WeaponSlot } from '../content/armor';
-import { kitOf, wardenDef, wardenForRealm, WARDENS } from '../content/wardens';
-import {
-  ghostPoseAt,
-  ghostTravelTiles,
-  poseOnPedestal,
-  vaultWeek,
-  type EchoSample,
-  type Ghost,
-  type Pose,
-} from '../content/echoes';
+import { TILESET } from '../assetConfig';
 import type {
   Backend,
   ChatMsg,
-  CreatureMsg,
   Dir,
-  DungeonMsg,
   FightState,
   Inventory,
-  JoinResult,
   JourneyState,
   JourneyStepId,
-  KnockdownResult,
-  MobSnap,
-  NodeState,
-  PlayerPos,
-  ProjSnap,
-  QuestState,
-  RefinerConfig,
-  SawmillState,
-  SealState,
   Structure,
-  WardenAltarState,
   WardenWorldState,
 } from '../backend/types';
-import { hintRetired, journeyComplete, type HintId } from '../content/journey';
-import { tideExposedWithin, tideFloods, tideHeight } from '../content/tide';
-import { msToNextRipe, wildgrainRipeWithin, wildgrainStage, type WildgrainStage } from '../content/cultivation';
-import {
-  DAY_CYCLE_MS,
-  DEV_DEEP,
-  DEV_DUNGEON,
-  DEV_REALM_TEST,
-  DEV_REFINER_TEST,
-  DEV_WILD,
-  EXHAUSTION_KNOCKDOWNS,
-  FOG_CHUNK,
-  FOG_REVEAL_RADIUS,
-  LEGACY_FOG_STRIDE,
-  FORCE_NIGHT,
-  GUARDIAN_AWAKE_MS,
-  GUARDIAN_SCALE_DROP,
-  FABLED_DROP_CHANCE,
-  FABLED_WEAPONS,
-  INTERACT_RANGE,
-  KNOCKDOWN_STUN_MS,
-  MAP_H,
-  MAP_W,
-  MUTE_KEY,
-  VOLUME_KEY,
-  AMBIENT_BASE_VOLUME,
-  FIGHT_MUSIC_BASE_VOLUME,
-  WATERFALL_BASE_VOLUME,
-  WATERFALL_NEAR_RADIUS,
-  WATERFALL_FAR_RADIUS,
-  loadVolumes,
-  type AudioChannel,
-  PLAYER_SPEED,
-  SAWMILL_PLANK_MS,
-  SPEED_BUFF_FACTOR,
-  SWING_CADENCE_MS,
-  TEST_REFINER,
-  BRINE_KILN,
-  CHIME_KILN,
-  TIDE_PERIOD_MS,
-  WADE_SLOW_FACTOR,
-  TIDE_EXPOSURE_SLACK_MS,
-  VERDANT_LOOM,
-  CULTIVATION_PERIOD_MS,
-  CULTIVATION_SLACK_MS,
-  ECHO_PERIOD_MS,
-  ECHO_PEDESTAL_RADIUS,
-  ECHO_MIN_MOVE_TILES,
-  DEV_ECHO,
-  TILE,
-  ZOOM,
-  CREATURE_DENSITY,
-  CREATURE_SPAWN_MIN_TILES,
-  CREATURE_SPAWN_MAX_TILES,
-  CREATURE_DESPAWN_TILES,
-  CREATURE_PREDATOR_CHANCE,
-  CREATURE_NIGHT_MULT,
-  CREATURE_NIGHT_THRESHOLD,
-  WILD_EXHAUST_WINDOW_MS,
-  WILD_EXHAUSTION_KNOCKDOWNS,
-  WILD_BROADCAST_MS,
-  WILD_SPAWN_TICK_MS,
-  WORLD_VIEW_H,
-  WORLD_VIEW_W,
-  loadWorldLabelScale,
-} from '../config';
-import {
-  ARENA_H,
-  ARENA_W,
-  eyeOpenAt,
-  furyPhaseAt,
-  guardianPoseAt,
-  guardianSpotAt,
-  GUARDIAN_DISPLAY_SCALE,
-  inMeleeRing,
-  LUNGE_ZONE,
-  lungeTarget,
-  MELEE_RING_MAX,
-  meleeRingWindow,
-  waveInfoAt,
-  waveTiles,
-  weaponCombat,
-  type ArenaSpot,
-  type WardenKit,
-  type WaveInfo,
-} from '../content/guardian';
-import {
-  applyMobHit,
-  createMob,
-  DEEP_CORE_DROP,
-  DEPTH_MOB_CAP,
-  DEPTH_SIGIL,
-  FORGE_CORE,
-  isBossKind,
-  profileOf,
-  PROP_BLOCKS,
-  PROP_LIGHT,
-  SHARD_PER_KILL,
-  stageDefFor,
-  stepMob,
-  type MobEvent,
-  type MobKind,
-  type MobState,
-  type Stage,
-  type StageDef,
-} from '../content/dungeon';
-import { footprint, isBuilding, ITEMS, type ItemId, type ResourceId, type StructureId, type ToolId } from '../content/items';
-import { TABLETS } from '../content/lore';
-import { NODE_TYPES, type NodeTypeId } from '../content/nodeTypes';
-import {
-  canAcceptItem,
-  emptyVillage,
-  festivalActive,
-  FESTIVAL_SPEED_FACTOR,
-  FOUNTAIN_WISH_ITEM,
-  FOUNTAIN_WISH_THRESHOLD,
-  FORGE_ART,
-  KILN_ART,
-  CHIME_KILN_ART,
-  VERDANT_LOOM_ART,
-  RELIQUARY_ART,
-  inventoryCapacity,
-  inVillageZone,
-  villageBuff,
-  villageContribution,
-  villagePoolCap,
-  VILLAGE_ART,
-  VILLAGE_MAX_TIER,
-  VILLAGE_TIERS,
-  VILLAGE_ZONE_RADIUS,
-  type VillageRecord,
-} from '../content/village';
-import {
-  isPredator,
-  isWildKind,
-  planWildSpawn,
-  RAGE_PROFILES,
-  rollWildLoot,
-  WILD_RAGE_MS,
-  WILDLIFE_ART,
-  type WildKind,
-} from '../content/wildlife';
-import { MOB_FRAME, MOB_TEX, PROJ_GLOW, PROJ_TEX } from '../mobSprites';
-import { RECIPES } from '../content/recipes';
-import { PROP_FLAT, PROP_TEX } from '../delveProps';
+import { DEV_WILD, MAP_H, MAP_W, TILE, ZOOM } from '../config';
+import { footprint, type ItemId, type StructureId, type ToolId } from '../content/items';
 import { bus } from '../ui/bus';
+import { installDevHandles } from './devHandles';
+import { buildWorldDressing } from './worldDressing';
 import type { GameContext } from '../systems/context';
 import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { BuildSystem } from '../systems/BuildSystem';
@@ -201,55 +35,7 @@ import { SealSystem } from '../systems/SealSystem';
 import { StationsSystem } from '../systems/StationsSystem';
 import { VillageSystem } from '../systems/VillageSystem';
 import { WildlifeSystem } from '../systems/WildlifeSystem';
-import {
-  addBlockerBody,
-  addShadow,
-  clearDeathFx,
-  DEATH_PUFF_TINT_DELVE,
-  DEATH_PUFF_TINT_WILD,
-  floatText,
-  HELD_HAND,
-  objImage,
-  playDeathBeat,
-  positionHeld,
-  setHeldTexture,
-  setObjTexture,
-  TORCH_TINT,
-  type MobView,
-} from '../systems/sceneFx';
-import type { DistrictDef, EAction, GameSystem, Mode, NodeView, OkJoin, WorldData } from '../systems/types';
-import { drawStructureArt } from '../ui/icons';
-import { showIntro } from '../ui/intro';
-import { t, zoneName } from '../i18n';
-
-/** a host-simulated Husk/boss projectile (tile units; velocity tiles/second) */
-interface DelveProjectile {
-  id: string;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  r: number;
-  life: number;
-}
-/** a party-mate rendered inside the Delve from their interior position broadcasts */
-interface DelvePeerView {
-  marker: Phaser.GameObjects.Arc;
-  label: Phaser.GameObjects.Text;
-  x: number;
-  y: number;
-}
-
-/** Delve overlay draws above every persistent World object (max depth ≈ MAP_H·TILE)
- *  so the World is simply hidden behind it — no per-object visibility toggling. */
-const DELVE_DEPTH_BG = 900_000;
-const DELVE_DEPTH_FLOOR = 900_010;
-const DELVE_DEPTH_ENTITY = 950_000; // + y (px) so player/mobs y-sort together
-const DELVE_DEPTH_PROJ = 970_000;
-
-/** an entity on a plateau adds this to its depth so it sorts above ANY base entity
- *  (bigger than the whole map's y-range, so overlaps at the cliff edge sort right) */
-const ELEV_DEPTH_BONUS = MAP_H * TILE;
+import type { EAction, GameSystem, Mode, OkJoin, WorldData } from '../systems/types';
 
 export class GameScene extends Phaser.Scene {
   private backend!: Backend;
@@ -282,8 +68,9 @@ export class GameScene extends Phaser.Scene {
   private projectile!: ProjectileSystem;
   private playerSystem!: PlayerSystem;
   private inputSystem!: InputSystem;
-  // ---- v2: the Guardian — FightSystem state, reached through accessors so the
-  // not-yet-extracted input/delve/wildlife seams keep their exact reads/writes
+  // ---- FightSystem state, reached through host accessors so the cross-mode
+  // seams (DelveSystem frame, Wildlife knockdowns, Echo latch) keep their
+  // exact reads/writes without each holding a fight ref (ADR-0018)
   get fight(): FightState | null {
     return this.fightSystem.fight;
   }
@@ -566,36 +353,8 @@ export class GameScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, MAP_W * TILE, MAP_H * TILE);
     this.blockersGroup = this.physics.add.staticGroup();
 
-    // decorative foliage (ruin pillars etc.) — solid, depth-sorted
-    for (const f of this.world.foliage) {
-      const x = (f.tx + 0.5) * TILE;
-      const y = (f.ty + 1) * TILE;
-      if (this.objImage(x, y, f.kind)) {
-        this.addBlockerBody(f.tx, f.ty);
-        this.addShadow(x, y - 1, 16);
-      }
-    }
-
-    // parallax clouds drifting ABOVE the world, scrolling slightly faster
-    // than the ground — fake-3D depth between layers. Deterministic spread
-    // so every client sees the same sky.
-    for (let i = 0; i < 18; i++) {
-      const px = (i * 733 + 217) % (MAP_W * TILE);
-      const py = (i * 1291 + 401) % (MAP_H * TILE);
-      const c = this.add.image(px, py, `cloud${i % 3}`);
-      c.setScale(1.5 + (i % 4) * 0.55);
-      c.setAlpha(0.4 + (i % 3) * 0.06);
-      c.setScrollFactor(1.22);
-      c.setDepth(700_000);
-      this.tweens.add({
-        targets: c,
-        x: px + 90 + (i % 5) * 35,
-        duration: 26_000 + (i % 7) * 6_000,
-        yoyo: true,
-        repeat: -1,
-        ease: 'sine.inout',
-      });
-    }
+    // foliage + parallax clouds + the animated water tile (pure dressing)
+    buildWorldDressing(this, this.world, this.blockersGroup);
 
     // lore tablets + grove altar + Welcome Stone — ProgressionSystem.create (ADR-0018)
     this.progression.create();
@@ -623,33 +382,6 @@ export class GameScene extends Phaser.Scene {
     // wheel zoom + LMB alt-fire hold + key wiring + chat-focus keyboard gate —
     // InputSystem.create (ADR-0018)
     this.inputSystem.create();
-
-    // animated water: repaint the water tile inside the shared canvas tileset
-    const tilesTex = this.textures.get(TILESET.key);
-    if (tilesTex instanceof Phaser.Textures.CanvasTexture && this.textures.exists('water-frames')) {
-      const frames = this.textures.get('water-frames').getSourceImage() as HTMLImageElement;
-      let waterFrame = 0;
-      this.time.addEvent({
-        delay: 550,
-        loop: true,
-        callback: () => {
-          waterFrame = (waterFrame + 1) % 3;
-          tilesTex.context.clearRect(16, 0, 16, 16);
-          tilesTex.context.drawImage(frames, waterFrame * 16, 0, 16, 16, 16, 0, 16, 16);
-          // the Mire's black water breathes on the same clock — the frame is
-          // drowned under dark teal so it barely glints (tile id 14, x=224)
-          const mx = 14 * 16;
-          tilesTex.context.clearRect(mx, 0, 16, 16);
-          tilesTex.context.drawImage(frames, waterFrame * 16, 0, 16, 16, mx, 0, 16, 16);
-          tilesTex.context.save();
-          tilesTex.context.globalCompositeOperation = 'source-atop';
-          tilesTex.context.fillStyle = 'rgba(10, 30, 29, 0.82)';
-          tilesTex.context.fillRect(mx, 0, 16, 16);
-          tilesTex.context.restore();
-          tilesTex.refresh();
-        },
-      });
-    }
 
     this.inventory = { ...this.me.inventory };
     this.villageSystem.create(); // bakes the Village textures + wires its listeners
@@ -732,119 +464,16 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (import.meta.env.DEV) {
-      (window as any).__jw = {
+      // the __jw dev handles (stable names — memory-lane flows depend on them)
+      installDevHandles({
         scene: this,
-        state: () => ({
-          player: { x: this.player.x, y: this.player.y, tx: Math.floor(this.player.x / TILE), ty: Math.floor(this.player.y / TILE) },
-          zone: this.fogSystem.currentZone,
-          inventory: { ...this.inventory },
-          remotes: [...this.presence.remotes.keys()],
-          muted: this.atmosphere.muted,
-        }),
-        teleport: (tx: number, ty: number) => {
-          this.player.setPosition((tx + 0.5) * TILE, (ty + 0.5) * TILE);
-        },
-        grant: (items: Inventory) => {
-          const inv = (this.backend as any).debugGrant?.(items) as Inventory | null;
-          if (inv) {
-            this.setInv(inv);
-          }
-        },
-        // ADR-0011 Deep playtest handles (dev only) — drive the chained Stages
-        delve: {
-          stage: () => this.delve.delveStage,
-          inDelve: () => this.inDelve,
-          doorOpen: () => this.delve.deepDoorOpen,
-          mobs: () =>
-            [...this.delve.mobs.values()].map((m) => ({
-              id: m.id, kind: m.kind, hp: m.hp, maxHp: m.maxHp, st: m.st, erupt: !!m.erupt, guard: !!m.guard,
-              x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10,
-            })),
-          enterStage1: () => this.delve.enterDelve(),
-          enterDeep: () => this.delve.enterDeepDirect(),
-          descend: () => this.delve.descendNextStage(),
-          /** force the next signature move (eruption/slam/wall/birth) to charge now */
-          erupt: () => {
-            for (const m of this.delve.mobs.values()) {
-              if (m.st !== 'dead' && profileOf(m.kind).eruptEveryMs) { m.eruptCd = 0; return true; }
-            }
-            return false;
-          },
-          /** fell one mob by id as a lethal host-adjudicated hit (drives the real loot/door/complete path) */
-          fell: (id: string) => {
-            const m = this.delve.mobs.get(id);
-            if (!m || m.st === 'dead') return false;
-            this.delve.delveHitLanded = true;
-            this.delve.delveParticipants.add(this.me.name);
-            m.hp = 0;
-            m.st = 'dead';
-            this.delve.onMobFelled(m);
-            return true;
-          },
-          /** fell every Husk (leaves the boss) — bank kills for shard loot */
-          fellHusks: () => {
-            let n = 0;
-            for (const m of [...this.delve.mobs.values()]) {
-              if (isBossKind(m.kind) || m.st === 'dead') continue;
-              this.delve.delveHitLanded = true;
-              this.delve.delveParticipants.add(this.me.name);
-              m.hp = 0;
-              m.st = 'dead';
-              this.delve.onMobFelled(m);
-              n++;
-            }
-            return n;
-          },
-          /** fell the current Stage boss (pays loot + Record, opens the next door — ADR-0015) */
-          fellBoss: () => {
-            for (const m of [...this.delve.mobs.values()]) {
-              if (!isBossKind(m.kind) || m.st === 'dead') continue;
-              this.delve.delveHitLanded = true;
-              this.delve.delveParticipants.add(this.me.name);
-              m.hp = 0;
-              m.st = 'dead';
-              this.delve.onMobFelled(m);
-              return true;
-            }
-            return false;
-          },
-        },
-        // ADR-0012 open-world Wildlife playtest handles (dev only)
-        wild: {
-          host: () => ({ isHost: this.wildlife.isWildHost, hostName: this.wildlife.wildHostName, roster: this.backend.creatureRoster() }),
-          list: () =>
-            [...this.wildlife.wildMobs.values()].map((m) => ({
-              id: m.id, kind: m.kind, st: m.st, hp: m.hp, maxHp: m.maxHp,
-              predator: isWildKind(m.kind) && isPredator(m.kind as WildKind),
-              x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10,
-              danger: this.wildlife.dangerAt(Math.floor(m.x), Math.floor(m.y)),
-              rage: !!m.rage, rageBy: this.wildlife.wildRage.get(m.id)?.by ?? null,
-            })),
-          danger: (tx?: number, ty?: number) =>
-            this.wildlife.dangerAt(tx ?? Math.floor(this.player.x / TILE), ty ?? Math.floor((this.player.y - 4) / TILE)),
-          knockdowns: () => this.wildlife.wildKnockdownTimes.length,
-          /** force-spawn one creature near the Player (host only): kind or 'predator'/'peaceful' */
-          spawn: (kind: string) => {
-            if (!this.wildlife.isWildHost) return null;
-            const tx = Math.floor(this.player.x / TILE) + 2;
-            const ty = Math.floor((this.player.y - 4) / TILE);
-            let k = kind as WildKind;
-            if (kind === 'predator') k = 'jaguar';
-            else if (kind === 'peaceful') k = 'capybara';
-            const id = `w${this.wildlife.nextWildId++}`;
-            this.wildlife.wildMobs.set(id, createMob(id, { kind: k, x: tx + 0.5, y: ty + 0.5 }, 1));
-            return id;
-          },
-          /** the speeds every creature obeys vs the Player's (AC4 flee-always proof) */
-          speeds: () => ({
-            playerTilesPerSec: PLAYER_SPEED / TILE,
-            playerBuffed: (PLAYER_SPEED * SPEED_BUFF_FACTOR) / TILE,
-            creatures: (['capybara', 'deer', 'boar', 'jaguar'] as WildKind[]).map((kk) => ({
-              kind: kk, speed: profileOf(kk).speed, lunge: profileOf(kk).lungeSpeed,
-            })),
-          }),
-        },
-      };
+        ctx: this.ctx,
+        fog: this.fogSystem,
+        atmosphere: this.atmosphere,
+        presence: this.presence,
+        delve: this.delve,
+        wildlife: this.wildlife,
+      });
     }
   }
 
@@ -906,19 +535,6 @@ export class GameScene extends Phaser.Scene {
     return this.playerSystem.isBow();
   }
 
-  // ---- sceneFx delegates (ADR-0018 transitional — callers migrate into systems)
-  private addShadow(x: number, y: number, width: number): Phaser.GameObjects.Image {
-    return addShadow(this, x, y, width);
-  }
-
-  private objImage(x: number, y: number, kind: string): Phaser.GameObjects.Image | null {
-    return objImage(this, x, y, kind);
-  }
-
-  private addBlockerBody(tx: number, ty: number): Phaser.GameObjects.Rectangle {
-    return addBlockerBody(this, this.blockersGroup, tx, ty);
-  }
-
   /** the ONE ordered E-priority chain — InputSystem.resolveEAction (ADR-0018) */
   resolveEAction(): EAction | null {
     return this.inputSystem.resolveEAction();
@@ -964,10 +580,6 @@ export class GameScene extends Phaser.Scene {
   checkZone(): void {
     this.fogSystem.checkZone();
   }
-
-  // ------------------------------------------------------------ update
-
-  // ============================================================ Dungeons: the Delve + the Deep (ADR-0007 / ADR-0011)
 
   /** is the mine shaft open? — DelveSystem (ADR-0018) */
   delveOpenNow(): boolean {
@@ -1027,16 +639,15 @@ export class GameScene extends Phaser.Scene {
    *  17. X dismantle
    *  18. ESC/ENTER place-mode keys
    *  19. E/LMB action dispatch (resolveEAction + cadence gates)
-   * Systems dispatch through `this.systems` in exactly this order as they are
-   * extracted; until then the inline blocks below remain authoritative.
+   * Each system's update() is called EXPLICITLY at its numbered position —
+   * never a flat loop, because the delve early-return (2) and the chat/stun
+   * halt (13) live INSIDE the sequence. Order changes here are visible
+   * decisions, not accidents of file position (ADR-0018). `this.systems`
+   * carries the lifecycle (create/destroy) separately.
    */
   update(time: number, delta: number): void {
     if (!this.player) return;
     const dt = delta / 1000;
-    // ADR-0018 dispatch: each extracted system's update() is called EXPLICITLY
-    // at its numbered position in the sequence above (never a flat loop — the
-    // delve early-return and the chat/stun halt live INSIDE the sequence).
-    // `this.systems` carries the lifecycle (create/destroy) in the same order.
 
     // ?deep dev flag: drop straight into the Deep on the first frame (once)
     if (this.delve.pendingDeepEntry) {
