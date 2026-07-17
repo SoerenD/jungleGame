@@ -435,6 +435,7 @@ export class GameScene extends Phaser.Scene {
     this.fogSystem = new FogSystem(this.ctx, this, this.atmosphere);
     this.fogSystem.seal = this.sealSystem;
     this.fogSystem.village = this.villageSystem;
+    this.fogSystem.district = this.districtSystem;
     this.systems.push(this.fogSystem);
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
