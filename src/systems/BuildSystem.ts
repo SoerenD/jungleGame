@@ -19,7 +19,7 @@ import type { GameContext } from './context';
 import type { HarvestSystem } from './HarvestSystem';
 import type { ProgressionSystem } from './ProgressionSystem';
 import { addBlockerBody, addShadow, objImage } from './sceneFx';
-import type { StationsSystem } from './StationsSystem';
+import { REFINER_FX_SPEC, type StationsSystem } from './StationsSystem';
 import type { GameSystem } from './types';
 import type { VillageSystem } from './VillageSystem';
 
@@ -206,6 +206,21 @@ export class BuildSystem implements GameSystem {
       objects.push(blade);
       this.stations.sawmillBlades.set(s.id, { blade, x, y: by, baseY, nextPuff: 0 });
     }
+    // ADR-0017 §6: a working Refiner (Brine/Chime Kiln, Verdant Loom) runs a
+    // three-effect animation. Seat the additive mouth glow over its furnace mouth
+    // here — hidden until refining; StationsSystem.update drives all three effects.
+    const fxSpec = REFINER_FX_SPEC[s.type];
+    if (fxSpec) {
+      const glow = scene.add
+        .image(x, baseY - 16, 'glow')
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setTint(fxSpec.glow)
+        .setScale(1.3)
+        .setAlpha(0)
+        .setDepth(890_001);
+      objects.push(glow);
+      this.stations.refinerFx.set(s.id, { glow, x, baseY, spec: fxSpec, nextWisp: 0, nextSpark: 0 });
+    }
   }
 
   /**
@@ -227,9 +242,12 @@ export class BuildSystem implements GameSystem {
       if (view.glowImg) this.atmosphere.glows = this.atmosphere.glows.filter((g) => g.img !== view.glowImg);
       this.structureViews.delete(id);
     }
-    // the blade sprite is destroyed with view.objects above; drop its bookkeeping
+    // the blade + refiner-glow sprites are destroyed with view.objects above; drop
+    // their bookkeeping (a dismantle can hit a Sawmill or any Refiner)
     this.stations.sawmillBlades.delete(id);
     this.stations.sawmillMillingUntil.delete(id);
+    this.stations.refinerFx.delete(id);
+    this.stations.refinerBusyUntil.delete(id);
     if (s) {
       const { w, h } = footprint(s.type);
       for (let dy = 0; dy < h; dy++) {

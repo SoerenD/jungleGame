@@ -5,7 +5,7 @@
  * (ADR-0017 §6). Owns all its bus handlers and detaches them in destroy().
  */
 import type Phaser from 'phaser';
-import type { Inventory, RefinerConfig, SawmillState } from '../backend/types';
+import type { Inventory, RefinerConfig, RefinerState, SawmillState } from '../backend/types';
 import { SAWMILL_PLANK_MS } from '../config';
 import { ITEMS, type ItemId } from '../content/items';
 import { RECIPES } from '../content/recipes';
@@ -17,12 +17,46 @@ import type { FogSystem } from './FogSystem';
 import type { RefinerTarget } from '../ui/bus';
 import type { GameSystem } from './types';
 
+/**
+ * The three-effect "it's working" animation for one Refiner family (ADR-0017 §6).
+ * Every Refiner runs the same generic kernel, so they share ONE animation shape —
+ * a pulsing mouth glow, rising wisps, and popping mouth sparks — recoloured to
+ * each family's signal palette (Brine teal / Chime hushsteel-blue / Loom green).
+ * BuildSystem seats the additive glow from `glow`; StationsSystem.update spawns
+ * the wisp/spark particles while the station is refining.
+ */
+export interface RefinerFxSpec {
+  /** additive mouth-glow tint */
+  glow: number;
+  /** rising-wisp colours — steam / resonance ripple / retting mote */
+  wisp: number[];
+  /** mouth-spark colours — brine bubble / resonance spark / weft mote */
+  spark: number[];
+}
+
+/** keyed by Refiner Structure type — one entry per family on the generic kernel */
+export const REFINER_FX_SPEC: Record<string, RefinerFxSpec> = {
+  // the Brine Kiln's furnace mouth glows the Mire's signal teal (icons.ts drawKiln)
+  brine_kiln: { glow: 0x63e0b8, wisp: [0x8fb8ad, 0xb8ddd4, 0xc8fbe8], spark: [0x63e0b8, 0xc8fbe8] },
+  // the Chime Kiln rings cold hushsteel blue instead of glowing (drawChimeKiln)
+  chime_kiln: { glow: 0x93a8c9, wisp: [0x8fa0bd, 0xc2d2ea, 0xd6e4f5], spark: [0x93a8c9, 0xd6e4f5] },
+  // the Verdant Loom breathes a green retting shimmer over its warp (drawLoom)
+  verdant_loom: { glow: 0x7cc96f, wisp: [0x9fd08a, 0xc8f0b8, 0x7bb069], spark: [0x7cc96f, 0xc8f0b8] },
+};
+
 export class StationsSystem implements GameSystem {
   /** Sawmill blade sprites (v3): spun + puffing while the mill is working —
    *  entries are seated/removed by the structure builder */
   sawmillBlades = new Map<string, { blade: Phaser.GameObjects.Image; x: number; y: number; baseY: number; nextPuff: number }>();
   /** per-Sawmill "milling until" timestamp — derived from its last observed state */
   sawmillMillingUntil = new Map<string, number>();
+  /** per-Refiner working-animation handles (ADR-0017 §6): the seated additive
+   *  mouth glow + its palette + per-effect particle timers. Entries are seated/
+   *  removed by the structure builder; update() drives all three effects while
+   *  the station is refining. */
+  refinerFx = new Map<string, { glow: Phaser.GameObjects.Image; x: number; baseY: number; spec: RefinerFxSpec; nextWisp: number; nextSpark: number }>();
+  /** per-Refiner "refining until" timestamp — derived from its last observed state */
+  refinerBusyUntil = new Map<string, number>();
   /** wired by GameScene (the craft handler's Forge gate reads it) */
   fog!: FogSystem;
   /** wired by GameScene (emitSawmillBuilt scans the placed structures) */
@@ -138,6 +172,7 @@ export class StationsSystem implements GameSystem {
         return;
       }
       this.ctx.setInventory(res.inventory);
+      this.noteRefinerState(o.id, o.cfg, res.state);
       this.ctx.bus.emit('refiner-open', o, res.state);
       this.ctx.sfx('place', 0.5);
     });
@@ -152,6 +187,7 @@ export class StationsSystem implements GameSystem {
         return;
       }
       this.ctx.setInventory(res.inventory);
+      this.noteRefinerState(o.id, o.cfg, res.state);
       this.ctx.bus.emit('refiner-open', o, res.state);
       this.ctx.bus.emit('toast', t.toast.refinerCollected(ITEMS[o.cfg.outputItem].name), 'good');
       this.ctx.sfx('harvest', 0.6);
@@ -205,9 +241,10 @@ export class StationsSystem implements GameSystem {
   /** §8 step 3 (v3 #3): a working Sawmill spins its blade and coughs sawdust. "Working"
    *  is the client's last-known milling window; a mill we've never opened sits idle. */
   update(time: number, delta: number): void {
-    if (this.sawmillBlades.size === 0) return;
+    if (this.sawmillBlades.size === 0 && this.refinerFx.size === 0) return;
     const dt = delta / 1000;
     const now = Date.now();
+    this.tickRefiners(time, now);
     for (const [id, v] of this.sawmillBlades) {
       const working = now < (this.sawmillMillingUntil.get(id) ?? 0);
       if (!working) {
@@ -230,6 +267,56 @@ export class StationsSystem implements GameSystem {
           duration: 620,
           ease: 'quad.out',
           onComplete: () => puff.destroy(),
+        });
+      }
+    }
+  }
+
+  /** §8 step 3 (ADR-0017 §6): a working Refiner runs its three-effect animation —
+   *  the kiln/loom twin of the Sawmill's spinning blade. "Working" is the client's
+   *  last-known refining window; a Refiner we've never opened sits idle. */
+  private tickRefiners(time: number, now: number): void {
+    if (this.refinerFx.size === 0) return;
+    const scene = this.ctx.scene;
+    for (const [id, fx] of this.refinerFx) {
+      const working = now < (this.refinerBusyUntil.get(id) ?? 0);
+      if (!working) {
+        if (fx.glow.alpha !== 0) fx.glow.setAlpha(0);
+        continue;
+      }
+      // effect 1 — the mouth glow breathes as the charge cooks ("Lively" band)
+      fx.glow.setAlpha(0.34 + 0.3 * (0.5 + 0.5 * Math.sin(time / 149)));
+      // effect 2 — a wisp of steam / resonance / retting drifts up off the top
+      if (time >= fx.nextWisp) {
+        fx.nextWisp = time + 280 + Math.random() * 140;
+        const c = fx.spec.wisp[(Math.random() * fx.spec.wisp.length) | 0];
+        const wx = fx.x + (Math.random() - 0.5) * 12;
+        const wy = fx.baseY - 40;
+        const wisp = scene.add.rectangle(wx, wy, 2, 3, c).setDepth(fx.baseY + 2).setAlpha(0.8);
+        scene.tweens.add({
+          targets: wisp,
+          x: wx + (Math.random() - 0.5) * 12,
+          y: wy - 22 - Math.random() * 10,
+          alpha: 0,
+          duration: 900 + Math.random() * 250,
+          ease: 'sine.out',
+          onComplete: () => wisp.destroy(),
+        });
+      }
+      // effect 3 — a bubble / spark / mote pops at the glowing mouth
+      if (time >= fx.nextSpark) {
+        fx.nextSpark = time + 150 + Math.random() * 110;
+        const c = fx.spec.spark[(Math.random() * fx.spec.spark.length) | 0];
+        const sx = fx.x + (Math.random() - 0.5) * 10;
+        const sy = fx.baseY - 16;
+        const spark = scene.add.rectangle(sx, sy, 2, 2, c).setDepth(fx.baseY + 3).setAlpha(0.95);
+        scene.tweens.add({
+          targets: spark,
+          y: sy - 9 - Math.random() * 6,
+          alpha: 0,
+          duration: 360 + Math.random() * 140,
+          ease: 'quad.out',
+          onComplete: () => spark.destroy(),
         });
       }
     }
@@ -283,6 +370,18 @@ export class StationsSystem implements GameSystem {
     }
   }
 
+  /** record when a Refiner will finish everything it holds, from its last observed
+   *  state (input still refining × msPerUnit + the current unit's remainder). The
+   *  SawmillState twin, generalized to the kernel's {input, nextMs} (ADR-0017 §6).
+   *  tickRefiners() runs its three-effect animation while `now` is before it. */
+  noteRefinerState(id: string, cfg: RefinerConfig, state: RefinerState): void {
+    if (state.input > 0 && state.nextMs != null) {
+      this.refinerBusyUntil.set(id, Date.now() + state.nextMs + (state.input - 1) * cfg.msPerUnit);
+    } else {
+      this.refinerBusyUntil.set(id, 0);
+    }
+  }
+
   /** the Into-the-Delve "Build a Sawmill" step: does any Sawmill stand in the World? */
   emitSawmillBuilt(): void {
     let built = false;
@@ -297,6 +396,7 @@ export class StationsSystem implements GameSystem {
     void this.ctx.backend.refinerOpen(refinerId, cfg).then((res) => {
       if (!res.ok) return;
       this.ctx.setInventory(res.inventory);
+      this.noteRefinerState(refinerId, cfg, res.state);
       this.ctx.bus.emit('refiner-open', { id: refinerId, cfg, name }, res.state);
       this.ctx.sfx('blip', 0.4);
     });
