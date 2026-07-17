@@ -189,6 +189,7 @@ import { FogSystem } from '../systems/FogSystem';
 import { DistrictSystem } from '../systems/DistrictSystem';
 import { ProgressionSystem } from '../systems/ProgressionSystem';
 import { SealSystem } from '../systems/SealSystem';
+import { StationsSystem } from '../systems/StationsSystem';
 import { VillageSystem } from '../systems/VillageSystem';
 import {
   addBlockerBody,
@@ -434,14 +435,10 @@ export class GameScene extends Phaser.Scene {
   private nodePips = new Map<string, { gfx: Phaser.GameObjects.Graphics; tween: Phaser.Tweens.Tween | null }>();
   /** reusable tooltip showing the name of the Resource Node under the cursor */
   nodeHoverLabel: Phaser.GameObjects.Text | null = null;
-  private structuresByTile = new Map<string, Structure>();
+  structuresByTile = new Map<string, Structure>();
   private structureIds = new Set<string>();
   /** per-structure display + collision objects, kept so a dismantle can tear them down */
   private structureViews = new Map<string, { objects: Phaser.GameObjects.GameObject[]; bodies: Phaser.GameObjects.Rectangle[]; glowImg: Phaser.GameObjects.Image | null }>();
-  /** Sawmill blade sprites (v3): spun + puffing while the mill is working */
-  private sawmillBlades = new Map<string, { blade: Phaser.GameObjects.Image; x: number; y: number; baseY: number; nextPuff: number }>();
-  /** per-Sawmill "milling until" timestamp — derived from its last observed state */
-  private sawmillMillingUntil = new Map<string, number>();
   blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
   remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
@@ -467,6 +464,7 @@ export class GameScene extends Phaser.Scene {
   private villageSystem!: VillageSystem;
   private progression!: ProgressionSystem;
   private districtSystem!: DistrictSystem;
+  private stationsSystem!: StationsSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
@@ -670,7 +668,7 @@ export class GameScene extends Phaser.Scene {
   /** open-world knockdown timestamps — a rolling window (distinct from the Guardian's per-fight count) */
   private wildKnockdownTimes: number[] = [];
   // ---- v2: fishing, cooking, intro
-  private buffUntil = 0;
+  buffUntil = 0;
   /** throttle for the "pack full" harvest toast (ADR-0013) */
   private packFullToastAt = 0;
   /** throttle for the tide-submerged reed refusal toast (ADR-0017 rung 1) */
@@ -781,6 +779,8 @@ export class GameScene extends Phaser.Scene {
     this.districtSystem = new DistrictSystem(this.ctx, this, this.atmosphere);
     this.systems.push(this.districtSystem);
     this.atmosphere.district = this.districtSystem;
+    this.stationsSystem = new StationsSystem(this.ctx, this);
+    this.systems.push(this.stationsSystem);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       for (const s of this.systems) s.destroy();
       this.systems = [];
@@ -1254,6 +1254,7 @@ export class GameScene extends Phaser.Scene {
     this.villageSystem.create(); // bakes the Village textures + wires its listeners
     this.wireBackend();
     this.wireBus();
+    this.stationsSystem.create(); // craft/eat/drop + crate/sawmill/refiner bus handlers (ADR-0018)
     this.recomputeWildHost(); // ADR-0012: elect the creature host now (re-run on every presence sync)
     bus.emit('journey', this.progression.journey);
 
@@ -1279,7 +1280,7 @@ export class GameScene extends Phaser.Scene {
       // ADR-0015: seed the Hall panel's Depth Record teaser (records accrue from
       // the first Descent even while the Grand Monument is unbuilt)
       this.refreshDepthRecords();
-      this.emitSawmillBuilt(); // Into-the-Delve step: a Sawmill stands in the World
+      this.stationsSystem.emitSawmillBuilt(); // Into-the-Delve step: a Sawmill stands in the World
     });
     // 'equipped' BEFORE 'inventory': the HUD's loadout reconcile persists on the
     // inventory event and checks ownership through the gear record too — the
@@ -1301,6 +1302,7 @@ export class GameScene extends Phaser.Scene {
     this.systems.push(this.fogSystem);
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
+    this.stationsSystem.fog = this.fogSystem;
     this.fishingSystem = new FishingSystem(this.ctx, this);
     this.systems.push(this.fishingSystem);
     this.fishingSystem.create();
@@ -1445,11 +1447,11 @@ export class GameScene extends Phaser.Scene {
       // guarded like addStructure: an old client can still place a retired type
       // (hammock/table/obsidian_path) during a rollout window
       if (s.placedBy !== this.me.name) bus.emit('toast', t.builtBy(s.placedBy, ITEMS[s.type]?.name ?? s.type), 'info');
-      if (s.type === 'sawmill') this.emitSawmillBuilt();
+      if (s.type === 'sawmill') this.stationsSystem.emitSawmillBuilt();
     });
     this.backend.on('structureRemoved', (id: string) => {
       this.removeStructure(id);
-      this.emitSawmillBuilt(); // the last Sawmill may have just come down
+      this.stationsSystem.emitSawmillBuilt(); // the last Sawmill may have just come down
     });
     this.backend.on('crateChanged', (crateId: string, contents: Inventory) => {
       bus.emit('crate-changed', crateId, contents);
@@ -2582,132 +2584,16 @@ export class GameScene extends Phaser.Scene {
       this.chatFocused = false;
       this.input.keyboard!.enabled = true;
     });
-    bus.on('craft', (recipeId: string) => {
-      // backstop the Forge gate (the HUD already hides these cards away from a
-      // Forge): the heavy forged gear can only be made beside a Forge Structure
-      const recipe = RECIPES.find((r) => r.id === recipeId);
-      if (recipe?.requiresForge && !this.fogSystem.nearForge) {
-        bus.emit('toast', t.toast.forgeRequired, 'bad');
-        return;
-      }
-      void this.backend.craft(recipeId).then((result) => {
-        if (result.ok) {
-          this.setInv(result.inventory);
-          bus.emit('toast', t.toast.crafted(ITEMS[result.crafted].name), 'good');
-          this.sfx('craft', 0.5);
-          if (result.crafted === 'axe' || result.crafted === 'ancient_axe') this.tickJourney('craft_axe');
-        } else if (result.reason === 'INSUFFICIENT') {
-          bus.emit('toast', t.toast.notEnoughResources, 'bad');
-        } else if (result.reason === 'TOOL_REQUIRED') {
-          bus.emit('toast', t.toast.missingTool, 'bad');
-        }
-      });
-    });
     // ADR-0017 §4: the inventory's Equip button toggles one Armor piece
     bus.on('equip-toggle', (item: ItemId) => this.toggleArmor(item));
     // the legacy gear weapon slots: only the HUD migration's CLEAR path fires now
     bus.on('weapon-slot-set', (slot: WeaponSlot, item: ItemId | null) => this.setWeaponSlot(slot, item));
     bus.on('request-place', (item: StructureId) => this.enterPlaceMode(item));
-    // crate storage / Sawmill ops requested by the HUD panels
-    bus.on('crate-deposit', (crateId: string, item: ItemId, count: number) => {
-      void this.backend.crateDeposit(crateId, item, count).then((res) => {
-        if (!res.ok) return;
-        this.setInv(res.inventory);
-        bus.emit('crate-open', crateId, res.contents);
-      });
-    });
-    bus.on('crate-withdraw', (crateId: string, item: ItemId, count: number) => {
-      void this.backend.crateWithdraw(crateId, item, count).then((res) => {
-        if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.crateGone, 'bad');
-          return;
-        }
-        this.setInv(res.inventory);
-        bus.emit('crate-open', crateId, res.contents);
-      });
-    });
     // the boss Spoils window: take one drop, take everything, or close (which
     // sweeps up whatever is left so loot is never abandoned)
     bus.on('loot-take', (item: ItemId, count: number) => this.claimLoot({ [item]: count }));
     bus.on('loot-take-all', () => this.claimLoot({ ...this.lootPending }));
     bus.on('loot-close', () => this.claimLoot({ ...this.lootPending }));
-    bus.on('sawmill-deposit', (sawmillId: string) => {
-      void this.backend.sawmillDeposit(sawmillId).then((res) => {
-        if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.millFullOrNoWood, 'bad');
-          return;
-        }
-        this.setInv(res.inventory);
-        this.noteSawmillState(sawmillId, res.state);
-        bus.emit('sawmill-open', sawmillId, res.state);
-        this.sfx('place', 0.5);
-      });
-    });
-    bus.on('sawmill-refresh', (sawmillId: string) => this.openSawmill(sawmillId));
-    bus.on('sawmill-collect', (sawmillId: string) => {
-      void this.backend.sawmillCollect(sawmillId).then((res) => {
-        if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.noPlankYet, 'bad');
-          return;
-        }
-        this.setInv(res.inventory);
-        this.noteSawmillState(sawmillId, res.state);
-        bus.emit('sawmill-open', sawmillId, res.state);
-        bus.emit('toast', t.toast.collectPlanks, 'good');
-        this.sfx('harvest', 0.6);
-      });
-    });
-    // the generic Refiner panel (ADR-0017 §6): ONE wiring for every Refiner
-    // family — the HUD echoes back the {id, cfg, name} target it was opened with
-    bus.on('refiner-deposit', (o: { id: string; cfg: RefinerConfig; name: string }) => {
-      void this.backend.refinerDeposit(o.id, o.cfg).then((res) => {
-        if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.refinerFullOrEmpty(ITEMS[o.cfg.inputItem].name), 'bad');
-          return;
-        }
-        this.setInv(res.inventory);
-        bus.emit('refiner-open', o, res.state);
-        this.sfx('place', 0.5);
-      });
-    });
-    bus.on('refiner-refresh', (o: { id: string; cfg: RefinerConfig; name: string }) => this.openRefiner(o.id, o.cfg, o.name));
-    bus.on('refiner-collect', (o: { id: string; cfg: RefinerConfig; name: string }) => {
-      void this.backend.refinerCollect(o.id, o.cfg).then((res) => {
-        if (!res.ok) {
-          if (res.reason === 'NOTHING') bus.emit('toast', t.toast.refinerNotReady, 'bad');
-          return;
-        }
-        this.setInv(res.inventory);
-        bus.emit('refiner-open', o, res.state);
-        bus.emit('toast', t.toast.refinerCollected(ITEMS[o.cfg.outputItem].name), 'good');
-        this.sfx('harvest', 0.6);
-      });
-    });
-    bus.on('eat', (id?: ItemId) => {
-      // cooked meat, cooked fish and the Grasweave Ration grant the SAME move buff
-      // (ADR-0012 — a new ingredient, NOT a new buff; ADR-0017 rung 3 wildgrain sink)
-      const eat =
-        id === 'cooked_meat'
-          ? this.backend.eatCookedMeat()
-          : id === 'grasweave_ration'
-            ? this.backend.eatGrasweaveRation()
-            : this.backend.eatCookedFish();
-      void eat.then((res) => {
-        if (!res.ok) return;
-        this.setInv(res.inventory);
-        this.buffUntil = Date.now() + res.buffMs;
-        bus.emit('buff', this.buffUntil);
-        bus.emit('toast', t.toast.warmHearty, 'good');
-        this.sfx('munch', 0.6);
-      });
-    });
-    bus.on('drop-item', (id: ItemId, count: number) => {
-      void this.backend.dropItem(id, count).then((res) => {
-        if (!res.ok) return;
-        this.setInv(res.inventory);
-        bus.emit('toast', t.toast.dropped(ITEMS[id].name, count), 'info');
-      });
-    });
   }
 
   private emitPresence(): void {
@@ -3155,13 +3041,13 @@ export class GameScene extends Phaser.Scene {
     // ADR-0017 rung 1: the Brine Kiln — E opens the generic Refiner panel with
     // the salt-reed → tideglass config (the kernel is untouched; data + art only)
     const kiln = this.nearbyStructure(['brine_kiln']);
-    if (kiln) return { swing: false, run: () => this.openRefiner(kiln.id, BRINE_KILN, ITEMS.brine_kiln.name) };
+    if (kiln) return { swing: false, run: () => this.stationsSystem.openRefiner(kiln.id, BRINE_KILN, ITEMS.brine_kiln.name) };
     // ADR-0017 rung 2: the Chime Kiln — the same generic Refiner, echo crystal → hushsteel
     const chime = this.nearbyStructure(['chime_kiln']);
-    if (chime) return { swing: false, run: () => this.openRefiner(chime.id, CHIME_KILN, ITEMS.chime_kiln.name) };
+    if (chime) return { swing: false, run: () => this.stationsSystem.openRefiner(chime.id, CHIME_KILN, ITEMS.chime_kiln.name) };
     // ADR-0017 rung 3: the Verdant Loom — the same generic Refiner, wildgrain → verdant fibre
     const loom = this.nearbyStructure(['verdant_loom']);
-    if (loom) return { swing: false, run: () => this.openRefiner(loom.id, VERDANT_LOOM, ITEMS.verdant_loom.name) };
+    if (loom) return { swing: false, run: () => this.stationsSystem.openRefiner(loom.id, VERDANT_LOOM, ITEMS.verdant_loom.name) };
     // ADR-0017 rung 2: the Echoes — arm a recording at a pedestal / claim an open vault
     const echoE = this.echoAction();
     if (echoE) return echoE;
@@ -3169,14 +3055,14 @@ export class GameScene extends Phaser.Scene {
     // functional Structures: crate storage, the Sawmill, signposts
     const st = this.nearbyStructure(['crate', 'sawmill', 'signpost']);
     if (st) {
-      if (st.type === 'crate') return { swing: false, run: () => this.openCrate(st.id) };
+      if (st.type === 'crate') return { swing: false, run: () => this.stationsSystem.openCrate(st.id) };
       // ?refinertest (dev-only, ADR-0017 §6): the Sawmill tile doubles as the
       // generic test Refiner so the kernel is exercisable end-to-end before any
       // player-facing Refiner Structure ships — the live Sawmill path is untouched
       // without the flag
       if (st.type === 'sawmill') {
-        if (DEV_REFINER_TEST) return { swing: false, run: () => this.openRefiner(st.id, TEST_REFINER, t.refiner.testName) };
-        return { swing: false, run: () => this.openSawmill(st.id) };
+        if (DEV_REFINER_TEST) return { swing: false, run: () => this.stationsSystem.openRefiner(st.id, TEST_REFINER, t.refiner.testName) };
+        return { swing: false, run: () => this.stationsSystem.openSawmill(st.id) };
       }
       return {
         swing: false,
@@ -3358,87 +3244,6 @@ export class GameScene extends Phaser.Scene {
     return null;
   }
 
-  private openCrate(crateId: string): void {
-    void this.backend.crateOpen(crateId).then((res) => {
-      if (!res.ok) return;
-      this.setInv(res.inventory);
-      bus.emit('crate-open', crateId, res.contents);
-      this.sfx('blip', 0.4);
-    });
-  }
-
-  private openSawmill(sawmillId: string): void {
-    void this.backend.sawmillOpen(sawmillId).then((res) => {
-      if (!res.ok) return;
-      this.setInv(res.inventory);
-      this.noteSawmillState(sawmillId, res.state);
-      bus.emit('sawmill-open', sawmillId, res.state);
-      this.sfx('blip', 0.4);
-    });
-  }
-
-  /** record when a Sawmill will finish milling everything it holds, from its last
-   *  observed state (wood still milling × plank time + the current plank's remainder).
-   *  updateSawmills spins the blade + puffs sawdust while `now` is before it. */
-  private noteSawmillState(id: string, state: SawmillState): void {
-    if (state.wood > 0 && state.nextPlankMs != null) {
-      this.sawmillMillingUntil.set(id, Date.now() + state.nextPlankMs + (state.wood - 1) * SAWMILL_PLANK_MS);
-    } else {
-      this.sawmillMillingUntil.set(id, 0);
-    }
-  }
-
-  /** the Into-the-Delve "Build a Sawmill" step: does any Sawmill stand in the World? */
-  private emitSawmillBuilt(): void {
-    let built = false;
-    for (const s of this.structuresByTile.values()) {
-      if (s.type === 'sawmill') { built = true; break; }
-    }
-    bus.emit('sawmill-built', built);
-  }
-
-  /** v3 (#3): a working Sawmill spins its blade and coughs sawdust. "Working" is the
-   *  client's last-known milling window; a mill we've never opened simply sits idle. */
-  private updateSawmills(time: number, dt: number): void {
-    if (this.sawmillBlades.size === 0) return;
-    const now = Date.now();
-    for (const [id, v] of this.sawmillBlades) {
-      const working = now < (this.sawmillMillingUntil.get(id) ?? 0);
-      if (!working) {
-        if (v.blade.visible) v.blade.setVisible(false);
-        continue;
-      }
-      if (!v.blade.visible) v.blade.setVisible(true);
-      v.blade.rotation += dt * 9; // a brisk spin reads as cutting
-      // a small sawdust puff drifts off the blade every ~0.35 s
-      if (time >= v.nextPuff) {
-        v.nextPuff = time + 320 + Math.random() * 120;
-        const puff = this.add
-          .rectangle(v.x + (Math.random() - 0.5) * 8, v.y + 4, 2, 2, 0xd9b98a)
-          .setDepth(v.baseY + 2);
-        this.tweens.add({
-          targets: puff,
-          x: puff.x + (Math.random() - 0.5) * 10,
-          y: puff.y + 8 + Math.random() * 6,
-          alpha: 0,
-          duration: 620,
-          ease: 'quad.out',
-          onComplete: () => puff.destroy(),
-        });
-      }
-    }
-  }
-
-  /** open the generic Refiner panel on a station, run on the passed tuning (ADR-0017 §6) */
-  private openRefiner(refinerId: string, cfg: RefinerConfig, name: string): void {
-    void this.backend.refinerOpen(refinerId, cfg).then((res) => {
-      if (!res.ok) return;
-      this.setInv(res.inventory);
-      bus.emit('refiner-open', { id: refinerId, cfg, name }, res.state);
-      this.sfx('blip', 0.4);
-    });
-  }
-
   private addStructure(s: Structure): void {
     if (this.structureIds.has(s.id)) return;
     this.structureIds.add(s.id);
@@ -3528,7 +3333,7 @@ export class GameScene extends Phaser.Scene {
       const by = baseY - TILE * 1.15;
       const blade = this.add.image(x, by, 'sawblade').setDepth(baseY + 1).setVisible(false);
       objects.push(blade);
-      this.sawmillBlades.set(s.id, { blade, x, y: by, baseY, nextPuff: 0 });
+      this.stationsSystem.sawmillBlades.set(s.id, { blade, x, y: by, baseY, nextPuff: 0 });
     }
   }
 
@@ -3552,8 +3357,8 @@ export class GameScene extends Phaser.Scene {
       this.structureViews.delete(id);
     }
     // the blade sprite is destroyed with view.objects above; drop its bookkeeping
-    this.sawmillBlades.delete(id);
-    this.sawmillMillingUntil.delete(id);
+    this.stationsSystem.sawmillBlades.delete(id);
+    this.stationsSystem.sawmillMillingUntil.delete(id);
     if (s) {
       const { w, h } = footprint(s.type);
       for (let dy = 0; dy < h; dy++) {
@@ -6344,7 +6149,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // v3 (#3): spin the blade + puff sawdust on any Sawmill currently milling
-    this.updateSawmills(time, dt);
+    this.stationsSystem.update(time, delta);
 
     // atmosphere (§8 step 4): overlays, veils (+ Hushdark echo-ambience), glow
     // pool, fireflies, leaves — AtmosphereSystem.update (ADR-0018)
