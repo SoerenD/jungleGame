@@ -186,6 +186,7 @@ import type { GameContext } from '../systems/context';
 import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
+import { ProgressionSystem } from '../systems/ProgressionSystem';
 import { SealSystem } from '../systems/SealSystem';
 import { VillageSystem } from '../systems/VillageSystem';
 import {
@@ -421,7 +422,7 @@ export class GameScene extends Phaser.Scene {
   private world!: WorldData;
   groundLayer!: Phaser.Tilemaps.TilemapLayer;
   private player!: Phaser.Physics.Arcade.Sprite;
-  private nodes = new Map<string, NodeView>();
+  nodes = new Map<string, NodeView>();
   private nodesByTile = new Map<string, string>();
   /**
    * J3: the damage-pip displays live ONLY here — created lazily on the first
@@ -463,17 +464,13 @@ export class GameScene extends Phaser.Scene {
   private fishingSystem!: FishingSystem;
   private sealSystem!: SealSystem;
   private villageSystem!: VillageSystem;
+  private progression!: ProgressionSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
    * the position stream (PlayerPos.swings) so peers can echo my swings.
    */
   swingCount = 0;
-  private quest: QuestState | null = null;
-  private tabletSpots: { id: string; x: number; y: number }[] = [];
-  private altarPos = { x: 0, y: 0 };
-  private gateParts: { sprite: Phaser.GameObjects.Image; body: Phaser.GameObjects.Rectangle }[] = [];
-  private digMarker: Phaser.GameObjects.Text | null = null;
   // ---- v2: the Guardian
   fight: FightState | null = null;
   /** per-Warden altar/gate progress (ADR-0017) — mirrors the backend's view */
@@ -670,9 +667,6 @@ export class GameScene extends Phaser.Scene {
   private nextWildId = 1;
   /** open-world knockdown timestamps — a rolling window (distinct from the Guardian's per-fight count) */
   private wildKnockdownTimes: number[] = [];
-  // ---- v3: the Journey (onboarding tracker + contextual hints)
-  private journey: JourneyState = { steps: {}, hintUses: {} };
-  private hintText: Phaser.GameObjects.Text | null = null;
   // ---- v2: fishing, cooking, intro
   private buffUntil = 0;
   /** throttle for the "pack full" harvest toast (ADR-0013) */
@@ -681,7 +675,6 @@ export class GameScene extends Phaser.Scene {
   private tideToastAt = 0;
   /** throttle for the unripe-wildgrain harvest refusal toast (ADR-0017 rung 3) */
   private cultivationToastAt = 0;
-  private welcomeStonePos = { x: 0, y: 0 };
   // ---- v4: Loadout — the single in-hand item, shown in the Player's hand + torch light
   private heldItem: ItemId | null = null;
   private heldSprite!: Phaser.GameObjects.Image;
@@ -775,7 +768,7 @@ export class GameScene extends Phaser.Scene {
       setInventory: (inv: Inventory) => this.setInv(inv),
       sfx: (key: string, volume: number) => this.sfx(key, volume),
       get journey(): JourneyState {
-        return self.journey;
+        return self.progression.journey;
       },
     };
   }
@@ -844,24 +837,10 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
-    // lore tablets (E to read)
-    for (const t of this.world.tablets) {
-      const x = (t.tx + 0.5) * TILE;
-      const y = (t.ty + 1) * TILE;
-      this.objImage(x, y, 'tablet')?.setScale(0.55);
-      this.tabletSpots.push({ id: t.id, x, y });
-    }
-
-    // grove altar (E with an offering)
-    {
-      const a = this.world.altar;
-      const x = (a.tx + 1) * TILE;
-      const y = (a.ty + 1) * TILE;
-      this.objImage(x, y, 'altar');
-      this.addBlockerBody(a.tx, a.ty);
-      this.addBlockerBody(a.tx + 1, a.ty);
-      this.altarPos = { x, y };
-    }
+    // lore tablets + grove altar + Welcome Stone — ProgressionSystem.create (ADR-0018)
+    this.progression = new ProgressionSystem(this.ctx, this);
+    this.systems.push(this.progression);
+    this.progression.create();
 
     // ---- v2 landmarks
     // Seal monument outside the arena entrance — SealSystem.create (ADR-0018)
@@ -878,16 +857,6 @@ export class GameScene extends Phaser.Scene {
       this.addBlockerBody(a.tx + 1, a.ty);
       this.addShadow(x, y - 1, 24);
       this.guardianAltarPos = { x, y };
-    }
-    // Welcome Stone beside the spawn (E to re-read the intro story)
-    {
-      const w = this.world.welcomeStone;
-      const x = (w.tx + 0.5) * TILE;
-      const y = (w.ty + 1) * TILE;
-      this.objImage(x, y, 'welcome_stone')?.setScale(0.7);
-      this.addBlockerBody(w.tx, w.ty);
-      this.addShadow(x, y - 1, 18);
-      this.welcomeStonePos = { x, y };
     }
     // the Guardian, colossal and slumbering on its 3x3 resting place
     {
@@ -1288,21 +1257,13 @@ export class GameScene extends Phaser.Scene {
     };
 
     this.inventory = { ...this.me.inventory };
-    this.journey = { steps: { ...this.me.journey.steps }, hintUses: { ...this.me.journey.hintUses } };
-    this.hintText = this.add
-      .text(0, 0, '', { fontSize: '9px', color: '#ffd166', stroke: '#000', strokeThickness: 3 })
-      .setOrigin(0.5, 1)
-      .setResolution(4)
-      .setDepth(999_998)
-      .setVisible(false);
-    this.tweens.add({ targets: this.hintText, alpha: { from: 1, to: 0.55 }, duration: 700, yoyo: true, repeat: -1 });
     this.villageSystem = new VillageSystem(this.ctx, this);
     this.systems.push(this.villageSystem);
     this.villageSystem.create(); // bakes the Village textures + wires its listeners
     this.wireBackend();
     this.wireBus();
     this.recomputeWildHost(); // ADR-0012: elect the creature host now (re-run on every presence sync)
-    bus.emit('journey', this.journey);
+    bus.emit('journey', this.progression.journey);
 
     void this.backend.loadWorld().then((snap) => {
       this.villageSystem.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
@@ -1311,8 +1272,8 @@ export class GameScene extends Phaser.Scene {
       for (const p of snap.players) this.upsertRemote(p);
       bus.emit('chatlog', snap.chatLog);
       this.emitPresence();
-      this.applyQuest(snap.quest);
-      if (!snap.quest.gateOpen) this.buildGate();
+      this.progression.applyQuest(snap.quest);
+      if (!snap.quest.gateOpen) this.progression.buildGate();
       this.sealSystem.applySeal(snap.seal);
       if (!snap.seal.broken) this.sealSystem.buildSealBarrier();
       // ADR-0017: per-Warden altar/gate progress — re-dress gates already open
@@ -1503,8 +1464,6 @@ export class GameScene extends Phaser.Scene {
     });
     this.backend.on('position', (p: PlayerPos) => this.upsertRemote(p));
     this.backend.on('presence', (players: PlayerPos[]) => this.reconcilePresence(players));
-    this.backend.on('quest', (q: QuestState) => this.applyQuest(q));
-    this.backend.on('gateOpened', () => this.openGateVisual());
     this.backend.on('guardianSummoned', (f: FightState) => this.startFight(f, true));
     this.backend.on('guardianEngaged', (f: FightState) => this.engageFight(f));
     this.backend.on('guardianHit', (hp: number) => {
@@ -2487,126 +2446,21 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ v3: the Journey
 
-  /** tick one Journey objective (idempotent; optimistic local + backend persist) */
+  /** tick one Journey objective — ProgressionSystem (ADR-0018) */
   tickJourney(step: JourneyStepId): void {
-    if (this.journey.steps[step]) return;
-    this.journey.steps[step] = true;
-    bus.emit('journey', this.journey);
-    if (journeyComplete(this.journey)) {
-      bus.emit('toast', t.toast.journeyComplete, 'good');
-    }
-    void this.backend.completeJourneyStep(step).then((j) => {
-      this.journey = j;
-      bus.emit('journey', j);
-    });
+    this.progression.tickJourney(step);
   }
 
-  /** count a successful use of a contextual hint; it retires after a few */
   private useHint(hint: HintId): void {
-    if (hintRetired(this.journey, hint)) return;
-    this.journey.hintUses[hint] = (this.journey.hintUses[hint] ?? 0) + 1;
-    bus.emit('journey', this.journey);
-    void this.backend.bumpHint(hint);
+    this.progression.useHint(hint);
   }
 
-  /**
-   * Contextual key hints float at the moment of relevance ("E — gather" by
-   * the first harvestable Resource Nodes, "E — read" at the Welcome Stone and
-   * tablets). Runs on the coarse checkZone cadence, not every frame.
-   */
+  /** contextual key hints — ProgressionSystem (called on the checkZone cadence) */
   updateHints(): void {
-    if (!this.hintText) return;
-    const px = this.player.x;
-    const py = this.player.y - 4;
-    let text = '';
-    let x = 0;
-    let y = 0;
-    if (!hintRetired(this.journey, 'read')) {
-      if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
-        text = t.hint.read;
-        x = this.welcomeStonePos.x;
-        y = this.welcomeStonePos.y - 26;
-      } else {
-        for (const spot of this.tabletSpots) {
-          if (Phaser.Math.Distance.Between(px, py, spot.x, spot.y - 8) < INTERACT_RANGE) {
-            text = t.hint.read;
-            x = spot.x;
-            y = spot.y - 22;
-            break;
-          }
-        }
-      }
-    }
-    if (!text && !hintRetired(this.journey, 'gather')) {
-      let best: NodeView | null = null;
-      let bestDist = INTERACT_RANGE;
-      for (const view of this.nodes.values()) {
-        if (view.depletedShown) continue;
-        const nt = NODE_TYPES[view.state.type];
-        if (nt.requiredTool && (this.inventory[nt.requiredTool] ?? 0) <= 0) continue; // only nodes the Player can harvest teach
-        const d = Phaser.Math.Distance.Between(px, py, view.sprite.x, view.sprite.y - TILE / 2);
-        if (d < bestDist) {
-          bestDist = d;
-          best = view;
-        }
-      }
-      if (best) {
-        text = t.hint.gather;
-        x = best.sprite.x;
-        y = best.sprite.y - best.sprite.displayHeight - 4;
-      }
-    }
-    if (text) this.hintText.setText(text).setPosition(x, y).setVisible(true);
-    else this.hintText.setVisible(false);
+    this.progression.updateHints();
   }
 
   // ------------------------------------------------------------ secrets
-
-  private applyQuest(q: QuestState): void {
-    this.quest = q;
-    bus.emit('quest', q);
-    this.refreshDelveEntrance(this.delveOpenNow());
-    if (q.treasureLocation) {
-      const x = (q.treasureLocation.tx + 0.5) * TILE;
-      const y = (q.treasureLocation.ty + 0.5) * TILE;
-      if (!this.digMarker) {
-        this.digMarker = this.add
-          .text(x, y, '✕', { fontSize: '12px', color: '#ff5544', stroke: '#000000', strokeThickness: 3 })
-          .setOrigin(0.5)
-          .setResolution(4);
-      }
-      this.digMarker.setPosition(x, y).setDepth(y);
-    } else {
-      this.digMarker?.destroy();
-      this.digMarker = null;
-    }
-  }
-
-  private buildGate(): void {
-    for (const g of this.world.gate) {
-      const x = (g.tx + 0.5) * TILE;
-      const y = (g.ty + 1) * TILE;
-      const sprite = this.objImage(x, y, 'fiber_vine');
-      if (!sprite) continue;
-      sprite.setTint(0x8fdc78);
-      const body = this.addBlockerBody(g.tx, g.ty);
-      this.gateParts.push({ sprite, body });
-    }
-  }
-
-  private openGateVisual(): void {
-    for (const part of this.gateParts) {
-      this.tweens.add({
-        targets: part.sprite,
-        alpha: 0,
-        y: part.sprite.y - 8,
-        duration: 700,
-        onComplete: () => part.sprite.destroy(),
-      });
-      part.body.destroy();
-    }
-    this.gateParts = [];
-  }
 
   // ------------------------------------------------------------ Realm districts (ADR-0017 §2)
 
@@ -3468,82 +3322,16 @@ export class GameScene extends Phaser.Scene {
     if (realm) return realm;
 
     // special interactables take priority over nodes
-    if (Phaser.Math.Distance.Between(px, py, this.welcomeStonePos.x, this.welcomeStonePos.y - 8) < INTERACT_RANGE) {
-      return {
-        swing: false,
-        run: () => {
-          this.sfx('blip', 0.4);
-          this.useHint('read');
-          this.input.keyboard!.enabled = false;
-          void showIntro().then(() => {
-            this.input.keyboard!.enabled = true;
-            this.input.keyboard!.resetKeys();
-          });
-        },
-      };
-    }
-    for (const spot of this.tabletSpots) {
-      if (Phaser.Math.Distance.Between(px, py, spot.x, spot.y - 8) < INTERACT_RANGE) {
-        return {
-          swing: false,
-          run: () => {
-            void this.backend.readTablet(spot.id);
-            const tab = TABLETS[spot.id];
-            bus.emit('lore', tab?.title ?? t.lore.tabletFallbackTitle, tab?.text ?? t.lore.tabletFallbackText);
-            this.sfx('blip', 0.4);
-            this.useHint('read');
-            this.tickJourney('read_tablet');
-          },
-        };
-      }
-    }
+    const stone = this.progression.welcomeStoneAction(px, py);
+    if (stone) return stone;
+    const tablet = this.progression.tabletAction(px, py);
+    if (tablet) return tablet;
     const special = this.sealSystem.contributeSealAction() ?? this.summonAction() ?? this.mireAltarAction() ?? this.echoAltarAction() ?? this.verdantAltarAction() ?? this.guardianAction();
     if (special) return special;
-    if (Phaser.Math.Distance.Between(px, py, this.altarPos.x, this.altarPos.y - 8) < INTERACT_RANGE + 8) {
-      return {
-        swing: false,
-        run: () => {
-          if (this.quest?.gateOpen) {
-            bus.emit('toast', t.toast.groveOpen, 'info');
-          } else {
-            void this.backend.offerAltar().then((res) => {
-              if (res.ok) {
-                this.setInv(res.inventory);
-                bus.emit('toast', t.toast.offeringAccepted, 'good');
-                this.sfx('craft', 0.6);
-              } else if (res.reason === 'INSUFFICIENT') {
-                bus.emit('toast', t.toast.altarAsks2, 'bad');
-              }
-            });
-          }
-        },
-      };
-    }
-    if (this.quest?.treasureLocation) {
-      const spot = this.quest.treasureLocation;
-      const dx = (spot.tx + 0.5) * TILE;
-      const dy = (spot.ty + 0.5) * TILE;
-      if (Phaser.Math.Distance.Between(px, py, dx, dy) < INTERACT_RANGE) {
-        return {
-          swing: false,
-          run: () => {
-            void this.backend.dig().then((res) => {
-              if (res.ok) {
-                this.setInv(res.inventory);
-                const text = Object.entries(res.loot)
-                  .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
-                  .join('  ');
-                this.floatText(dx, dy - 8, text, '#ffd166');
-                bus.emit('toast', t.toast.unearthedTreasure, 'good');
-                this.sfx('craft', 0.7);
-              } else if (res.reason === 'NOT_HERE') {
-                bus.emit('toast', t.toast.digCloser, 'bad');
-              }
-            });
-          },
-        };
-      }
-    }
+    const grove = this.progression.groveAltarAction(px, py);
+    if (grove) return grove;
+    const dig = this.progression.digAction(px, py);
+    if (dig) return dig;
 
     const cook = this.fishingSystem.cookAction();
     if (cook) return cook;
@@ -4550,8 +4338,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** is the mine shaft open? (the persisted world flag, or the ?dungeon dev bypass) */
-  private delveOpenNow(): boolean {
-    return this.delveForceOpen || !!this.quest?.delveOpen;
+  delveOpenNow(): boolean {
+    return this.delveForceOpen || !!this.progression.quest?.delveOpen;
   }
 
   /** the sealed mine-shaft entrance in the World — in the frontier Cavern Mouth */
@@ -4590,7 +4378,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** show the rubble sealed, or dissolve it once the shaft is opened, forever */
-  private refreshDelveEntrance(open: boolean): void {
+  refreshDelveEntrance(open: boolean): void {
     const c = this.delveEntranceSprite;
     if (!c) return;
     const rubble = c.getData('rubble') as Phaser.GameObjects.Container;
@@ -4634,7 +4422,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** create + host an instanced run: lock the roster, spawn scaled mobs, descend */
-  private enterDelve(): void {
+  enterDelve(): void {
     if (this.inDelve) return;
     this.delveStage = 1; // entering from the World shaft always starts at Stage 1
     const me = this.me.name;
