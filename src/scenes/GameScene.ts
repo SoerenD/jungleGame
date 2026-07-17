@@ -189,6 +189,7 @@ import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
 import { CHIP_TINTS, HarvestSystem } from '../systems/HarvestSystem';
 import { DistrictSystem } from '../systems/DistrictSystem';
+import { PresenceSystem } from '../systems/PresenceSystem';
 import { ProgressionSystem } from '../systems/ProgressionSystem';
 import { SealSystem } from '../systems/SealSystem';
 import { StationsSystem } from '../systems/StationsSystem';
@@ -213,31 +214,6 @@ import type { DistrictDef, EAction, GameSystem, Mode, NodeView, OkJoin, WorldDat
 import { drawStructureArt } from '../ui/icons';
 import { showIntro } from '../ui/intro';
 import { t, zoneName } from '../i18n';
-
-interface RemoteView {
-  sprite: Phaser.GameObjects.Sprite;
-  label: Phaser.GameObjects.Text;
-  shadow: Phaser.GameObjects.Image;
-  /** the item shown in this Player's hand; hidden when nothing is held */
-  heldSprite: Phaser.GameObjects.Image;
-  /** warm light this Player casts while holding a Hand Torch */
-  torchGlow: Phaser.GameObjects.Image;
-  held: ItemId | null;
-  targetX: number;
-  targetY: number;
-  dir: Dir;
-  moving: boolean;
-  /** JSON of the composed Appearance — texture regenerates when it changes */
-  look: string;
-  /**
-   * High-water mark of PlayerPos.swings seen from this peer; a packet above it
-   * plays one swing echo. Undefined until the peer first sends the field
-   * (bots/old clients never do — they render exactly as before).
-   */
-  swings?: number;
-  /** the Armor this peer wears (part of `look` — a change recomposes the texture) */
-  armor?: EquippedArmor;
-}
 
 /**
  * Cosmetic swing echo (playSwingFx): purely visual. Swings are adjudicated
@@ -264,13 +240,6 @@ const SWING_GRIP_Y = 0.85;
  *  same fx can later run on a REMOTE Player's sprite/heldSprite pair) */
 const SWING_POSE_KEY = 'swingPoseUntil';
 const SWING_TWEEN_KEY = 'swingTween';
-/**
- * A peer's swings counter arriving THIS far below our stored high-water mark
- * means their session restarted (the counter is per-session and reboots at 0),
- * not that a stale presence meta interleaved — metas lag the broadcast stream
- * by at most a couple of swings, never by ~9s of continuous swinging.
- */
-const REMOTE_SWING_RESET_GAP = 30;
 
 /**
  * Design size for in-world name tags (Node hover tooltips + Player name plates):
@@ -356,7 +325,6 @@ export class GameScene extends Phaser.Scene {
   /** reusable tooltip showing the name of the Resource Node under the cursor */
   nodeHoverLabel: Phaser.GameObjects.Text | null = null;
   blockersGroup!: Phaser.Physics.Arcade.StaticGroup;
-  remotes = new Map<string, RemoteView>();
   private inventory: Inventory = {};
   /** the worn gear (ADR-0017 §4) — armor bakes into my sheet; the legacy weapon
    *  slots only ever DRAIN now (the HUD migration returns them to the bag) */
@@ -366,7 +334,7 @@ export class GameScene extends Phaser.Scene {
   private equipChain: Promise<void> = Promise.resolve();
   private lastDir: Dir = 'down';
   private chatFocused = false;
-  private lastPosSent = 0;
+  lastPosSent = 0;
   private lastSwingAt = 0;
   // ---- ADR-0018 systems (referenced by other systems + transitional delegates)
   private fogSystem!: FogSystem;
@@ -379,6 +347,7 @@ export class GameScene extends Phaser.Scene {
   private stationsSystem!: StationsSystem;
   private harvest!: HarvestSystem;
   private buildSystem!: BuildSystem;
+  private presence!: PresenceSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
@@ -515,7 +484,7 @@ export class GameScene extends Phaser.Scene {
   private worldColliders: Phaser.Physics.Arcade.Collider[] = [];
   inDelve = false;
   private delveRunId: string | null = null;
-  private isDelveHost = false;
+  isDelveHost = false;
   /** roster locked at entry (like the Ward) — no late join */
   private delveRoster: string[] = [];
   private delveHeadcount = 1;
@@ -547,7 +516,7 @@ export class GameScene extends Phaser.Scene {
   private delveParticipants = new Set<string>();
   private delvePeers = new Map<string, DelvePeerView>();
   /** the host's name — a peer boots itself if the host vanishes from presence (v1: no migration) */
-  private delveHostName = '';
+  delveHostName = '';
   /** the run I was Exhausted out of, kept so I still claim loot if my party wins */
   private delveExhaustedRun: string | null = null;
   private lastMobSnapAt = 0;
@@ -695,6 +664,9 @@ export class GameScene extends Phaser.Scene {
     this.buildSystem.harvest = this.harvest;
     this.buildSystem.stations = this.stationsSystem;
     this.stationsSystem.build = this.buildSystem;
+    this.presence = new PresenceSystem(this.ctx, this);
+    this.systems.push(this.presence);
+    this.presence.atmosphere = this.atmosphere;
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       for (const s of this.systems) s.destroy();
       this.systems = [];
@@ -1167,6 +1139,7 @@ export class GameScene extends Phaser.Scene {
     this.systems.push(this.villageSystem);
     this.villageSystem.create(); // bakes the Village textures + wires its listeners
     this.wireBackend();
+    this.presence.create(); // position/presence backend listeners (ADR-0018)
     this.wireBus();
     this.stationsSystem.create(); // craft/eat/drop + crate/sawmill/refiner bus handlers (ADR-0018)
     this.harvest.village = this.villageSystem;
@@ -1182,9 +1155,9 @@ export class GameScene extends Phaser.Scene {
       this.villageSystem.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
       for (const n of snap.nodes) this.harvest.addNode(n);
       for (const s of snap.structures) this.buildSystem.addStructure(s);
-      for (const p of snap.players) this.upsertRemote(p);
+      for (const p of snap.players) this.presence.upsertRemote(p);
       bus.emit('chatlog', snap.chatLog);
-      this.emitPresence();
+      this.presence.emitPresence();
       this.progression.applyQuest(snap.quest);
       if (!snap.quest.gateOpen) this.progression.buildGate();
       this.sealSystem.applySeal(snap.seal);
@@ -1220,6 +1193,8 @@ export class GameScene extends Phaser.Scene {
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
     this.stationsSystem.fog = this.fogSystem;
+    this.presence.fog = this.fogSystem;
+    this.fogSystem.presence = this.presence;
     this.harvest.fog = this.fogSystem;
     this.harvest.fishing = this.fishingSystem;
     this.fishingSystem = new FishingSystem(this.ctx, this);
@@ -1243,7 +1218,7 @@ export class GameScene extends Phaser.Scene {
           player: { x: this.player.x, y: this.player.y, tx: Math.floor(this.player.x / TILE), ty: Math.floor(this.player.y / TILE) },
           zone: this.fogSystem.currentZone,
           inventory: { ...this.inventory },
-          remotes: [...this.remotes.keys()],
+          remotes: [...this.presence.remotes.keys()],
           muted: this.atmosphere.muted,
         }),
         teleport: (tx: number, ty: number) => {
@@ -1363,8 +1338,6 @@ export class GameScene extends Phaser.Scene {
     this.backend.on('crateChanged', (crateId: string, contents: Inventory) => {
       bus.emit('crate-changed', crateId, contents);
     });
-    this.backend.on('position', (p: PlayerPos) => this.upsertRemote(p));
-    this.backend.on('presence', (players: PlayerPos[]) => this.reconcilePresence(players));
     this.backend.on('guardianSummoned', (f: FightState) => this.startFight(f, true));
     this.backend.on('guardianEngaged', (f: FightState) => this.engageFight(f));
     this.backend.on('guardianHit', (hp: number) => {
@@ -2403,7 +2376,7 @@ export class GameScene extends Phaser.Scene {
   /** the worn-Armor band raise of WHOEVER landed the hit (ADR-0017 §3): mine
    *  from my equipped record, a peer's from their synced `armor` field */
   private armorBandOf(by: string): { bandMin: number; bandMax: number } {
-    return armorBuff(by === this.me.name ? this.equipped : this.remotes.get(by)?.armor);
+    return armorBuff(by === this.me.name ? this.equipped : this.presence.remotes.get(by)?.armor);
   }
 
   /**
@@ -2500,47 +2473,6 @@ export class GameScene extends Phaser.Scene {
     bus.on('loot-take', (item: ItemId, count: number) => this.claimLoot({ [item]: count }));
     bus.on('loot-take-all', () => this.claimLoot({ ...this.lootPending }));
     bus.on('loot-close', () => this.claimLoot({ ...this.lootPending }));
-  }
-
-  private emitPresence(): void {
-    bus.emit('presence', [this.me.name, ...this.remotes.keys()]);
-  }
-
-  /**
-   * Reconcile the live roster from a backend presence sync: upsert everyone
-   * present and drop the sprites of any Player who has left (the Mock's bots
-   * never leave, so this only ever fires for the real multiplayer backend).
-   */
-  private reconcilePresence(players: PlayerPos[]): void {
-    const live = new Set<string>();
-    for (const p of players) {
-      if (p.name === this.me.name) continue;
-      live.add(p.name);
-      this.upsertRemote(p);
-    }
-    for (const name of [...this.remotes.keys()]) if (!live.has(name)) this.removeRemote(name);
-    this.emitPresence();
-    // ADR-0012: presence changed → re-elect the creature host (graceful re-elect +
-    // respawn on host-leave; the new host repopulates its pool around remaining Players)
-    this.recomputeWildHost();
-    // v1 host-leave (ADR-0007 §6): if I'm a guest and the host dropped off
-    // presence without a clean 'end', the mobs' brain is gone — boot out, no loot
-    if (this.inDelve && !this.isDelveHost && this.delveHostName && !live.has(this.delveHostName)) {
-      bus.emit('toast', t.toast.hostLeftCollapse, 'bad');
-      this.leaveDelve();
-    }
-  }
-
-  private removeRemote(name: string): void {
-    const r = this.remotes.get(name);
-    if (!r) return;
-    r.sprite.destroy();
-    r.label.destroy();
-    r.shadow.destroy();
-    r.heldSprite.destroy();
-    r.torchGlow.destroy();
-    this.remotes.delete(name);
-    this.emitPresence();
   }
 
   /** point the local held sprite at the in-hand item's texture and place it in-hand */
@@ -2702,91 +2634,7 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ remote players
 
-  private upsertRemote(p: PlayerPos): void {
-    if (p.name === this.me.name) return;
-    // the recompose key folds the worn Armor in (ADR-0017 §4): an equip
-    // re-dresses the remote body exactly like a rejoined-with-new-look edit
-    const look = JSON.stringify([p.appearance, p.armor ?? null]);
-    const texture = `avatar-${p.name}`;
-    let r = this.remotes.get(p.name);
-    if (!r) {
-      ensureAvatarTexture(this, texture, p.appearance, p.armor);
-      const shadow = this.addShadow(p.x, p.y, 14);
-      const sprite = this.add.sprite(p.x, p.y, texture, AVATAR_IDLE.down);
-      sprite.setOrigin(0.5, 1);
-      const label = this.add.text(p.x, p.y - AVATAR_H - 4, p.name, {
-        fontSize: '7px',
-        color: '#e8f5e9',
-        stroke: '#000000',
-        strokeThickness: 2,
-      });
-      label.setOrigin(0.5, 1);
-      label.setResolution(6);
-      // world-space text is magnified by camera ZOOM — labelScale() scales it
-      // well down AND counter-scales by zoom so the name stays a constant-size
-      // readable tag over the head at any zoom (× the player setting)
-      label.setScale(this.labelScale());
-      label.setAlpha(0.9);
-      // the item they hold, shown in their hand, synced through presence
-      const heldSprite = this.add
-        .image(p.x, p.y, 'held-axe')
-        .setOrigin(0.5, 0.5)
-        .setScale(0.8)
-        .setDepth(p.y + 1)
-        .setVisible(false);
-      // a Hand Torch in their hand lights them too
-      const torchGlow = this.add
-        .image(p.x, p.y - 8, 'glow')
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setTint(TORCH_TINT)
-        .setScale(1.6)
-        .setAlpha(0)
-        .setDepth(890_000);
-      r = { sprite, label, shadow, heldSprite, torchGlow, held: null, targetX: p.x, targetY: p.y, dir: p.dir, moving: p.moving, look, armor: p.armor };
-      this.remotes.set(p.name, r);
-      this.emitPresence();
-    } else if (r.look !== look) {
-      // they re-joined with an edited Avatar, or equipped Armor — recompose
-      r.look = look;
-      r.armor = p.armor;
-      r.sprite.anims.stop();
-      ensureAvatarTexture(this, texture, p.appearance, p.armor);
-      r.sprite.setTexture(texture, AVATAR_IDLE[p.dir]);
-    }
-    r.targetX = p.x;
-    r.targetY = p.y;
-    r.dir = p.dir;
-    r.moving = p.moving;
-    const held = p.held ?? null;
-    if (r.held !== held) {
-      r.held = held;
-      setHeldTexture(this, r.heldSprite, held);
-    }
-    // swing echo (PlayerPos.swings): the counter grew since the last packet →
-    // they swung. Exactly ONE pose+arc per packet however big the jump (the
-    // 10Hz stream batches the ~300ms cadence, so +1/+2 is normal); first sight
-    // of the field initializes silently, so a mid-session joiner never replays
-    // a burst. The mark is a high-water mark against small dips: presence-sync
-    // snapshots refresh far slower than the broadcast stream, and a stale meta
-    // interleaving with fresh packets must not re-echo an already-played swing.
-    // A LARGE dip is different: swingCount restarts at 0 on reload, and a fast
-    // reload keeps the presence key (the name) live so this RemoteView — and a
-    // huge stale mark — survives. Without the reset the rejoined peer's echoes
-    // would stay muted until they out-swung their whole previous session.
-    if (p.swings !== undefined) {
-      const stale = r.swings !== undefined && r.swings - p.swings > REMOTE_SWING_RESET_GAP;
-      if (stale) {
-        r.swings = p.swings; // their session restarted — adopt silently
-      } else {
-        if (r.swings !== undefined && p.swings > r.swings) {
-          this.playSwingFx(r.sprite, r.heldSprite, r.dir);
-        }
-        r.swings = Math.max(r.swings ?? p.swings, p.swings);
-      }
-    }
-  }
-
-  private applyAnim(sprite: Phaser.GameObjects.Sprite, dir: Dir, moving: boolean): void {
+  applyAnim(sprite: Phaser.GameObjects.Sprite, dir: Dir, moving: boolean): void {
     // a live swing pose (playSwingFx) outranks walk/idle for its short window —
     // gated here because this method re-writes the frame every update and
     // would otherwise stomp the pose on the very next frame
@@ -2829,7 +2677,7 @@ export class GameScene extends Phaser.Scene {
    * `this.player`/`this.heldSprite`, so a later pass can replay a REMOTE
    * Player's swing on their RemoteView pair with the same code.
    */
-  private playSwingFx(sprite: Phaser.GameObjects.Sprite, heldSprite: Phaser.GameObjects.Image, dir: Dir): void {
+  playSwingFx(sprite: Phaser.GameObjects.Sprite, heldSprite: Phaser.GameObjects.Image, dir: Dir): void {
     // pose: applyAnim honors the window on every following frame; set the
     // frame directly too so the pose shows THIS frame, not one update later
     sprite.setData(SWING_POSE_KEY, Date.now() + SWING_POSE_MS);
@@ -3036,7 +2884,7 @@ export class GameScene extends Phaser.Scene {
     this.delveStage = 1; // entering from the World shaft always starts at Stage 1
     const me = this.me.name;
     const roster = [me];
-    for (const [name, r] of this.remotes) {
+    for (const [name, r] of this.presence.remotes) {
       if (Phaser.Math.Distance.Between(r.sprite.x, r.sprite.y, this.delveEntrance.x, this.delveEntrance.y) < TILE * 6) roster.push(name);
     }
     const runId = `${me}:${Date.now()}`;
@@ -3422,7 +3270,7 @@ export class GameScene extends Phaser.Scene {
 
   /** leave the Delve. `wake` overrides the exit tile (Exhaustion/collapse wake you
    *  home); the default is the mine-shaft mouth you climbed out of. */
-  private leaveDelve(wake?: { tx: number; ty: number }): void {
+  leaveDelve(wake?: { tx: number; ty: number }): void {
     if (!this.inDelve) return;
     this.inDelve = false;
     this.delveRunId = null;
@@ -3953,7 +3801,7 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.ensureVaultGfx();
     gfx.clear().setVisible(true);
     const coverers: (Pose | null)[] = [{ x: this.player.x / TILE, y: this.player.y / TILE }];
-    for (const r of this.remotes.values()) coverers.push({ x: r.sprite.x / TILE, y: r.sprite.y / TILE });
+    for (const r of this.presence.remotes.values()) coverers.push({ x: r.sprite.x / TILE, y: r.sprite.y / TILE });
     for (const g of this.echoGhosts) coverers.push(ghostPoseAt(now, g, g.periodMs));
     let anySolved = false;
     for (const v of vaults) {
@@ -4540,7 +4388,7 @@ export class GameScene extends Phaser.Scene {
    * simulated creatures — the host's snapshots drive me now. In single-player the
    * lone MockBackend Player is trivially the host. Re-run on every presence sync.
    */
-  private recomputeWildHost(): void {
+  recomputeWildHost(): void {
     const roster = this.backend.creatureRoster();
     const host = (roster.length ? [...roster].sort() : [this.me.name])[0];
     const wasHost = this.isWildHost;
@@ -4582,7 +4430,7 @@ export class GameScene extends Phaser.Scene {
     for (const name of this.backend.creatureRoster()) {
       if (name === this.me.name) out.push({ x: this.player.x / TILE, y: (this.player.y - 4) / TILE });
       else {
-        const r = this.remotes.get(name);
+        const r = this.presence.remotes.get(name);
         if (r) out.push({ x: r.sprite.x / TILE, y: (r.sprite.y - 4) / TILE });
       }
     }
@@ -4598,7 +4446,7 @@ export class GameScene extends Phaser.Scene {
    *  the enraged creature's quarry lookup */
   private wildPlayerPos(name: string): { x: number; y: number } | null {
     if (name === this.me.name) return { x: this.player.x / TILE, y: (this.player.y - 4) / TILE };
-    const r = this.remotes.get(name);
+    const r = this.presence.remotes.get(name);
     return r ? { x: r.sprite.x / TILE, y: (r.sprite.y - 4) / TILE } : null;
   }
 
@@ -5186,25 +5034,8 @@ export class GameScene extends Phaser.Scene {
     // waterfall proximity bed (§8 step 6) — AtmosphereSystem.updateAudio
     this.atmosphere.updateAudio(dt);
 
-    // remote interpolation
-    for (const r of this.remotes.values()) {
-      const k = Math.min(1, dt * 12);
-      r.sprite.x += (r.targetX - r.sprite.x) * k;
-      r.sprite.y += (r.targetY - r.sprite.y) * k;
-      // elevation depth bump: a peer up on a plateau sorts above the base (ADR-0009)
-      const rBump = this.atmosphere.elevationBonus(r.sprite.x, r.sprite.y);
-      r.sprite.setDepth(r.sprite.y + rBump);
-      r.shadow.setPosition(r.sprite.x, r.sprite.y - 1);
-      r.label.setPosition(r.sprite.x, r.sprite.y - AVATAR_H - 2);
-      r.label.setDepth(r.sprite.y + 1 + rBump);
-      positionHeld(r.heldSprite, r.sprite.x, r.sprite.y, r.dir);
-      if (rBump) r.heldSprite.setDepth(r.heldSprite.depth + rBump);
-      r.torchGlow
-        .setPosition(r.sprite.x, r.sprite.y - 8)
-        .setAlpha(r.held === 'hand_torch' ? 0.1 + night * 0.35 : 0);
-      const visuallyMoving = r.moving || Math.hypot(r.targetX - r.sprite.x, r.targetY - r.sprite.y) > 2;
-      this.applyAnim(r.sprite, r.dir, visuallyMoving);
-    }
+    // remote interpolation (§8 step 7) — PresenceSystem.update (ADR-0018)
+    this.presence.update(time, delta);
 
     // ---- ADR-0012: open-world Wildlife — the host sims + broadcasts the roaming
     // creature pool; every client renders it and checks its OWN player for harm
@@ -5353,10 +5184,8 @@ export class GameScene extends Phaser.Scene {
     // elevation depth bump: on a plateau the Player draws above base entities (ADR-0009)
     this.player.setDepth(this.player.y + this.atmosphere.elevationBonus(this.player.x, this.player.y));
 
-    if (time - this.lastPosSent > 100) {
-      this.lastPosSent = time;
-      this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, moving, this.heldItem ?? undefined, this.swingCount);
-    }
+    // throttled position broadcast (§8 step 15) — PresenceSystem
+    this.presence.throttledSend(time, moving);
 
     // placement ghost (§8 step 16) — BuildSystem.update (ADR-0018)
     this.buildSystem.update(time, delta);

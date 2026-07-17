@@ -16,6 +16,7 @@ import { t, zoneName } from '../i18n';
 import type { AtmosphereSystem } from './AtmosphereSystem';
 import type { GameContext } from './context';
 import type { DistrictSystem } from './DistrictSystem';
+import type { PresenceSystem } from './PresenceSystem';
 import type { SealSystem } from './SealSystem';
 import type { VillageSystem } from './VillageSystem';
 import type { ElevationRegion, GameSystem } from './types';
@@ -58,6 +59,7 @@ export class FogSystem implements GameSystem {
   seal!: SealSystem;
   village!: VillageSystem;
   district!: DistrictSystem;
+  presence!: PresenceSystem;
 
   constructor(
     private ctx: GameContext,
@@ -212,7 +214,7 @@ export class FogSystem implements GameSystem {
   applyWorldLabelScale(): void {
     const s = this.labelScale();
     this.host.nodeHoverLabel?.setScale(s);
-    for (const r of this.host.remotes.values()) r.label.setScale(s);
+    for (const r of this.presence.remotes.values()) r.label.setScale(s);
   }
 
   // ------------------------------------------------------------ the checkZone hub
@@ -231,7 +233,7 @@ export class FogSystem implements GameSystem {
     ctx.bus.emit('pos', {
       x: player.x,
       y: player.y,
-      others: [...host.remotes.values()]
+      others: [...this.presence.remotes.values()]
         .filter((r) => this.district.districtOf(Math.floor(r.sprite.x / TILE), Math.floor(r.sprite.y / TILE)) === here)
         .map((r) => ({ x: r.sprite.x, y: r.sprite.y })),
       view: here ? here.rect : undefined,
