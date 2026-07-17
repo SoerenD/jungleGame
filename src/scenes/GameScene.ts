@@ -184,6 +184,7 @@ import { PROP_FLAT, PROP_TEX } from '../delveProps';
 import { bus } from '../ui/bus';
 import type { GameContext } from '../systems/context';
 import { AtmosphereSystem } from '../systems/AtmosphereSystem';
+import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
 import {
   addBlockerBody,
@@ -201,40 +202,10 @@ import {
   TORCH_TINT,
   type MobView,
 } from '../systems/sceneFx';
-import type { DistrictDef, ElevationRegion, GameSystem, Mode, OkJoin, WorldData } from '../systems/types';
+import type { DistrictDef, EAction, GameSystem, Mode, NodeView, OkJoin, WorldData } from '../systems/types';
 import { drawStructureArt } from '../ui/icons';
 import { showIntro } from '../ui/intro';
 import { t, zoneName } from '../i18n';
-
-interface FishingCast {
-  nodeId: string;
-  x: number;
-  y: number;
-  biteAt: number;
-  /** the bite window closes at this time — reel in between biteAt and this */
-  until: number;
-  bit: boolean;
-  marker: Phaser.GameObjects.Text | null;
-}
-
-interface NodeView {
-  state: NodeState;
-  sprite: Phaser.GameObjects.Image;
-  body: Phaser.GameObjects.Rectangle | null;
-  depletedShown: boolean;
-}
-
-/**
- * What pressing E would do right now. `swing: true` marks the only two
- * auto-repeatable actions (harvesting a Resource Node, hitting the Guardian);
- * everything else fires once per key press, held or not.
- */
-interface EAction {
-  swing: boolean;
-  /** swing cadence override (the Bow fires slower than melee); defaults to SWING_CADENCE_MS */
-  cadenceMs?: number;
-  run: () => void;
-}
 
 interface RemoteView {
   sprite: Phaser.GameObjects.Sprite;
@@ -487,6 +458,7 @@ export class GameScene extends Phaser.Scene {
   // ---- ADR-0018 systems (referenced by other systems + transitional delegates)
   private fogSystem!: FogSystem;
   private atmosphere!: AtmosphereSystem;
+  private fishingSystem!: FishingSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
@@ -707,7 +679,6 @@ export class GameScene extends Phaser.Scene {
   private journey: JourneyState = { steps: {}, hintUses: {} };
   private hintText: Phaser.GameObjects.Text | null = null;
   // ---- v2: fishing, cooking, intro
-  private fishing: FishingCast | null = null;
   private buffUntil = 0;
   /** the standing Hall's sprite, re-textured to match the Village tier (ADR-0013) */
   private hallImg?: Phaser.GameObjects.Image;
@@ -1387,6 +1358,9 @@ export class GameScene extends Phaser.Scene {
     this.systems.push(this.fogSystem);
     this.fogSystem.create();
     this.atmosphere.fog = this.fogSystem;
+    this.fishingSystem = new FishingSystem(this.ctx, this);
+    this.systems.push(this.fishingSystem);
+    this.fishingSystem.create();
     this.wireDragPlace();
     this.buildDelveEntrance();
     this.buildRealmGates();
@@ -2835,96 +2809,6 @@ export class GameScene extends Phaser.Scene {
     else this.hintText.setVisible(false);
   }
 
-  // ------------------------------------------------------------ v2: fishing & cooking
-
-  private startFishing(view: NodeView): void {
-    const now = Date.now();
-    this.fishing = {
-      nodeId: view.state.id,
-      x: view.sprite.x,
-      y: view.sprite.y,
-      biteAt: now + 1000 + Math.random() * 3000, // 1–4 s — client-side flavor only
-      until: 0,
-      bit: false,
-      marker: null,
-    };
-    bus.emit('toast', t.toast.castLine, 'info');
-  }
-
-  private cancelFishing(reason?: string): void {
-    if (!this.fishing) return;
-    this.fishing.marker?.destroy();
-    this.fishing = null;
-    if (reason) bus.emit('toast', reason, 'bad');
-  }
-
-  /** E pressed while a cast is out */
-  private reelIn(): void {
-    const f = this.fishing!;
-    if (!f.bit) {
-      this.cancelFishing(t.toast.reelTooSoon);
-      return;
-    }
-    const nodeId = f.nodeId;
-    const { x, y } = f;
-    this.cancelFishing();
-    this.sfx('splash', 0.6);
-    void this.backend.hitNode(nodeId, this.heldTool()).then((result) => {
-      if (!result.ok) {
-        if (result.reason === 'DEPLETED') bus.emit('toast', t.toast.fishTooLate, 'bad');
-        return;
-      }
-      if (result.finishing && result.gained) {
-        const text = Object.entries(result.gained)
-          .map(([item, n]) => `+${n} ${ITEMS[item as ItemId]?.name ?? item}`)
-          .join('  ');
-        this.floatText(x, y - 10, text, '#8ce9ff');
-      }
-      if (result.inventory) {
-        this.setInv(result.inventory);
-      }
-    });
-  }
-
-  private cookAction(): EAction | null {
-    const hasFish = (this.inventory.fish ?? 0) > 0;
-    // ADR-0012: the cooked-meat campfire recipe (2 meat) — a new INGREDIENT feeding
-    // the EXISTING move-speed buff (cooked_meat eats identically to a cooked fish).
-    const hasMeat = (this.inventory.meat ?? 0) >= 2;
-    if (!hasFish && !hasMeat) return null;
-    const ptx = Math.floor(this.player.x / TILE);
-    const pty = Math.floor((this.player.y - 4) / TILE);
-    let campfire: Structure | null = null;
-    for (let dy = -1; dy <= 1 && !campfire; dy++) {
-      for (let dx = -1; dx <= 1 && !campfire; dx++) {
-        const s = this.structuresByTile.get(`${ptx + dx},${pty + dy}`);
-        if (s?.type === 'campfire') campfire = s;
-      }
-    }
-    if (!campfire) return null;
-    return {
-      swing: false,
-      run: () => {
-        if (hasFish) {
-          void this.backend.cook().then((res) => {
-            if (!res.ok) return;
-            this.setInv(res.inventory);
-            bus.emit('toast', t.toast.cookFish, 'good');
-            this.sfx('craft', 0.5);
-          });
-        } else {
-          // roast meat via the generic craft path (jw_craft — no new RPC)
-          void this.backend.craft('cooked_meat').then((res) => {
-            if (!res.ok) return;
-            this.setInv(res.inventory);
-            bus.emit('toast', t.toast.cookMeat, 'good');
-            this.sfx('craft', 0.5);
-          });
-        }
-      },
-    };
-  }
-
   // ------------------------------------------------------------ secrets
 
   private applyQuest(q: QuestState): void {
@@ -3601,7 +3485,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** the in-hand item as a Tool (for hit RPCs), or undefined for bare hands / a non-Tool */
-  private heldTool(): ToolId | undefined {
+  heldTool(): ToolId | undefined {
     const h = this.heldItem;
     return h && ITEMS[h].kind === 'tool' ? (h as ToolId) : undefined;
   }
@@ -4028,7 +3912,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    const cook = this.cookAction();
+    const cook = this.fishingSystem.cookAction();
     if (cook) return cook;
 
     // the Village Hall: E opens the contribution panel — per-resource sliders let
@@ -4118,7 +4002,7 @@ export class GameScene extends Phaser.Scene {
     // fishing spots use the cast-and-wait rhythm when the rod is IN HAND;
     // without it the server refusal (TOOL_REQUIRED) falls through below
     if (view.state.type === 'fishing_spot' && this.heldItem === 'fishing_rod') {
-      return { swing: false, run: () => this.startFishing(view) };
+      return { swing: false, run: () => this.fishingSystem.startFishing(view) };
     }
     // ADR-0017 rung 1: the Tide gates the salt-reed banks — a reed is harvestable
     // only while the ebb exposes it (validated within ±slack of the clock, the
@@ -7402,23 +7286,8 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.stunMarker) this.stunMarker.setPosition(this.player.x, this.player.y - AVATAR_H - 6);
 
-    // ---- v2: fishing — bite arrives, window opens, then it gets away
-    if (this.fishing) {
-      const f = this.fishing;
-      const now = Date.now();
-      if (!f.bit && now >= f.biteAt) {
-        f.bit = true;
-        f.until = now + 900;
-        f.marker = this.add
-          .text(f.x, f.y - 14, '!', { fontSize: '12px', color: '#ffd166', stroke: '#000', strokeThickness: 3 })
-          .setOrigin(0.5)
-          .setResolution(4)
-          .setDepth(999_999);
-        this.sfx('blip', 0.6);
-      } else if (f.bit && now > f.until) {
-        this.cancelFishing('It got away...');
-      }
-    }
+    // ---- v2: fishing (§8 step 11) — FishingSystem.update (bite/timeout)
+    this.fishingSystem.update(time, delta);
 
     // ---- v2: speed buff expiry (client-side timer, trusted client)
     if (this.buffUntil > 0 && Date.now() >= this.buffUntil) {
@@ -7448,7 +7317,7 @@ export class GameScene extends Phaser.Scene {
     const moving = vx !== 0 || vy !== 0;
     if (moving) {
       this.lastDir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'right' : 'left') : vy > 0 ? 'down' : 'up';
-      if (this.fishing) this.cancelFishing('You step away — the line goes slack.');
+      this.fishingSystem.cancelFishing('You step away — the line goes slack.');
     }
     this.applyAnim(this.player, this.lastDir, moving);
     // elevation depth bump: on a plateau the Player draws above base entities (ADR-0009)
@@ -7486,7 +7355,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // X dismantles the nearest Structure (never while placing/fishing/in the Delve)
-    if (!this.placing && !this.fishing && !this.inDelve && Phaser.Input.Keyboard.JustDown(this.keys.dismantle)) {
+    if (!this.placing && !this.fishingSystem.active && !this.inDelve && Phaser.Input.Keyboard.JustDown(this.keys.dismantle)) {
       this.dismantleFacing();
     }
 
@@ -7505,8 +7374,8 @@ export class GameScene extends Phaser.Scene {
     const lmbActive = this.lmbDown && !this.chatFocused;
     if (this.placing) {
       if (ePressed) this.confirmPlace();
-    } else if (this.fishing) {
-      if (ePressed) this.reelIn();
+    } else if (this.fishingSystem.active) {
+      if (ePressed) this.fishingSystem.reelIn();
     } else if (ePressed || this.keys.e.isDown || lmbActive) {
       const now = Date.now();
       // resolve at the base cadence; a per-action cadence (the Bow's slower

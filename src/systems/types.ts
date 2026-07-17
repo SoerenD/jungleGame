@@ -2,7 +2,8 @@
  * Shared system-layer types (ADR-0018): the two-mode FSM, the system contract,
  * and the world-JSON shape every system reads through `ctx.world`.
  */
-import type { JoinResult } from '../backend/types';
+import type Phaser from 'phaser';
+import type { JoinResult, NodeState } from '../backend/types';
 import type { NODE_TYPES } from '../content/nodeTypes';
 
 /**
@@ -28,6 +29,26 @@ export interface GameSystem {
 
 /** the successful join record — the Player's own backend row (`ctx.me`) */
 export type OkJoin = Extract<JoinResult, { ok: true }>;
+
+/** one Resource Node's render bundle (HarvestSystem's unit of state) */
+export interface NodeView {
+  state: NodeState;
+  sprite: Phaser.GameObjects.Image;
+  body: Phaser.GameObjects.Rectangle | null;
+  depletedShown: boolean;
+}
+
+/**
+ * What pressing E would do right now. `swing: true` marks the only two
+ * auto-repeatable actions (harvesting a Resource Node, hitting the Guardian);
+ * everything else fires once per key press, held or not.
+ */
+export interface EAction {
+  swing: boolean;
+  /** swing cadence override (the Bow fires slower than melee); defaults to SWING_CADENCE_MS */
+  cadenceMs?: number;
+  run: () => void;
+}
 
 export interface WorldData {
   spawn: { tx: number; ty: number };
