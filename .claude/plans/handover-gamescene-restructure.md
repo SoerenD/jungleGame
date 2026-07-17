@@ -146,28 +146,45 @@ ch.port2.postMessage(0); window.__shadowPump = ch;
   closed-Eye melee DEFLECTS (hp unchanged) → open-Eye melee LANDS (26→23).
   Round 1 fight SLUMBERED at 90s (correct behavior — my test pacing was slow).
 
-**IN FLIGHT / WHERE I STOPPED (mid-investigation):**
-Round 2 of the ?fight loop (fresh totem granted, summoned, engaged at 26/30).
-A detached kill-loop (`window.__kill`, 120ms interval: bow-in-window first,
-then axe hammer, watching `bv.eyeGlow.alpha > 0`) was started BUT after ~30s+
-`__kill` showed bowTried 0 / hp 26 — the eye-open predicate never fired.
-Round 1 used the same predicate successfully. Last two javascript_tool calls
-(sampling eyeGlow.alpha/wave over a few seconds) TIMED OUT at 30s — possibly
-the page/renderer got wedged, or my sampling loops were too slow; the timeouts
-themselves are ambiguous. NEXT STEPS FOR SUCCESSOR:
-  1. Reload the page fresh (navigate again), reinstall shadow pump, rejoin.
-  2. Re-grant `{ summon_totem: 1 }`, redo the short fight; sample
-     `s.fightSystem.renderedWave/slammedWave` + `bv.eyeGlow.alpha` with a
-     SHORT (≤10 samples, ≤200ms apart) inline loop to confirm the fight block
-     ticks; if renderedWave advances but eyeGlow never rises, suspect a REAL
-     regression in the step-17 fight-update transcription (compare against
-     pre-refactor block: eye opens only in the "else" branch after landing
-     poses — pose.windup/lunge-hold branches suppress it; with ?fight's kit
-     the windows may simply be short — poll faster).
-  3. Prove: bow arrow (pointer aimed via
-     `p.x=(wx-cam.scrollX)*cam.zoom; p.y=(wy-cam.scrollY)*cam.zoom;`) lands
-     in an open window (hp drops), then fell it → 'loot-open' with
-     guardian_scale → 'loot-take-all' → Scales in inventory (participation AC).
+**IN FLIGHT / WHERE I STOPPED (?fight round 3 — updated after resume):**
+
+SOLVED MYSTERY: the 30s javascript_tool "timeouts" and round-2's "eye never
+opened" were BOTH Chrome **intensive timer throttling** — after the tab is
+hidden >5 min, in-page `setTimeout`/`setInterval` are clamped to ~1/minute.
+The game itself is fine (the pump's MessageChannel is exempt).
+**RULE: never use setTimeout/setInterval waits in-page. Drive ALL waits and
+loops via Phaser timers — `s.time.addEvent({delay, loop, callback})` /
+`s.time.delayedCall(...)` — they run off the pump. Keep each javascript_exec
+call itself synchronous or near-instant, and poll `window.__x` state.**
+
+Round 3 result (Phaser-timed kill loop, evidence in transcript): the fight
+block is HEALTHY — waves advanced (renderedWave 14→15), Eye Windows opened
+each wave (eyeGlow.alpha sampled 0.37–0.67). The loop tried 6 REAL bow arrows
+in open windows (pointer aimed via `p.x=(wx-cam.scrollX)*cam.zoom` etc.):
+**none landed** (`bowLanded false`), 0 melee hits were thrown (the loop
+gave every window to the bow), the fight then ended with `loot: null` —
+i.e. SLUMBER again at the 90s window, hp never reached 0.
+
+NEXT STEPS FOR SUCCESSOR (fight):
+  1. Investigate why the aimed arrow does not land: instrument by wrapping
+     `s.fightSystem.fireGuardianHit` (count calls) during one bow attempt —
+     if the wrap is never called, the ray missed the boss circle (check the
+     pointer→world math: verify `p.updateWorldPoint(cam)` returns the boss
+     coords after setting p.x/p.y; if not, derive screen coords differently,
+     e.g. `cam.getWorldPoint` probe loop). If it IS called but hp unchanged,
+     the arrow landed after the window closed (flight ~250ms) — fire EARLY in
+     the window (right when alpha first rises).
+     NOTE: this may also be a REAL step-17 regression in ProjectileSystem —
+     compare fireBow/rayHitPx/arrowRangePx against the pre-refactor text
+     (`git show 30974a1:src/scenes/GameScene.ts`, methods aimDir/looseArrowRay/
+     rayHitPx/arrowRangePx/fireBow ~lines 2609–2760). Verify seams:
+     ctx.player vs this.player, AVATAR_H import, fight.fight vs this.fight.
+  2. Then fell it INSIDE 90s: grant totem, summon, engage, and hammer melee
+     every ~150ms in EVERY open window from t=0 (30 hp ≈ 8 hits — round 1
+     landed 26→23 fine, so melee damage is proven); land ONE bow window-hit
+     somewhere along the way; victory → 'loot-open' (guardian_scale via
+     delve.openLoot) → bus 'loot-take-all' → Scales in inventory; also check
+     the wreck (rigs.guardian.broken true, angle → -24) for the victory path.
 
 **SMOKE STILL TO DO after the fight:**
 - Delve run: `__jw.delve.enterStage1()` (no flag needed) → assert inDelve,
