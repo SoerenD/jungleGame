@@ -192,12 +192,14 @@ export function emptyVillage(): VillageRecord {
 // ---------------------------------------------------------------- Wishing Well
 // ADR-0013: the fountain is a communal WISHING WELL — Players toss fruit toward a
 // shared meter; when it fills, a village-wide Dorffest runs for a fixed span,
-// granting everyone a move-speed boost. A pure timestamp mechanic (ADR-0001/0002):
-// the festival is a function of `festivalUntil`, computed lazily, no server tick.
+// granting everyone a move-speed + attack-speed boost. A pure timestamp mechanic
+// (ADR-0001/0002): the festival is a function of `festivalUntil`, computed lazily,
+// no server tick.
 export const FOUNTAIN_WISH_ITEM = 'fruit';
 export const FOUNTAIN_WISH_THRESHOLD = 30; // fruit pooled to trigger a Dorffest
 export const FESTIVAL_MS = 5 * 60_000; // a Dorffest runs 5 real minutes
 export const FESTIVAL_SPEED_FACTOR = 1.1; // +10% move speed for everyone while it runs
+export const FESTIVAL_ATTACK_SPEED = 0.08; // +8% attack speed for everyone while it runs
 
 /** is a Dorffest running at `now`? */
 export function festivalActive(v: VillageRecord, now: number): boolean {

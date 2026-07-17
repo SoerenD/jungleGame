@@ -11,7 +11,7 @@ import { AVATAR_H, AVATAR_IDLE, AVATAR_SWING, AVATAR_W, ensureAvatarTexture } fr
 import { armorBuff, armorDef, gearOwns, isWeapon, sanitizeEquipped, type EquippedGear, type WeaponSlot } from '../content/armor';
 import type { Dir } from '../backend/types';
 import { PLAYER_SPEED, SPEED_BUFF_FACTOR, TIDE_PERIOD_MS, WADE_SLOW_FACTOR } from '../config';
-import { FESTIVAL_SPEED_FACTOR, festivalActive, villageBuff } from '../content/village';
+import { FESTIVAL_ATTACK_SPEED, FESTIVAL_SPEED_FACTOR, festivalActive, villageBuff } from '../content/village';
 import { tideFloods } from '../content/tide';
 import { ITEMS, type ItemId, type ToolId } from '../content/items';
 import type { GameScene } from '../scenes/GameScene';
@@ -254,9 +254,10 @@ export class PlayerSystem implements GameSystem {
   }
 
   /** combat swing cadence with the Village's attack-speed buff folded in
-   *  (ADR-0013) + the worn Gloves' bonus (ADR-0017 §3) */
+   *  (ADR-0013) + a running Dorffest's bonus + the worn Gloves' bonus (ADR-0017 §3) */
   atkCadence(baseMs: number): number {
-    return baseMs / (1 + villageBuff(this.village.village.tier).attackSpeed + armorBuff(this.equipped).attackSpeed);
+    const festival = festivalActive(this.village.village, Date.now()) ? FESTIVAL_ATTACK_SPEED : 0;
+    return baseMs / (1 + villageBuff(this.village.village.tier).attackSpeed + armorBuff(this.equipped).attackSpeed + festival);
   }
 
   /** the worn-Armor band raise of WHOEVER landed the hit (ADR-0017 §3): mine
