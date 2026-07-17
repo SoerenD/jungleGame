@@ -15,6 +15,7 @@ import type { GameScene } from '../scenes/GameScene';
 import { t, zoneName } from '../i18n';
 import type { AtmosphereSystem } from './AtmosphereSystem';
 import type { GameContext } from './context';
+import type { DistrictSystem } from './DistrictSystem';
 import type { SealSystem } from './SealSystem';
 import type { VillageSystem } from './VillageSystem';
 import type { ElevationRegion, GameSystem } from './types';
@@ -56,6 +57,7 @@ export class FogSystem implements GameSystem {
   /** cross-system refs, wired by GameScene right after construction (ADR-0018 §3) */
   seal!: SealSystem;
   village!: VillageSystem;
+  district!: DistrictSystem;
 
   constructor(
     private ctx: GameContext,
@@ -221,16 +223,16 @@ export class FogSystem implements GameSystem {
     const player = ctx.player;
     if (host.inDelve) return; // the Delve owns the zone banner while you're inside
     // ADR-0017: positional region derivation — camera clamp per district/World
-    host.applyCameraRegion();
+    this.district.applyCameraRegion();
     // the minimap 'pos' stream: dots filter BOTH ways by district (a Player in
     // the World never sees Realm dots and vice versa; same-district Players see
     // each other), and the active district rect crops the minimap's view
-    const here = host.activeDistrict;
+    const here = this.district.activeDistrict;
     ctx.bus.emit('pos', {
       x: player.x,
       y: player.y,
       others: [...host.remotes.values()]
-        .filter((r) => host.districtOf(Math.floor(r.sprite.x / TILE), Math.floor(r.sprite.y / TILE)) === here)
+        .filter((r) => this.district.districtOf(Math.floor(r.sprite.x / TILE), Math.floor(r.sprite.y / TILE)) === here)
         .map((r) => ({ x: r.sprite.x, y: r.sprite.y })),
       view: here ? here.rect : undefined,
     });

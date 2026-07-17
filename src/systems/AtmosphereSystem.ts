@@ -29,6 +29,7 @@ import {
 import { tideHeight } from '../content/tide';
 import type { GameScene } from '../scenes/GameScene';
 import type { GameContext } from './context';
+import type { DistrictSystem } from './DistrictSystem';
 import type { FogSystem } from './FogSystem';
 import { addShadow, objImage } from './sceneFx';
 import type { ElevationRegion, GameSystem } from './types';
@@ -74,6 +75,8 @@ export class AtmosphereSystem implements GameSystem {
   vistaRegions: ElevationRegion[] = [];
   /** wired by GameScene after FogSystem is constructed (leaves gating reads it) */
   fog!: FogSystem;
+  /** wired by GameScene right after DistrictSystem is constructed (veil targets read it) */
+  district!: DistrictSystem;
   private onToggleMute = (): void => {
     this.muted = !this.muted;
     this.ctx.scene.sound.mute = this.muted;
@@ -189,7 +192,7 @@ export class AtmosphereSystem implements GameSystem {
       .setAlpha(Math.max(0, 1 - Math.abs(night - 0.5) * 4) * 0.12);
     // the Mire's stagnant air fades in over ~a second as the Player crosses
     // the gate (and back out again) — no hard cut on teleport
-    const mireTarget = host.activeDistrict?.id === 'sunken_mire' ? 1 : 0;
+    const mireTarget = this.district.activeDistrict?.id === 'sunken_mire' ? 1 : 0;
     this.mireAmbience += (mireTarget - this.mireAmbience) * Math.min(1, delta / 450);
     if (this.mireAmbience > 0.005) {
       // the veil yields to the night overlay — stacked full-strength they
@@ -221,7 +224,7 @@ export class AtmosphereSystem implements GameSystem {
     }
     // ADR-0017 rung 2: the Hushdark's cold muffled dark — fades in over ~a second
     // on gate crossing, deepest where the night overlay hasn't already blacked it out
-    const hushTarget = host.activeDistrict?.id === 'the_hushdark' ? 1 : 0;
+    const hushTarget = this.district.activeDistrict?.id === 'the_hushdark' ? 1 : 0;
     this.hushAmbience += (hushTarget - this.hushAmbience) * Math.min(1, delta / 450);
     this.hushVeil
       .setPosition(cam.midPoint.x, cam.midPoint.y)
@@ -231,7 +234,7 @@ export class AtmosphereSystem implements GameSystem {
     if (hushTarget || this.hushAmbience > 0.01) host.updateEchoes(time, delta);
     // ADR-0017 rung 3: the Green Terraces' warm daylit gold-green wash — fades in over
     // ~a second on gate crossing like the other veils, gentle by day and yielding to night
-    const verdantTarget = host.activeDistrict?.id === 'green_terraces' ? 1 : 0;
+    const verdantTarget = this.district.activeDistrict?.id === 'green_terraces' ? 1 : 0;
     this.verdantAmbience += (verdantTarget - this.verdantAmbience) * Math.min(1, delta / 450);
     this.verdantVeil
       .setPosition(cam.midPoint.x, cam.midPoint.y)

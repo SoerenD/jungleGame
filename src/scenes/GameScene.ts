@@ -186,6 +186,7 @@ import type { GameContext } from '../systems/context';
 import { AtmosphereSystem } from '../systems/AtmosphereSystem';
 import { FishingSystem } from '../systems/FishingSystem';
 import { FogSystem } from '../systems/FogSystem';
+import { DistrictSystem } from '../systems/DistrictSystem';
 import { ProgressionSystem } from '../systems/ProgressionSystem';
 import { SealSystem } from '../systems/SealSystem';
 import { VillageSystem } from '../systems/VillageSystem';
@@ -452,7 +453,7 @@ export class GameScene extends Phaser.Scene {
   private equipChain: Promise<void> = Promise.resolve();
   private lastDir: Dir = 'down';
   private chatFocused = false;
-  private placing: StructureId | null = null;
+  placing: StructureId | null = null;
   private ghost: Phaser.GameObjects.Image | null = null;
   /** per-tile green/red footprint overlay while placing — shows WHICH tile blocks */
   private ghostCells: Phaser.GameObjects.Graphics | null = null;
@@ -465,6 +466,7 @@ export class GameScene extends Phaser.Scene {
   private sealSystem!: SealSystem;
   private villageSystem!: VillageSystem;
   private progression!: ProgressionSystem;
+  private districtSystem!: DistrictSystem;
   /**
    * Count of MY swings this session — incremented ONLY at the two lastSwingAt
    * stamp sites (never by remote-triggered playSwingFx replays) and shipped on
@@ -474,7 +476,7 @@ export class GameScene extends Phaser.Scene {
   // ---- v2: the Guardian
   fight: FightState | null = null;
   /** per-Warden altar/gate progress (ADR-0017) — mirrors the backend's view */
-  private wardens: Record<string, WardenWorldState> = {};
+  wardens: Record<string, WardenWorldState> = {};
   private guardianSprite!: Phaser.GameObjects.Sprite;
   private guardianShadow!: Phaser.GameObjects.Image;
   private guardianGlow!: Phaser.GameObjects.Image;
@@ -680,19 +682,6 @@ export class GameScene extends Phaser.Scene {
   private heldSprite!: Phaser.GameObjects.Image;
   private torchGlow!: Phaser.GameObjects.Image;
   private playerShadow!: Phaser.GameObjects.Image;
-  // ---- Realm districts (ADR-0017 §2): the "separate map" presentation state
-  /** the district the Player stands in (camera clamp + minimap crop + dot filter); null = the World */
-  activeDistrict: DistrictDef | null = null;
-  /** both arches of every Realm gate, for the E-interaction scan */
-  private realmGates: {
-    d: DistrictDef;
-    side: 'world' | 'district';
-    x: number;
-    y: number;
-    /** everything this arch placed (container, blocker, shadow) — destroyable for a re-dress */
-    objs: Phaser.GameObjects.GameObject[];
-    glow?: Phaser.GameObjects.Image;
-  }[] = [];
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
@@ -789,6 +778,9 @@ export class GameScene extends Phaser.Scene {
     this.buildContext();
     this.atmosphere = new AtmosphereSystem(this.ctx, this);
     this.systems.push(this.atmosphere);
+    this.districtSystem = new DistrictSystem(this.ctx, this, this.atmosphere);
+    this.systems.push(this.districtSystem);
+    this.atmosphere.district = this.districtSystem;
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       for (const s of this.systems) s.destroy();
       this.systems = [];
@@ -1186,7 +1178,7 @@ export class GameScene extends Phaser.Scene {
     // districts beyond must not scroll into view). Re-derived on the checkZone
     // tick, so every cross-region reposition (gates, Exhaustion wake, recall,
     // login inside a district) re-clamps without touching each call site.
-    this.applyCameraRegion(true);
+    this.districtSystem.applyCameraRegion(true);
     cam.setZoom(ZOOM);
     cam.startFollow(this.player, true, 0.15, 0.15);
     this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
@@ -1280,7 +1272,7 @@ export class GameScene extends Phaser.Scene {
       this.wardens = snap.wardens ?? {};
       for (const [id, w] of Object.entries(this.wardens)) bus.emit('warden-altar', id, w.altar);
       bus.emit('wardens', this.wardens); // the Chapter-2 tracker phases tick off altar.broken/gateOpen
-      this.rebuildRealmGates();
+      this.districtSystem.rebuildRealmGates();
       // joining mid-fight: dormant or engaged, the state derives from the fight
       // row (engagedAt), not from having witnessed the summon/engage events
       if (snap.fight) this.startFight(snap.fight, false);
@@ -1314,7 +1306,7 @@ export class GameScene extends Phaser.Scene {
     this.fishingSystem.create();
     this.wireDragPlace();
     this.buildDelveEntrance();
-    this.buildRealmGates();
+    this.districtSystem.create(); // the Realm gates (ADR-0018)
 
     if (DEV_WILD) {
       // ADR-0012 solo verify: drop into a danger-flagged frontier Zone (The Cavern
@@ -1511,7 +1503,7 @@ export class GameScene extends Phaser.Scene {
       bus.emit('wardens', this.wardens);
       bus.emit('toast', t.toast.realmGateKeyTurn(t.warden.realmName(id)), 'good');
       this.sfx('seal_gong', 0.6);
-      this.rebuildRealmGates();
+      this.districtSystem.rebuildRealmGates();
     });
     this.backend.on('delveOpened', () => this.refreshDelveEntrance(true));
     this.backend.on('dungeon', (msg: DungeonMsg) => this.onDungeonMsg(msg));
@@ -2462,212 +2454,6 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ secrets
 
-  // ------------------------------------------------------------ Realm districts (ADR-0017 §2)
-
-  /**
-   * The Realm district containing tile (tx,ty), or null in the World proper.
-   * Every district reserves its OWN 1-tile cliff ring inside its outer rect
-   * (the void-filler cliff the generator never overwrites — tools/generate-map.ts
-   * fills each district's interior at rect+1..rect+size-2, generate-map.ts:947/
-   * 1091/1171); that ring is still solid wall, not the room. Checking the outer
-   * rect inclusively meant a Player walking up to the World's south edge and
-   * getting stopped by that very wall (their tile position resting exactly on
-   * the rect's boundary row/col) still counted as "inside" — the camera would
-   * immediately snap to the district's bounds and reveal the whole interior
-   * through the wall (the "I can see the hidden Hushdark" clipping report).
-   * The inset below excludes the ring, matching the carved interior exactly.
-   */
-  districtOf(tx: number, ty: number): DistrictDef | null {
-    for (const d of this.world.districts ?? []) {
-      const r = d.rect;
-      if (tx > r.x && tx < r.x + r.w - 1 && ty > r.y && ty < r.y + r.h - 1) return d;
-    }
-    return null;
-  }
-
-  /**
-   * Clamp the camera to the region the Player is standing in — a district's
-   * rect inside a Realm, the pinned pre-Realm World otherwise (the void band
-   * and other districts must never scroll into view). Derived POSITIONALLY on
-   * the checkZone tick rather than in the gate interaction, so every
-   * cross-region reposition — Exhaustion wake, Victory Arch recall, login
-   * inside a district, dev teleports — re-clamps without touching a call site.
-   * (The Delve owns the camera while inside; checkZone pauses then.)
-   */
-  applyCameraRegion(force = false): void {
-    const d = this.districtOf(Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE));
-    if (!force && d === this.activeDistrict) return;
-    this.activeDistrict = d;
-    const cam = this.cameras.main;
-    if (d) cam.setBounds(d.rect.x * TILE, d.rect.y * TILE, d.rect.w * TILE, d.rect.h * TILE);
-    else cam.setBounds(0, 0, WORLD_VIEW_W * TILE, WORLD_VIEW_H * TILE);
-  }
-
-  /** is this Realm's gate open? The Warden-defeat gate-key world flag (T4) —
-   *  or the ?realmtest dev override that predates it (T2) */
-  private realmGateOpen(d: DistrictDef): boolean {
-    if (DEV_REALM_TEST) return true;
-    const w = wardenForRealm(d.id);
-    return !!w && !!this.wardens[w.id]?.gateOpen;
-  }
-
-  /** both arches of every Realm gate: a standing stone arch in the World and
-   *  its twin inside the district. E teleports through (Delve-shaft interaction
-   *  pattern, but NO instancing/roster/overlay — plain persistent map space). */
-  private buildRealmGates(): void {
-    for (const d of this.world.districts ?? []) {
-      this.buildRealmGate(d, 'world', d.gate.worldTx, d.gate.worldTy);
-      this.buildRealmGate(d, 'district', d.gate.districtTx, d.gate.districtTy);
-    }
-  }
-
-  private buildRealmGate(d: DistrictDef, side: 'world' | 'district', tx: number, ty: number): void {
-    const x = (tx + 0.5) * TILE;
-    const y = (ty + 0.5) * TILE;
-    const open = this.realmGateOpen(d);
-    const c = this.add.container(x, y);
-    // the Realm Arch: a weathered megalith gate — two pillars of stacked,
-    // slightly off-line stones under a cracked lintel and capstone, moss on
-    // every shelf, vines off the ends, and carved glyphs across the lintel
-    // that wake teal once the way stands open. The passage is a black void
-    // while dormant; open, it breathes with a slow shimmer.
-    const portal = this.add.rectangle(0, -6, 16, 26, open ? 0x123830 : 0x07090c).setStrokeStyle(1, 0x05070a);
-    const shimmer = this.add.rectangle(0, -6, 16, 26, 0x2a7a62).setAlpha(0);
-    const parts: Phaser.GameObjects.GameObject[] = [portal, shimmer];
-    const stone = (sx: number, sy: number, w: number, h: number, fill: number) => {
-      parts.push(this.add.rectangle(sx, sy, w, h, fill).setStrokeStyle(1, 0x2c332c));
-    };
-    // pillars — three weathered blocks each, brighter toward the sky
-    stone(-11, 3, 8, 10, 0x59635a);
-    stone(11, 3, 8, 10, 0x555f56);
-    stone(-10, -5, 7, 8, 0x646e5f);
-    stone(10, -5, 7, 8, 0x606a5b);
-    stone(-11, -13, 8, 8, 0x6d7766);
-    stone(11, -13, 8, 8, 0x69735f);
-    // the lintel and its capstone
-    stone(0, -20, 34, 7, 0x717b68);
-    stone(0, -25, 18, 5, 0x7a8470);
-    // moss claims every shelf; two drips run down the stones
-    const moss = (mx: number, my: number, w: number, h: number, tone = 0x4a5230) => {
-      parts.push(this.add.rectangle(mx, my, w, h, tone));
-    };
-    moss(-12, -17, 6, 2);
-    moss(10, -17, 5, 2);
-    moss(-2, -27, 7, 2, 0x53603a);
-    moss(-13, -9, 2, 5);
-    moss(12, 0, 2, 6);
-    moss(-9, 7, 3, 2, 0x424a2b);
-    // carved glyphs across the lintel — dead grey, or smoldering teal
-    const glyphs: Phaser.GameObjects.Rectangle[] = [];
-    for (const gx of [-11, -5, 1, 7]) {
-      const gl = this.add.rectangle(gx, -20, 2, 3, open ? 0x63e0b8 : 0x3d463f);
-      glyphs.push(gl);
-      parts.push(gl);
-    }
-    // hanging vines off the lintel ends
-    for (const [vx, vlen] of [[-16, 9], [16, 7]] as const) {
-      const vine = this.add.rectangle(vx, -17, 2, vlen, 0x435030).setOrigin(0.5, 0);
-      parts.push(vine, this.add.rectangle(vx, -17 + vlen, 2, 2, 0x53603a).setOrigin(0.5, 0));
-    }
-    const label = this.add
-      .text(0, -32, side === 'district' ? t.realm.return : open ? t.realm.gateTo(zoneName(d.name)) : t.realm.dormant, {
-        fontSize: '8px',
-        color: open || side === 'district' ? '#9fe0c9' : '#8a938c',
-        stroke: '#000',
-        strokeThickness: 3,
-      })
-      .setOrigin(0.5)
-      .setResolution(4);
-    parts.push(label);
-    c.add(parts);
-    c.setDepth((ty + 1) * TILE);
-    if (open || side === 'district') {
-      this.tweens.add({ targets: shimmer, alpha: { from: 0.12, to: 0.38 }, duration: 1700, yoyo: true, repeat: -1, ease: 'sine.inout' });
-      for (const gl of glyphs) {
-        this.tweens.add({ targets: gl, alpha: { from: 0.65, to: 1 }, duration: 1100 + 200 * glyphs.indexOf(gl), yoyo: true, repeat: -1, ease: 'sine.inout' });
-      }
-    }
-    const blocker = this.addBlockerBody(tx, ty);
-    const shadow = this.addShadow(x, y + 8, 30);
-    let glowImg: Phaser.GameObjects.Image | undefined;
-    if (open || side === 'district') {
-      const glow = this.add
-        .image(x, y - 4, 'glow')
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setTint(0x4fd8a8)
-        .setScale(0.9)
-        .setAlpha(0)
-        .setDepth(890_000);
-      this.atmosphere.glows.push({ img: glow, base: 0.35, x, y: y - 4 });
-      glowImg = glow;
-    }
-    this.realmGates.push({ d, side, x, y, objs: [c, blocker, shadow], glow: glowImg });
-  }
-
-  /**
-   * Tear down and re-raise every Realm arch — a gate's open/dormant dressing
-   * (portal shimmer, glyphs, label, glow) is baked at build time, so the
-   * one-time gate opening (realmOpened) re-dresses by rebuilding, the same
-   * way refreshDelveEntrance re-dresses the shaft.
-   */
-  private rebuildRealmGates(): void {
-    for (const g of this.realmGates) {
-      for (const o of g.objs) o.destroy();
-      if (g.glow) {
-        const i = this.atmosphere.glows.findIndex((e) => e.img === g.glow);
-        if (i >= 0) this.atmosphere.glows.splice(i, 1);
-        g.glow.destroy();
-      }
-    }
-    this.realmGates = [];
-    this.buildRealmGates();
-  }
-
-  /** E at a Realm gate: step through (open), or explain the dormant arch.
-   *  Leaving a district is NEVER gated — the way back always works. */
-  private realmGateAction(px: number, py: number): EAction | null {
-    for (const g of this.realmGates) {
-      if (Phaser.Math.Distance.Between(px, py, g.x, g.y) > INTERACT_RANGE + 10) continue;
-      if (g.side === 'district') return { swing: false, run: () => this.leaveDistrict(g.d) };
-      if (this.realmGateOpen(g.d)) return { swing: false, run: () => this.enterDistrict(g.d) };
-      // dormant — but a carried gate key turns it (once, for everyone, forever)
-      const w = wardenForRealm(g.d.id);
-      if (w && (this.inventory[w.gateKey] ?? 0) > 0) {
-        return { swing: false, run: () => void this.backend.openRealmGate(w.id) };
-      }
-      return { swing: false, run: () => bus.emit('toast', t.toast.realmGateDormant, 'info') };
-    }
-    return null;
-  }
-
-  /** step through the world-side arch into the Realm */
-  private enterDistrict(d: DistrictDef): void {
-    this.teleportThroughGate((d.gate.districtTx + 0.5) * TILE, (d.gate.districtTy + 1.5) * TILE);
-    bus.emit('toast', t.toast.realmEntered(zoneName(d.name)), 'good');
-  }
-
-  /** step back through the district-side arch, out beside the world gate */
-  private leaveDistrict(d: DistrictDef): void {
-    this.teleportThroughGate((d.gate.worldTx + 0.5) * TILE, (d.gate.worldTy + 1.5) * TILE);
-    bus.emit('toast', t.toast.realmLeft, 'info');
-  }
-
-  /** the shared gate-step: reposition, re-clamp, broadcast, banner — no
-   *  instancing, no roster; the district is ordinary persistent World space */
-  private teleportThroughGate(x: number, y: number): void {
-    if (this.placing) this.exitPlaceMode();
-    this.player.setPosition(x, y);
-    this.player.setVelocity(0, 0);
-    this.cameras.main.flash(300, 8, 14, 11);
-    this.sfx('blip', 0.5);
-    this.backend.sendPosition(this.player.x, this.player.y, this.lastDir, false, this.heldItem ?? undefined, this.swingCount);
-    // immediate re-derive: camera clamp, zone banner and the minimap's district
-    // view all update on this one pass instead of waiting for the 300 ms tick
-    this.checkZone();
-  }
-
-  // ------------------------------------------------------------ faux-elevation (ADR-0009)
-
   /** in-world name-tag scale — FogSystem.labelScale (ADR-0018) */
   private labelScale(): number {
     return this.fogSystem.labelScale();
@@ -2692,7 +2478,7 @@ export class GameScene extends Phaser.Scene {
     // "carried", not in-hand), so it holds while a machete cuts the reeds. Client-
     // side positional slow, stacked like the other move factors.
     const wade =
-      this.activeDistrict?.id === 'sunken_mire' && tideFloods(Date.now(), TIDE_PERIOD_MS) && !gearOwns(this.inventory, this.equipped, 'mirefang')
+      this.districtSystem.activeDistrict?.id === 'sunken_mire' && tideFloods(Date.now(), TIDE_PERIOD_MS) && !gearOwns(this.inventory, this.equipped, 'mirefang')
         ? WADE_SLOW_FACTOR
         : 1;
     // ADR-0017 §3: the Tideglass Boots add their +8% beside the Village bonus
@@ -3318,7 +3104,7 @@ export class GameScene extends Phaser.Scene {
     const delve = this.delveEntranceAction(px, py);
     if (delve) return delve;
     // a Realm gate (ADR-0017): step through, or learn that it is dormant
-    const realm = this.realmGateAction(px, py);
+    const realm = this.districtSystem.realmGateAction(px, py);
     if (realm) return realm;
 
     // special interactables take priority over nodes
@@ -3796,7 +3582,7 @@ export class GameScene extends Phaser.Scene {
     bus.emit('toast', t.toast.placing(ITEMS[item].name), 'info');
   }
 
-  private exitPlaceMode(): void {
+  exitPlaceMode(): void {
     this.placing = null;
     this.ghost?.destroy();
     this.ghost = null;
@@ -4317,7 +4103,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** the movement-cadence zone/fog/panels hub — FogSystem.checkZone (ADR-0018) */
-  private checkZone(): void {
+  checkZone(): void {
     this.fogSystem.checkZone();
   }
 
@@ -4828,7 +4614,7 @@ export class GameScene extends Phaser.Scene {
     this.player.setPosition((at.tx + 0.5) * TILE, (at.ty + 0.5) * TILE);
     this.player.setVelocity(0, 0);
     // back to the positional region clamp (the shaft is never inside a district)
-    this.applyCameraRegion(true);
+    this.districtSystem.applyCameraRegion(true);
     this.stunnedUntil = 0;
     this.delveExhausted = false;
     bus.emit('zone', this.fogSystem.currentZone || 'Ancient Ruins');
@@ -5195,7 +4981,7 @@ export class GameScene extends Phaser.Scene {
 
   /** the Hushdark frame: refresh shades, advance a recording, render shades, vaults */
   updateEchoes(time: number, _delta: number): void {
-    const inHush = this.activeDistrict?.id === 'the_hushdark';
+    const inHush = this.districtSystem.activeDistrict?.id === 'the_hushdark';
     const now = Date.now();
     // refresh the shade list + the vault-claim weeks (RPC reads; throttled; NEVER
     // presence — rate-limit gotcha). The vault weeks gate the deep vault + claims.
@@ -5417,7 +5203,7 @@ export class GameScene extends Phaser.Scene {
    *  solved by COVERAGE (shades on the 3 pedestals), which summons the boss — no
    *  door to press. */
   private echoAction(): EAction | null {
-    if (this.activeDistrict?.id !== 'the_hushdark' || this.fight) return null;
+    if (this.districtSystem.activeDistrict?.id !== 'the_hushdark' || this.fight) return null;
     const px = this.player.x / TILE;
     const py = this.player.y / TILE;
     const near = (p: { tx: number; ty: number }) => Math.hypot(px - (p.tx + 0.5), py - (p.ty + 0.5)) <= 1.4;
