@@ -60,7 +60,11 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
 ## Commands
 
 - `npm run dev` — Vite dev server
-- `npm run build` — `tsc && vite build` (the correctness check; there are no tests)
+- `npm run build` — `tsc && vite build` (the production correctness check)
+- `npm test` / `npm run coverage` — Vitest suite over the pure rules/data modules + a
+  MockBackend gather→craft→seal integration test (see `test/README.md`); ~94% of the
+  scoped surface. Run before hand-testing the core loop; render/Phaser code is still
+  verified in the preview.
 - `npm run genmap` — regenerate `public/map/*.json` (generated — never hand-edit)
 - npm/npx always need `--registry https://registry.npmjs.org/`
 - `/goal <condition>` — Claude Code built-in (v2.1.139+): keeps working across turns until a fast model confirms the condition holds, then clears; `/goal clear` stops early. Good for driving `npm run build` to green.
