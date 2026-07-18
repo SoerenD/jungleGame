@@ -278,6 +278,7 @@ const en = {
     nothingToStore: 'nothing to store',
     take: 'Take',
     put: 'Put',
+    dragHint: 'Drag an item between the columns to store or take it — or click it.',
     close: 'Close',
   },
 
@@ -885,6 +886,7 @@ const de: Strings = {
     nothingToStore: 'nichts zum Verstauen',
     take: 'Nehmen',
     put: 'Ablegen',
+    dragHint: 'Zieh einen Gegenstand zwischen die Spalten, um ihn zu verstauen oder zu nehmen — oder klick ihn an.',
     close: 'Schließen',
   },
 

@@ -246,9 +246,10 @@ export function initHud(name: string, muted: boolean, appearance?: Appearance): 
     <div id="crate-panel" class="panel" data-testid="crate-panel">
       <h3>${t.crate.title} <span class="sub-note">${t.crate.shared}</span></h3>
       <div class="crate-cols">
-        <div><div class="col-title">${t.crate.inside}</div><div id="crate-contents"></div></div>
-        <div><div class="col-title">${t.crate.yourPack}</div><div id="crate-pack"></div></div>
+        <div class="crate-col" id="crate-col-inside"><div class="col-title">${t.crate.inside}</div><div id="crate-contents"></div></div>
+        <div class="crate-col" id="crate-col-pack"><div class="col-title">${t.crate.yourPack}</div><div id="crate-pack"></div></div>
       </div>
+      <div class="crate-hint">${t.crate.dragHint}</div>
       <button class="ui-btn" id="crate-close">${t.crate.close}</button>
     </div>
     <div id="records-panel" class="panel" data-testid="records-panel">
@@ -1113,37 +1114,117 @@ let villageGiveHeld: Inventory = {};
 /** …and how much of each the sliders currently choose to give (0..held) */
 let villageGiveChosen: Inventory = {};
 
-function crateRow(id: ItemId, count: number, action: 'take' | 'put', onClick: () => void): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'inv-row';
-  const label = document.createElement('span');
-  label.textContent = `${ITEMS[id].name} × ${count}`;
-  row.appendChild(label);
-  const btn = document.createElement('button');
-  btn.className = 'ui-btn';
-  btn.textContent = action === 'take' ? t.crate.take : t.crate.put;
-  btn.setAttribute('data-testid', `crate-${action}-${id}`);
-  btn.onclick = onClick;
-  row.appendChild(btn);
-  return row;
+// the crate reads/works as an inventory: each stack is draggable between the two
+// columns. A distinct payload type per direction lets the OPPOSITE column light
+// up as a drop target during `dragover` (dataTransfer data is unreadable then).
+const CRATE_TAKE_PAYLOAD = 'application/x-jw-crate-take'; // a stack dragged OUT of the crate → withdraw
+const CRATE_PUT_PAYLOAD = 'application/x-jw-crate-put'; //  a stack dragged FROM the pack → deposit
+
+/**
+ * One crate cell as an icon slot (the same look as the pack + Spoils grids): the
+ * item's own sprite, a stack-count badge, a Codex Card on hover, and both ways to
+ * move it — drag it to the other column, or click it. `action` decides the
+ * direction: 'take' pulls a stack out of the shared crate into the pack, 'put'
+ * pushes it back in.
+ */
+function crateSlot(id: ItemId, count: number, action: 'take' | 'put', onClick: () => void): HTMLElement {
+  const def = ITEMS[id];
+  const slot = document.createElement('div');
+  slot.className = 'inv-slot filled crate-slot';
+  slot.setAttribute('data-testid', `crate-${action}-${id}`);
+  slot.setAttribute('aria-label', `${def.name} × ${count} — ${def.desc}`);
+  slot.addEventListener('mouseenter', () => showItemTooltip(id, slot));
+  slot.addEventListener('mouseleave', hideItemTooltip);
+  const icon = document.createElement('img');
+  icon.className = 'inv-icon';
+  icon.src = itemIcon(id);
+  icon.alt = def.name;
+  icon.draggable = false;
+  slot.appendChild(icon);
+  if (count > 1) {
+    const badge = document.createElement('span');
+    badge.className = 'inv-count';
+    badge.textContent = count > 999 ? '999+' : String(count);
+    slot.appendChild(badge);
+  }
+  slot.draggable = true;
+  slot.addEventListener('dragstart', (e) => {
+    hideItemTooltip(); // don't leave the popup floating over a drag
+    e.dataTransfer!.setData(action === 'take' ? CRATE_TAKE_PAYLOAD : CRATE_PUT_PAYLOAD, JSON.stringify({ id, count }));
+    e.dataTransfer!.effectAllowed = 'move';
+    slot.classList.add('dragging');
+  });
+  slot.addEventListener('dragend', () => slot.classList.remove('dragging'));
+  slot.onclick = () => {
+    hideItemTooltip();
+    onClick();
+  };
+  return slot;
+}
+
+/**
+ * Make a crate column a drop zone: it accepts drags carrying `type` (from the
+ * OTHER column) and runs `move` with the dropped item + count. Wired once onto
+ * the persistent wrapper `<div>` (not the re-rendered grid) so an empty column
+ * is still a target — you can drop the first item into an empty crate.
+ */
+function wireCrateZone(zone: HTMLElement, type: string, move: (id: ItemId, count: number) => void): void {
+  zone.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(type)) {
+      e.preventDefault();
+      zone.classList.add('crate-drop');
+    }
+  });
+  zone.addEventListener('dragleave', (e) => {
+    // ignore leaves onto a child slot — only clear when the pointer exits the zone
+    if (!zone.contains(e.relatedTarget as Node | null)) zone.classList.remove('crate-drop');
+  });
+  zone.addEventListener('drop', (e) => {
+    zone.classList.remove('crate-drop');
+    const raw = e.dataTransfer?.getData(type);
+    if (!raw) return;
+    e.preventDefault();
+    try {
+      const { id, count } = JSON.parse(raw) as { id: ItemId; count: number };
+      if (id && count > 0 && ITEMS[id]) move(id, count);
+    } catch {
+      /* malformed payload — ignore */
+    }
+  });
+}
+
+let crateDropsWired = false;
+function wireCrateDrops(): void {
+  if (crateDropsWired) return;
+  crateDropsWired = true;
+  // drop a PACK stack onto the "Inside" column to store it…
+  wireCrateZone(el('crate-col-inside'), CRATE_PUT_PAYLOAD, (item, n) => {
+    if (openCrateId) bus.emit('crate-deposit', openCrateId, item, n);
+  });
+  // …and a CRATE stack onto the "Your pack" column to take it
+  wireCrateZone(el('crate-col-pack'), CRATE_TAKE_PAYLOAD, (item, n) => {
+    if (openCrateId) bus.emit('crate-withdraw', openCrateId, item, n);
+  });
 }
 
 function renderCrate(): void {
   if (!openCrateId) return;
+  wireCrateDrops();
   const id = openCrateId;
+  hideItemTooltip(); // a re-render discards the slots; drop any popup anchored to an old one
   const inside = el('crate-contents');
   inside.innerHTML = '';
   const contents = (Object.entries(crateContents).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
   if (contents.length === 0) inside.innerHTML = `<div class="col-empty">${t.crate.empty}</div>`;
   for (const [item, n] of contents) {
-    inside.appendChild(crateRow(item, n, 'take', () => bus.emit('crate-withdraw', id, item, n)));
+    inside.appendChild(crateSlot(item, n, 'take', () => bus.emit('crate-withdraw', id, item, n)));
   }
   const pack = el('crate-pack');
   pack.innerHTML = '';
   const mine = (Object.entries(inv).filter(([id, n]) => (n ?? 0) > 0 && !!ITEMS[id as ItemId])) as [ItemId, number][];
   if (mine.length === 0) pack.innerHTML = `<div class="col-empty">${t.crate.nothingToStore}</div>`;
   for (const [item, n] of mine) {
-    pack.appendChild(crateRow(item, n, 'put', () => bus.emit('crate-deposit', id, item, n)));
+    pack.appendChild(crateSlot(item, n, 'put', () => bus.emit('crate-deposit', id, item, n)));
   }
 }
 

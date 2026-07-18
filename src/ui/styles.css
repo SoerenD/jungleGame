@@ -1061,6 +1061,44 @@ button.ui-btn.drop-armed:hover:not(:disabled) {
   color: var(--dim);
   font-size: calc(12px * var(--ui-scale));
   padding: 4px 0;
+  grid-column: 1 / -1; /* span the full row when it sits inside an icon grid */
+}
+/* each column is a drop zone: a comfortable target framed so items can be
+   dragged in even when it is near-empty */
+.crate-col {
+  border: 1px dashed transparent;
+  border-radius: 8px;
+  padding: 4px;
+  transition: background 0.1s, border-color 0.1s;
+}
+.crate-col.crate-drop {
+  border-color: var(--good);
+  background: rgba(140, 233, 154, 0.12);
+}
+/* the shared-crate columns read as inventories: a grid of icon slots, not text */
+#crate-contents,
+#crate-pack {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 46px);
+  gap: 6px;
+  align-content: start;
+  min-height: 92px; /* room to drop a stack even when the column is empty */
+}
+.crate-slot {
+  cursor: grab;
+}
+.crate-slot:active {
+  cursor: grabbing;
+}
+.crate-slot:hover {
+  border-color: var(--accent);
+  background: rgba(255, 209, 102, 0.12);
+}
+.crate-hint {
+  color: var(--dim);
+  font-size: calc(11px * var(--ui-scale));
+  text-align: center;
+  margin-bottom: 10px;
 }
 /* ADR-0015: the Grand Monument's engraved Depth Record board */
 #records-panel {

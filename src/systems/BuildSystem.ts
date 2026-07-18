@@ -179,19 +179,27 @@ export class BuildSystem implements GameSystem {
     if (s.type === 'bridge') {
       this.host.groundLayer.getTileAt(s.tx, s.ty)?.setCollision(false, false, false, false);
     }
-    // light sources glow at night — the brazier burns bigger than any torch
+    // light sources glow at night — the brazier burns bigger than any torch.
+    // `yoff` lifts the glow off `baseY` to sit on the light itself: ground fires
+    // sit low (8px), the Lamp Post's lantern rides high on its 2-tile post (26px).
+    // `tex` swaps in a colour-baked glow (the Lamp Post uses the warm 'glow_warm'
+    // so its lantern reads yellow, not the white-blooming tinted 'glow' texture).
     const glowDef = {
-      campfire: { scale: 2.0, base: 0.7 },
-      torch: { scale: 1.4, base: 0.6 },
-      golden_idol: { scale: 1.6, base: 0.5 },
-      brazier: { scale: 2.8, base: 0.8 },
-      forge: { scale: 2.2, base: 0.7 }, // the furnace mouth burns warm into the night
-    }[s.type as string];
+      campfire: { scale: 2.0, base: 0.7, yoff: 8 },
+      torch: { scale: 1.4, base: 0.6, yoff: 8 },
+      golden_idol: { scale: 1.6, base: 0.5, yoff: 8, tint: 0xffe27a },
+      brazier: { scale: 2.8, base: 0.8, yoff: 8 },
+      forge: { scale: 2.2, base: 0.7, yoff: 8 }, // the furnace mouth burns warm into the night
+      lamp_post: { scale: 1.7, base: 0.55, yoff: 26, tex: 'glow_warm' }, // wrought lantern glows a warm yellow through a Hamlet night
+    }[s.type as string] as { scale: number; base: number; yoff: number; tint?: number; tex?: string } | undefined;
     if (glowDef) {
+      // a colour-baked texture ('glow_warm') shows unmodified (neutral white tint);
+      // the shared white 'glow' is recoloured — its own override, else the warm default
+      const tint = glowDef.tex ? 0xffffff : (glowDef.tint ?? 0xffab52);
       glowImg = scene.add
-        .image(x, baseY - 8, 'glow')
+        .image(x, baseY - glowDef.yoff, glowDef.tex ?? 'glow')
         .setBlendMode(Phaser.BlendModes.ADD)
-        .setTint(s.type === 'golden_idol' ? 0xffe27a : 0xffab52)
+        .setTint(tint)
         .setScale(glowDef.scale)
         .setAlpha(0)
         .setDepth(890_001);

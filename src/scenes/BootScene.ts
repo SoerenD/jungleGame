@@ -59,6 +59,22 @@ export class BootScene extends Phaser.Scene {
     gctx.fillStyle = grad;
     gctx.fillRect(0, 0, 64, 64);
     glow.refresh();
+    // a WARM lamp glow: the colour is baked into the gradient (not white) and the
+    // core is deliberately < full alpha, so additive blending can't bloom it back
+    // to white the way a tinted white texture does — a lantern reads yellow, not
+    // hot-white. Used by the Lamp Post (BuildSystem light-source glows).
+    const glowWarm = this.textures.createCanvas('glow_warm', 64, 64)!;
+    const wctx = glowWarm.context;
+    // a lower-opacity core is the key: an additive light blooms to white at its
+    // hottest point over already-lit ground, so the peak is kept gentle (0.72) and
+    // the hue deepened to a saturated amber that reads yellow, never white.
+    const wgrad = wctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    wgrad.addColorStop(0, 'rgba(255,198,78,0.72)');
+    wgrad.addColorStop(0.45, 'rgba(255,182,64,0.34)');
+    wgrad.addColorStop(1, 'rgba(255,168,48,0)');
+    wctx.fillStyle = wgrad;
+    wctx.fillRect(0, 0, 64, 64);
+    glowWarm.refresh();
     // a small circular saw blade (16×16) — spun on a working Sawmill (v3) so the
     // mill reads as actively milling; a steel disc, dark teeth around the rim, hub
     const blade = this.textures.createCanvas('sawblade', 16, 16)!;
