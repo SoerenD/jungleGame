@@ -89,3 +89,6 @@ for ~8 friends — gathering, crafting, building, and exactly one opt-in encount
 - All state goes through the `Backend` interface (`src/backend/types.ts`). Two implementations,
   chosen by env in `createBackend.ts`: `MockBackend` (localStorage, single-player) and
   `SupabaseBackend` (shared world; schema in `supabase/migrations/`, see ADR-0005).
+- **NEVER apply migrations via `execute_sql`/raw SQL** — it runs the DDL but writes no
+  `supabase_migrations.schema_migrations` row, silently desyncing the tracker from the schema
+  (that gap once hid 0015–0021). Use tracked `apply_migration` so every deploy is recorded.
