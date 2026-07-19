@@ -401,6 +401,7 @@ export class GameScene extends Phaser.Scene {
       this.villageSystem.applyVillage(snap.village); // before structures so the Hall's grandeur is ready
       for (const n of snap.nodes) this.harvest.addNode(n);
       for (const s of snap.structures) this.buildSystem.addStructure(s);
+      this.stationsSystem.hydrateStations(); // seed in-progress mill/kiln/loom timers so they animate on load, not only after an interaction
       for (const p of snap.players) this.presence.upsertRemote(p);
       bus.emit('chatlog', snap.chatLog);
       this.presence.emitPresence();

@@ -110,16 +110,27 @@ describe('village — the market', () => {
 });
 
 describe('village — the pool & contributions', () => {
-  it('contributionValueOf reflects the accept table', () => {
+  it('contributionValueOf keeps tuned weights and defaults everything else (pool accepts all)', () => {
     expect(contributionValueOf('wood')).toBe(1);
     expect(contributionValueOf('guardian_scale')).toBe(15);
-    expect(contributionValueOf('axe')).toBe(0); // not accepted
+    // the Reverberant's weekly token — its item text promises the pool accepts it
+    expect(contributionValueOf('echo_sigil')).toBe(60);
+    // untuned items are no longer rejected — they are worth the flat default
+    expect(contributionValueOf('axe')).toBe(1);
+    expect(contributionValueOf('hushdark_key')).toBe(1);
   });
 
-  it('villageContribution takes everything qualifying by default', () => {
+  it('villageContribution accepts every carried item (no whitelist), tuned or not', () => {
     const { taken, points } = villageContribution({ wood: 5, stone: 3, guardian_scale: 1, axe: 9 });
-    expect(taken).toEqual({ wood: 5, stone: 3, guardian_scale: 1 });
-    expect(points).toBe(5 + 3 + 15); // axe contributes nothing
+    // the axe is now poolable too, at the flat default of 1 each
+    expect(taken).toEqual({ wood: 5, stone: 3, guardian_scale: 1, axe: 9 });
+    expect(points).toBe(5 + 3 + 15 + 9);
+  });
+
+  it('villageContribution pools an echo_sigil at its prestige value', () => {
+    const { taken, points } = villageContribution({ echo_sigil: 2 });
+    expect(taken).toEqual({ echo_sigil: 2 });
+    expect(points).toBe(120);
   });
 
   it('villageContribution honours the per-item amount caps', () => {

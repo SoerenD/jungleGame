@@ -1381,7 +1381,11 @@ async function initMinimap(): Promise<void> {
     sealMonument: { tx: number; ty: number };
     guardianHome: { tx: number; ty: number };
     zones: { name: string; x: number; y: number; w: number; h: number; dangerous?: boolean }[];
+    districts?: { id: string; name: string; gate: { worldTx: number; worldTy: number } }[];
   };
+  // the world-side arch of each Realm gate — a landmark like the Seal/Guardian,
+  // drawn UNDER the fog so it appears only once a Player has discovered it
+  const realmGates = (worldData.districts ?? []).map((d) => ({ tx: d.gate.worldTx, ty: d.gate.worldTy }));
   const ground = (mapJson.layers as { name: string; data: number[] }[]).find((l) => l.name === 'ground')!.data;
   const W = mapJson.width as number;
   const H = mapJson.height as number;
@@ -1494,6 +1498,12 @@ async function initMinimap(): Promise<void> {
     if (inView(worldData.guardianHome.tx, worldData.guardianHome.ty)) {
       ctx.fillStyle = '#c03a2b';
       ctx.fillRect(toX((worldData.guardianHome.tx + 1.5) * 16) - 2, toY((worldData.guardianHome.ty + 1.5) * 16) - 2, 4, 4);
+    }
+    // Realm gates (cyan): the megalith arches into the Warden realms — drawn here,
+    // before the fog blit, so a gate only shows once its chunk is discovered
+    ctx.fillStyle = '#57c7c7';
+    for (const g of realmGates) {
+      if (inView(g.tx, g.ty)) ctx.fillRect(toX(g.tx * 16) - 2, toY(g.ty * 16) - 2, 4, 4);
     }
     // unexplored chunks stay dark (landmarks hide until discovered; the
     // Players themselves and the treasure ✕ draw over the fog) — the chunk
@@ -1643,9 +1653,12 @@ async function initMinimap(): Promise<void> {
     vg.addColorStop(1, 'rgba(44,28,10,0.5)');
     lbctx.fillStyle = vg;
     lbctx.fillRect(0, 0, side, side);
-    // 5) landmark pins — small sepia-ringed dots (Seal, Guardian, Hall)
+    // 5) landmark pins — small sepia-ringed dots (Seal, Guardian, Realm gates, Hall)
     pin(lbctx, worldData.sealMonument.tx * 16, worldData.sealMonument.ty * 16, '#8a5fc0');
     pin(lbctx, (worldData.guardianHome.tx + 1.5) * 16, (worldData.guardianHome.ty + 1.5) * 16, '#b23a2b');
+    for (const g of realmGates) {
+      if (pinInView(g.tx * 16, g.ty * 16)) pin(lbctx, g.tx * 16, g.ty * 16, '#57c7c7');
+    }
     if (village?.hall) pin(lbctx, (village.hall.tx + 1) * 16, (village.hall.ty + 1) * 16, '#e6c063');
     // 6) region names — elegant serif "small-caps" (uppercased) in sepia ink on a
     //    cream halo, no boxes (a fantasy atlas). Long names wrap to two balanced

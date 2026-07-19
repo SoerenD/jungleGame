@@ -6,7 +6,7 @@
  */
 import type Phaser from 'phaser';
 import type { Inventory, RefinerConfig, RefinerState, SawmillState } from '../backend/types';
-import { SAWMILL_PLANK_MS } from '../config';
+import { BRINE_KILN, CHIME_KILN, SAWMILL_PLANK_MS, VERDANT_LOOM } from '../config';
 import { ITEMS, type ItemId } from '../content/items';
 import { RECIPES } from '../content/recipes';
 import type { GameScene } from '../scenes/GameScene';
@@ -34,6 +34,16 @@ export interface RefinerFxSpec {
   spark: number[];
 }
 
+/** the RefinerConfig each Refiner Structure type runs on — the twin of
+ *  REFINER_FX_SPEC (the InputSystem opens each family with the same config).
+ *  BuildSystem stamps it onto every seated refinerFx entry so a load-time
+ *  hydrate can re-read the persisted state without an interaction. */
+export const REFINER_CFG: Record<string, RefinerConfig> = {
+  brine_kiln: BRINE_KILN,
+  chime_kiln: CHIME_KILN,
+  verdant_loom: VERDANT_LOOM,
+};
+
 /** keyed by Refiner Structure type — one entry per family on the generic kernel */
 export const REFINER_FX_SPEC: Record<string, RefinerFxSpec> = {
   // the Brine Kiln's furnace mouth glows the Mire's signal teal (icons.ts drawKiln)
@@ -54,7 +64,7 @@ export class StationsSystem implements GameSystem {
    *  mouth glow + its palette + per-effect particle timers. Entries are seated/
    *  removed by the structure builder; update() drives all three effects while
    *  the station is refining. */
-  refinerFx = new Map<string, { glow: Phaser.GameObjects.Image; x: number; baseY: number; spec: RefinerFxSpec; nextWisp: number; nextSpark: number }>();
+  refinerFx = new Map<string, { glow: Phaser.GameObjects.Image; x: number; baseY: number; spec: RefinerFxSpec; cfg: RefinerConfig; nextWisp: number; nextSpark: number }>();
   /** per-Refiner "refining until" timestamp — derived from its last observed state */
   refinerBusyUntil = new Map<string, number>();
   /** wired by GameScene (the craft handler's Forge gate reads it) */
@@ -379,6 +389,28 @@ export class StationsSystem implements GameSystem {
       this.refinerBusyUntil.set(id, Date.now() + state.nextMs + (state.input - 1) * cfg.msPerUnit);
     } else {
       this.refinerBusyUntil.set(id, 0);
+    }
+  }
+
+  /**
+   * Seed the milling/refining windows from persisted backend state on load, so a
+   * station whose timer is already running animates immediately — not only after
+   * the player opens/deposits/collects (the "a mill we've never opened sits idle"
+   * gap). Reuses the same read + noteXState path an interaction uses, but SILENT:
+   * no `*-open` bus event (that would pop the HUD panel), no setInventory, no sfx.
+   * Called by GameScene once the loadWorld structures are seated.
+   */
+  hydrateStations(): void {
+    for (const id of this.sawmillBlades.keys()) {
+      void this.ctx.backend.sawmillOpen(id).then((res) => {
+        if (res.ok) this.noteSawmillState(id, res.state);
+      });
+    }
+    for (const [id, fx] of this.refinerFx) {
+      const cfg = fx.cfg;
+      void this.ctx.backend.refinerOpen(id, cfg).then((res) => {
+        if (res.ok) this.noteRefinerState(id, cfg, res.state);
+      });
     }
   }
 

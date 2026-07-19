@@ -30,6 +30,7 @@ import {
   festivalActive,
   FESTIVAL_MS,
   FOUNTAIN_WISH_ITEM,
+  contributionValueOf,
   FOUNTAIN_WISH_THRESHOLD,
   isVillageStructure,
   villageBuff,
@@ -887,10 +888,14 @@ export class SupabaseBackend implements Backend {
     const s = this.structures.get(id);
     if (!s) return { ok: false, reason: 'NO_STRUCTURE' };
     // the FULL refund is the crafting cost (client knows RECIPES); the server
-    // applies it atomically + deletes the row so the op stays server-ordered
+    // applies whatever p_refund says atomically + deletes the row so the op stays
+    // server-ordered. An UNCRAFTABLE Structure (no recipe — golden idol, Echo
+    // Reliquary) returns the Structure item itself so the reward is never
+    // destroyed by dismantling; it re-materialises in the pack (2026-07 playtest).
     const recipe = RECIPES.find((r) => r.output === s.type);
     const refund: Inventory = {};
     if (recipe) for (const [res_, c] of Object.entries(recipe.cost)) refund[res_ as keyof Inventory] = c as number;
+    else if (ITEMS[s.type]?.kind === 'structure') refund[s.type] = 1;
     const res = await this.rpc<any>('jw_dismantle_structure', { p_who: this.me, p_id: id, p_refund: refund });
     // degrade gracefully if the migration (0004) isn't deployed: remove + refund
     // optimistically (the row re-materialises on the next loadWorld until it lands)
@@ -1051,9 +1056,16 @@ export class SupabaseBackend implements Backend {
   // ---------------------------------------------------------------- A3: the Village (ADR-0010)
 
   async contributeVillage(amounts?: Inventory): Promise<ContributeVillageResult> {
+    // the pool accepts EVERY item now (not a whitelist): widen the tuned value
+    // table with the caller's held items (each worth contributionValueOf, i.e.
+    // its tuned weight or DEFAULT_POOL_VALUE) so the RPC — which reads p_values
+    // as its point table — prices anything the Player might give. No migration:
+    // jw_contribute_village has no server-side whitelist, it trusts p_values.
+    const values: Record<string, number> = { ...VILLAGE_CONTRIB } as Record<string, number>;
+    for (const item of Object.keys(this.inv)) values[item] = contributionValueOf(item);
     const res = await this.rpc<any>('jw_contribute_village', {
       p_who: this.me,
-      p_values: VILLAGE_CONTRIB,
+      p_values: values,
       p_thresholds: VILLAGE_THRESHOLDS,
       p_max: VILLAGE_MAX_TIER,
       // per-resource caps (ADR-0010): the server clamps each to what is held.

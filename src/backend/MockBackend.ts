@@ -1169,8 +1169,11 @@ export class MockBackend implements Backend {
       village.hall = null;
       this.emit('villageChanged', this.villageState());
     }
-    // FULL refund of the crafting cost to the dismantler (nothing for an
-    // uncraftable Structure, e.g. a dug golden idol)
+    // FULL refund of the crafting cost to the dismantler; an UNCRAFTABLE
+    // Structure (no recipe, e.g. a dug golden idol or the Reverberant's Echo
+    // Reliquary) instead returns the Structure item itself, so a one-of-a-kind
+    // reward is never destroyed by dismantling — it goes back to the pack to
+    // re-place (2026-07 playtest).
     const recipe = RECIPES.find((r) => r.output === s.type);
     const refund: Inventory = {};
     if (recipe) {
@@ -1178,6 +1181,9 @@ export class MockBackend implements Backend {
         refund[res as keyof Inventory] = count as number;
         p.inventory[res as keyof Inventory] = (p.inventory[res as keyof Inventory] ?? 0) + (count as number);
       }
+    } else if (ITEMS[s.type]?.kind === 'structure') {
+      refund[s.type] = 1;
+      p.inventory[s.type] = (p.inventory[s.type] ?? 0) + 1;
     }
     this.saveNow();
     this.emit('structureRemoved', id);

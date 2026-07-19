@@ -254,10 +254,21 @@ export function isVillageStructure(item: StructureId): boolean {
 }
 
 /**
- * The "what counts" contribution table (ADR-0010 §2): points per unit for the
- * broad set the Hall accepts — raw resources, planks, Guardian scales, Delve
- * cores/shards, frontier finds (map pieces), fish. Anything absent here is not
- * accepted into the pool. Weights are playtest tuning.
+ * The pool point value ANY item not tuned below is worth. The Hall now accepts
+ * EVERYTHING (2026-07 playtest: "all items should be accepted by the village
+ * pool") — the table below is no longer a whitelist, only a set of tuned weights
+ * for the items that deserve more than the flat default. `contributionValueOf`
+ * and `villageContribution` fall back to this for anything absent, so nothing a
+ * Player carries is silently rejected.
+ */
+export const DEFAULT_POOL_VALUE = 1;
+
+/**
+ * Tuned per-unit pool weights (ADR-0010 §2). Items listed here are worth their
+ * tuned value; every OTHER item is worth DEFAULT_POOL_VALUE (the pool accepts
+ * all). Kept as the value table the backend RPCs are handed (SupabaseBackend
+ * widens it with the caller's held items before the call). Weights are playtest
+ * tuning.
  */
 export const VILLAGE_CONTRIB: Partial<Record<string, number>> = {
   wood: 1,
@@ -283,6 +294,10 @@ export const VILLAGE_CONTRIB: Partial<Record<string, number>> = {
   // ADR-0015 — the Depth Sigil's only sink for now: a LARGE pool value (its other
   // sink, trophy decor, is a later pass). Prestige stays prestige — no crafting.
   depth_sigil: 60,
+  // ADR-0017 rung 2 — the Reverberant's weekly prestige token. Its item text
+  // promises "give it to the Village pool", so it carries the depth_sigil's LARGE
+  // prestige value (it crafts nothing else).
+  echo_sigil: 60,
   // ADR-0012 — Wildlife loot: the "frontier finds" the pool anticipated. Modest
   // per unit; the rare trophy is worth the most.
   hide: 2,
@@ -308,9 +323,10 @@ export function recomputeTier(v: VillageRecord): VillageRecord {
   return tier === v.tier ? v : { ...v, tier: tier as VillageTier };
 }
 
-/** the pool points one unit of `item` is worth (0 if the pool doesn't accept it) */
+/** the pool points one unit of `item` is worth. The pool accepts everything, so
+ *  an untuned item is worth DEFAULT_POOL_VALUE rather than 0 (never rejected). */
 export function contributionValueOf(item: string): number {
-  return VILLAGE_CONTRIB[item] ?? 0;
+  return VILLAGE_CONTRIB[item] ?? DEFAULT_POOL_VALUE;
 }
 
 /**
@@ -329,10 +345,13 @@ export function villageContribution(
 ): { taken: Record<string, number>; points: number } {
   const taken: Record<string, number> = {};
   let points = 0;
-  for (const [item, per] of Object.entries(VILLAGE_CONTRIB)) {
-    if (!per) continue;
-    const have = inventory[item] ?? 0;
+  // iterate the INVENTORY (not a whitelist) so every carried item is poolable;
+  // its worth is contributionValueOf (tuned weight, else DEFAULT_POOL_VALUE)
+  for (const [item, held] of Object.entries(inventory)) {
+    const have = held ?? 0;
     if (have <= 0) continue;
+    const per = contributionValueOf(item);
+    if (per <= 0) continue;
     const room = maxPoints - points;
     if (room < per) continue; // not even one whole unit fits
     const want = amounts ? Math.max(0, Math.floor(amounts[item] ?? 0)) : have;

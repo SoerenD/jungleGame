@@ -19,7 +19,7 @@ import type { GameContext } from './context';
 import type { HarvestSystem } from './HarvestSystem';
 import type { ProgressionSystem } from './ProgressionSystem';
 import { addBlockerBody, addShadow, objImage } from './sceneFx';
-import { REFINER_FX_SPEC, type StationsSystem } from './StationsSystem';
+import { REFINER_CFG, REFINER_FX_SPEC, type StationsSystem } from './StationsSystem';
 import type { GameSystem } from './types';
 import type { VillageSystem } from './VillageSystem';
 
@@ -218,7 +218,8 @@ export class BuildSystem implements GameSystem {
     // three-effect animation. Seat the additive mouth glow over its furnace mouth
     // here — hidden until refining; StationsSystem.update drives all three effects.
     const fxSpec = REFINER_FX_SPEC[s.type];
-    if (fxSpec) {
+    const cfg = REFINER_CFG[s.type];
+    if (fxSpec && cfg) {
       const glow = scene.add
         .image(x, baseY - 16, 'glow')
         .setBlendMode(Phaser.BlendModes.ADD)
@@ -227,7 +228,11 @@ export class BuildSystem implements GameSystem {
         .setAlpha(0)
         .setDepth(890_001);
       objects.push(glow);
-      this.stations.refinerFx.set(s.id, { glow, x, baseY, spec: fxSpec, nextWisp: 0, nextSpark: 0 });
+      // stamp the family's RefinerConfig so a load-time hydrate can re-read the
+      // persisted queue without the player opening the panel (REFINER_CFG and
+      // REFINER_FX_SPEC share the same three keys, so cfg is present for any
+      // Structure that got an fxSpec)
+      this.stations.refinerFx.set(s.id, { glow, x, baseY, spec: fxSpec, cfg, nextWisp: 0, nextSpark: 0 });
     }
   }
 

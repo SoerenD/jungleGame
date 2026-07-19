@@ -37,16 +37,15 @@ export type ResourceId =
   // ADR-0015 — the generated Depths' only loot: pure prestige, crafts nothing
   | 'depth_sigil'
   // ADR-0017 — the Mire Warden's participation drop: the Sunken Mire's gate
-  // key. Never consumed — any Player opens the gate once with it in hand
-  // (the Delve-shaft pattern), then it stays a trophy.
+  // key. Turning the dormant gate opens it for everyone forever AND spends the
+  // opener's key (2026-07 playtest — no longer a permanent trophy).
   | 'mire_key'
   // ADR-0017 rung 2 — the Echo Warden's participation drop: the Hushdark's gate
-  // key. Never consumed — any Player opens the gate once with it in hand, then
-  // it stays a trophy (the mire_key pattern).
+  // key. Spent when its holder turns the dormant gate (the mire_key pattern).
   | 'hushdark_key'
   // ADR-0017 rung 3 — the Verdant Warden's participation drop: the Green
-  // Terraces' gate key. Never consumed — any Player opens the gate once with it
-  // in hand, then it stays a trophy (the mire_key pattern).
+  // Terraces' gate key. Spent when its holder turns the dormant gate (the
+  // mire_key pattern).
   | 'terrace_key'
   // ADR-0012 — open-world Wildlife drops (hide/meat/trophy family). Feed EXISTING
   // loops only: the Village pool, a cooked-meat campfire recipe, decor Structures.
@@ -199,9 +198,9 @@ const BASE_ITEMS: Record<ItemId, ItemDef> = {
   cinder_shard: { name: 'Cinder Shard', kind: 'resource', desc: 'Molten shrapnel from a felled Cinder or Ember Husk in the Deep. Common — the farm of a Deep run.' },
   forge_core: { name: 'Forge Core', kind: 'resource', desc: 'The white-hot heart of the Forgeborn, granted to everyone who descended and fought it. Rare — forges the Forgebrand.' },
   depth_sigil: { name: 'Depth Sigil', kind: 'resource', desc: 'Proof of a boss felled in the generated Depths (3+), one per Stage. Pure prestige — it crafts nothing; give it to the Village pool, and let the Depth Record speak.' },
-  mire_key: { name: 'Key to the Sunken Mire', kind: 'resource', desc: 'A brine-crusted key of fused tideglass, pried from the fallen Mire Warden. Carry it to the megalith arch on the Mangrove Coast — one turn opens the Sunken Mire for everyone, forever.' },
-  hushdark_key: { name: 'Key to the Hushdark', kind: 'resource', desc: 'A cold key of hushsteel that hums with a swallowed note, pried from the fallen Echo Warden. Carry it to the maw at the Cavern Mouth — one turn opens the Hushdark for everyone, forever.' },
-  terrace_key: { name: 'Key to the Green Terraces', kind: 'resource', desc: 'A key woven of living verdant fibre, won from the fallen Verdant Warden. Carry it to the terrace gate on the hillside — one turn opens the Green Terraces for everyone, forever.' },
+  mire_key: { name: 'Key to the Sunken Mire', kind: 'resource', desc: 'A brine-crusted key of fused tideglass, pried from the fallen Mire Warden. Carry it to the megalith arch on the Mangrove Coast — one turn opens the Sunken Mire for everyone, forever, and spends the key.' },
+  hushdark_key: { name: 'Key to the Hushdark', kind: 'resource', desc: 'A cold key of hushsteel that hums with a swallowed note, pried from the fallen Echo Warden. Carry it to the maw at the Cavern Mouth — one turn opens the Hushdark for everyone, forever, and spends the key.' },
+  terrace_key: { name: 'Key to the Green Terraces', kind: 'resource', desc: 'A key woven of living verdant fibre, won from the fallen Verdant Warden. Carry it to the terrace gate on the hillside — one turn opens the Green Terraces for everyone, forever, and spends the key.' },
   hide: { name: 'Hide', kind: 'resource', desc: 'Tough hide from foraged or hunted Wildlife. Give it to the Village, or lay it as a rug.' },
   meat: { name: 'Raw Meat', kind: 'resource', desc: 'Fresh meat from Wildlife. Cook it at a campfire for a hearty meal that quickens your step.' },
   trophy: { name: 'Wild Trophy', kind: 'resource', desc: 'A prize rack or fang from the wilds — rare. Mount it, or grace the Village pool with it.' },
@@ -305,9 +304,9 @@ const ITEMS_DE: Record<ItemId, { name: string; desc: string }> = {
   cinder_shard: { name: 'Glutsplitter', desc: 'Glühender Splitter einer gefallenen Glut- oder Aschehülle in der Tiefe. Häufig — die Ausbeute eines Tiefen-Zugs.' },
   forge_core: { name: 'Schmiedekern', desc: 'Das weißglühende Herz des Schmiedegeborenen, verliehen an alle, die hinabstiegen und gegen ihn kämpften. Selten — schmiedet den Schmiedebrand.' },
   depth_sigil: { name: 'Tiefensiegel', desc: 'Beweis eines gefällten Bosses in den erzeugten Tiefen (3+), eines pro Stufe. Reines Prestige — es stellt nichts her; gib es dem Dorfvorrat, und lass den Tiefenrekord sprechen.' },
-  mire_key: { name: 'Schlüssel zum Versunkenen Moor', desc: 'Ein salzverkrusteter Schlüssel aus verschmolzenem Gezeitenglas, dem gefallenen Moorwächter abgerungen. Trag ihn zum Megalith-Bogen an der Mangrovenküste — eine Drehung öffnet das Versunkene Moor für alle, für immer.' },
-  hushdark_key: { name: 'Schlüssel zur Grabesstille', desc: 'Ein kalter Schlüssel aus Klangstahl, der mit einem verschluckten Ton summt, dem gefallenen Echowächter abgerungen. Trag ihn zum Höhlenschlund — eine Drehung öffnet die Grabesstille für alle, für immer.' },
-  terrace_key: { name: 'Schlüssel zu den Grünen Terrassen', desc: 'Ein Schlüssel aus lebendiger Grünfaser, dem gefallenen Grünwächter abgerungen. Trag ihn zum Terrassen-Tor am Hang — eine Drehung öffnet die Grünen Terrassen für alle, für immer.' },
+  mire_key: { name: 'Schlüssel zum Versunkenen Moor', desc: 'Ein salzverkrusteter Schlüssel aus verschmolzenem Gezeitenglas, dem gefallenen Moorwächter abgerungen. Trag ihn zum Megalith-Bogen an der Mangrovenküste — eine Drehung öffnet das Versunkene Moor für alle, für immer, und verbraucht den Schlüssel.' },
+  hushdark_key: { name: 'Schlüssel zur Grabesstille', desc: 'Ein kalter Schlüssel aus Klangstahl, der mit einem verschluckten Ton summt, dem gefallenen Echowächter abgerungen. Trag ihn zum Höhlenschlund — eine Drehung öffnet die Grabesstille für alle, für immer, und verbraucht den Schlüssel.' },
+  terrace_key: { name: 'Schlüssel zu den Grünen Terrassen', desc: 'Ein Schlüssel aus lebendiger Grünfaser, dem gefallenen Grünwächter abgerungen. Trag ihn zum Terrassen-Tor am Hang — eine Drehung öffnet die Grünen Terrassen für alle, für immer, und verbraucht den Schlüssel.' },
   hide: { name: 'Fell', desc: 'Zähes Fell von erjagtem oder gesammeltem Wild. Gib es dem Dorf oder leg es als Teppich aus.' },
   meat: { name: 'Rohes Fleisch', desc: 'Frisches Fleisch von Wild. Brate es am Lagerfeuer für eine herzhafte Mahlzeit, die deinen Schritt beschleunigt.' },
   trophy: { name: 'Wildtrophäe', desc: 'Ein prächtiges Geweih oder Fangzahn aus der Wildnis — selten. Häng sie auf oder zier den Dorfvorrat damit.' },

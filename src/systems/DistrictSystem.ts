@@ -6,7 +6,7 @@
  */
 import Phaser from 'phaser';
 import { DEV_REALM_TEST, INTERACT_RANGE, TILE, WORLD_VIEW_H, WORLD_VIEW_W } from '../config';
-import { wardenForRealm } from '../content/wardens';
+import { wardenForRealm, type WardenDef } from '../content/wardens';
 import type { GameScene } from '../scenes/GameScene';
 import { t, zoneName } from '../i18n';
 import type { AtmosphereSystem } from './AtmosphereSystem';
@@ -210,14 +210,33 @@ export class DistrictSystem implements GameSystem {
       if (Phaser.Math.Distance.Between(px, py, g.x, g.y) > INTERACT_RANGE + 10) continue;
       if (g.side === 'district') return { swing: false, run: () => this.leaveDistrict(g.d) };
       if (this.realmGateOpen(g.d)) return { swing: false, run: () => this.enterDistrict(g.d) };
-      // dormant — but a carried gate key turns it (once, for everyone, forever)
+      // dormant — but a carried gate key turns it (once, for everyone, forever;
+      // the turn SPENDS the opener's key, 2026-07 playtest)
       const w = wardenForRealm(g.d.id);
       if (w && (this.ctx.inventory[w.gateKey] ?? 0) > 0) {
-        return { swing: false, run: () => void this.ctx.backend.openRealmGate(w.id) };
+        return { swing: false, run: () => this.turnGateKey(w) };
       }
       return { swing: false, run: () => this.ctx.bus.emit('toast', t.toast.realmGateDormant, 'info') };
     }
     return null;
+  }
+
+  /**
+   * Turn a Realm gate open with its key and SPEND the key (2026-07 playtest —
+   * the key is no longer a permanent trophy). Only the Player who actually turns
+   * the dormant gate pays: a second, simultaneous opener gets ALREADY_OPEN and
+   * keeps their key, and anyone who arrives after the gate is already open never
+   * reaches this branch (they just step through). The consume rides the existing
+   * server-authoritative dropItem RPC, so it persists on both backends with no
+   * new migration.
+   */
+  private turnGateKey(w: WardenDef): void {
+    void this.ctx.backend.openRealmGate(w.id).then((res) => {
+      if (!res.ok) return; // ALREADY_OPEN — another Player just turned it; keep the key
+      void this.ctx.backend.dropItem(w.gateKey, 1).then((d) => {
+        if (d.ok) this.ctx.setInventory(d.inventory);
+      });
+    });
   }
 
   /** step through the world-side arch into the Realm */

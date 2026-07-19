@@ -3,7 +3,8 @@
 // Seal pattern, re-instanced per rung) plus a crafted Warden Totem, fought on
 // the guardian.ts authored engine with its OWN kit, and paid out by the
 // participation rule. Defeat pays every participant the Realm's gate key;
-// any Player opens the gate once with it in hand (the Delve-shaft pattern).
+// the first to turn the dormant gate opens it for everyone forever and spends
+// their key (2026-07 playtest — the key is no longer a permanent trophy).
 //
 // PURE DATA + PURE FUNCTIONS, node-importable like guardian.ts — no browser
 // globals, no ../config (dev scaling for the altar quotas lives in config.ts).
